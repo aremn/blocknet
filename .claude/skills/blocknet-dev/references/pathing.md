@@ -60,10 +60,12 @@ after the controller sets inputs.
 
 ## Status (2026-10-27)
 
+Navigation now compares walking/mining/building in one search when blocks exist (NORMAL -> FALL -> CLOSEST); placement costs 8 ticks, breaking adds 25 to player mining time (inventory tools, attributes, effects; water and airborne slowdowns stay per movement). `RouteChoiceGameTests` covers the tree (parent 196 vs 48-49 ticks, budget 120), stone-wall detour and mining estimates; player-build protection remains future work.
+
 Steps 1-4 are done: extraction, `BotHands` + `PlayerInteractionController`, GameTests (around a
 wall, onto a ledge, digging through), `goto` and approach-to-reach use the pathfinder. Two surprises:
 vanilla `getChunkNow` is null off the server thread (fixed with an access transformer, see
-`LoadedChunks`), and inputs must be re-applied every tick. Still open: gap, pillar-with-blocks,
+`LoadedChunks`), and inputs must be re-applied every tick. Still open: general gap,
 lava and door tests; a real `BlockProtection` for player builds.
 
 ## Order of work (original plan)

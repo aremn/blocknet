@@ -82,7 +82,7 @@ public final class BotController {
     private Vec3 followLegPosition;
     private int followRetryTicks;
     private boolean followAllowSprint;
-    private enum Strategy { NORMAL, BUILD, FALL, CLOSEST }
+    private enum Strategy { NORMAL, FALL, CLOSEST }
     private Strategy strategy = Strategy.NORMAL;
     private int closestRange;
     private int navigationTicks;
@@ -405,8 +405,6 @@ public final class BotController {
         }
         if (state == PathState.ARRIVED) {
             finishNavigation(pos);
-        } else if (strategy == Strategy.NORMAL && hasBuildingBlocks()) {
-            strategy = Strategy.BUILD;
         } else if (strategy != Strategy.FALL && strategy != Strategy.CLOSEST && healthyForFall()) {
             strategy = Strategy.FALL;
         } else {
@@ -435,9 +433,8 @@ public final class BotController {
     private void configureAttempt() {
         Settings settings = pathing().settings();
         attemptSettings = AttemptSettings.capture(settings);
-        if (strategy != Strategy.NORMAL && hasBuildingBlocks()) {
-            settings.allowPlace.set(true);
-        }
+        // Compare walking, mining and building by time in the very first search.
+        settings.allowPlace.set(hasBuildingBlocks());
         if ((strategy == Strategy.FALL || strategy == Strategy.CLOSEST) && healthyForFall()) {
             settings.maxFallHeightNoWater.set(5);
         }

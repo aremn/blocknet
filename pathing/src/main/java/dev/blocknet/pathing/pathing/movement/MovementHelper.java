@@ -39,6 +39,7 @@ import net.minecraft.core.Direction.Axis;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.tags.FluidTags;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.block.AbstractSkullBlock;
 import net.minecraft.world.level.block.AirBlock;
@@ -336,11 +337,12 @@ public interface MovementHelper extends ActionCosts {
             } else if (context.toolSet == null) {
                return 1000000.0;
             } else {
-               double strVsBlock = context.toolSet.getStrVsBlock(state);
+               // Blocknet: position-sensitive hardness and the bot's actual mining modifiers.
+               double strVsBlock = context.toolSet.getStrVsBlock(state, context.world, new BlockPos(x, y, z));
                if (strVsBlock <= 0.0) {
                   return 1000000.0;
                } else {
-                  double result = 1.0 / strVsBlock;
+                  double result = Math.max(1.0, Math.ceil(1.0 / strVsBlock));
                   result += context.breakBlockAdditionalCost;
                   result *= mult;
                   if (includeFalling) {
@@ -373,7 +375,16 @@ public interface MovementHelper extends ActionCosts {
    static void switchToBestToolFor(IEntityContext ctx, BlockState b, ToolSet ts, boolean preferSilkTouch) {
       BotHands inventory = ctx.inventory();
       if (inventory != null && !ctx.baritone().settings().disableAutoTool.get() && !ctx.baritone().settings().assumeExternalAutoTool.get()) {
-         inventory.selectSlot(ts.getBestSlot(b.getBlock(), preferSilkTouch));
+         // Blocknet: equip main-inventory tools through the same real inventory used for mining.
+         int slot = ts.getBestSlot(b, preferSilkTouch, false);
+         if (slot >= 9) {
+            int hotbar = inventory.selectedSlot();
+            ItemStack held = inventory.getItem(hotbar);
+            inventory.setItem(hotbar, inventory.getItem(slot));
+            inventory.setItem(slot, held);
+            slot = hotbar;
+         }
+         inventory.selectSlot(slot);
       }
    }
 
