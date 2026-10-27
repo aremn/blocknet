@@ -81,3 +81,31 @@ test('MCP JSON-lines initialize and tools/list use the body registry; calls awai
   assert.ok(closed);
   output.end();
 });
+
+
+test('MCP caps each model turn at eight calls, including concurrent calls, and resets next turn', async () => {
+  const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = await mkdtemp(join(tmpdir(), 'blocknet-cap-'));
+  const auditFile = join(dir, 'calls.jsonl');
+  const input = new PassThrough(), output = new PassThrough();
+  const replies = createInterface({ input: output })[Symbol.asyncIterator]();
+  let actions = 0;
+  const body = { action: async () => { actions++; return 'ok'; }, close() {} };
+  serveMcp(body, 'Kirill', input, output, { auditFile });
+  const send = (id, method, params = {}) => input.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
+  const next = async () => JSON.parse((await replies.next()).value);
+  try {
+    send(0, 'initialize'); await next();
+    for (let id = 1; id <= 10; id++) send(id, 'tools/call', { name: 'scene' });
+    const results = [];
+    for (let id = 1; id <= 10; id++) results.push((await next()).result);
+    assert.equal(actions, 8);
+    assert.equal(results.filter(r => r.content[0].text === 'turn tool limit reached; answer the player or wait for the next turn').length, 2);
+    await writeFile(auditFile, ''); // Same reset the BrainSession performs before backend.send.
+    send(11, 'tools/call', { name: 'scene' });
+    assert.equal((await next()).result.content[0].text, 'ok');
+    assert.equal(actions, 9);
+  } finally { input.end(); output.end(); await rm(dir, { recursive: true, force: true }); }
+});

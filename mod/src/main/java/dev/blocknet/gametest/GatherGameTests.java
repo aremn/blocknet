@@ -55,7 +55,7 @@ public final class GatherGameTests {
         bot.controller().gather(new ItemStack(Items.COBBLESTONE), 10, reports::add);
         helper.succeedWhen(() -> {
             helper.assertTrue(reports.size() == 1, "one terminal report: " + reports);
-            helper.assertTrue(reports.getFirst().equals("failed: no cobblestone in sight; look around or go elsewhere"),
+            helper.assertTrue(reports.getFirst().contains("none seen") && reports.getFirst().contains("try explore"),
                 "resource failure includes hint: " + reports);
             helper.assertBlockPresent(Blocks.GLASS, new BlockPos(4, 0, 4));
             helper.assertTrue(bot.getInventory().countItem(Items.COBBLESTONE) == 0, "no hidden resource mined");

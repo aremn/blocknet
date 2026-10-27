@@ -23,14 +23,23 @@ public final class BridgeTools {
         add("inv", "Read inventory and tool, food and space hints.", false);
         add("changes", "Read state changes since this connection's last changes call.", false);
         add("memory", "Read remembered container contents; optionally filter items.", false, "filter?");
-        add("look", "Look around and remember visible stations and containers.", true);
+        add("look", "Turn 360 degrees and return the scene; optional focus: trees, ores, water, danger, built, stations.", true, "focus?");
+        add("scene", "Read the remembered scene instantly, without turning; delta gives one line of changes.", false, "delta?", "goal?");
+        add("explore", "Walk through observed safe space toward a frontier, then look and report new objects.", true, "direction?", "distance?");
         add("plan", "Plan recipes without acting; mode craft makes new items, get counts owned items.", false,
             "item", "count?", "mode?");
         add("come", "Walk near an online player in the same dimension.", true, "player");
         add("follow", "Follow a player until stopped or replaced by another task.", true, "player");
-        add("goto", "Walk to exact block coordinates.", true, "x", "y", "z");
+        add("goto", "Walk to an observed object ref, or supplied exact block coordinates; never invent coordinates.", true, "ref?", "x?", "y?", "z?");
+        JsonArray choices = new JsonArray();
+        for (String[] keys : List.of(new String[] {"ref"}, new String[] {"x", "y", "z"})) {
+            JsonObject choice = new JsonObject(); JsonArray required = new JsonArray();
+            for (String key : keys) required.add(key);
+            choice.add("required", required); choices.add(choice);
+        }
+        TOOLS.get("goto").params().add("oneOf", choices);
         add("mine", "Walk to and mine one block, then collect its drops; needs a suitable tool.", true, "x", "y", "z");
-        add("gather", "Mine visible blocks for count MORE items and collect drops; matching ground permits a simple staircase.", true, "item", "count");
+        add("gather", "Gather MORE items from an observed ref or logs/wood, stone/cobblestone, coal, iron, dirt, sand or exact item id; requires the right tool.", true, "item", "count?");
         add("use", "Walk to and right-click one block; sneak bypasses block interactions.", true, "x", "y", "z", "sneak?");
         add("eat", "Eat one inventory food through player use; omitted item selects safe nutritious food.", true, "item?");
         add("place", "Place an inventory block at x y z; optional clicked face: up/down/north/south/east/west. Sneaks automatically.", true, "item", "x", "y", "z", "face?");
@@ -56,8 +65,8 @@ public final class BridgeTools {
             boolean optional = field.endsWith("?");
             String key = optional ? field.substring(0, field.length() - 1) : field;
             JsonObject property = new JsonObject();
-            boolean number = List.of("x", "y", "z", "count").contains(key);
-            property.addProperty("type", number ? "integer" : key.equals("sneak") ? "boolean" : "string");
+            boolean number = List.of("x", "y", "z", "count", "distance").contains(key);
+            property.addProperty("type", number ? "integer" : List.of("sneak", "delta").contains(key) ? "boolean" : "string");
             if (key.equals("count")) {
                 property.addProperty("minimum", 1);
                 property.addProperty("maximum", 1000000);
@@ -118,7 +127,7 @@ public final class BridgeTools {
                         || key.equals("count") && (number < 1 || number > 1000000)) {
                     throw new IllegalArgumentException(key + " is out of range");
                 }
-            } else if (key.equals("sneak")) {
+            } else if (List.of("sneak", "delta").contains(key)) {
                 if (!primitive.isBoolean()) throw new IllegalArgumentException("sneak must be boolean");
             } else if (!primitive.isString()) {
                 throw new IllegalArgumentException(key + " must be a string");
@@ -127,6 +136,11 @@ public final class BridgeTools {
                 throw new IllegalArgumentException("mode must be craft or get");
             }
         });
+        if (tool.name().equals("goto") && (args.has("ref") == (args.has("x") || args.has("y") || args.has("z"))
+                || !args.has("ref") && !(args.has("x") && args.has("y") && args.has("z")))) {
+            throw new IllegalArgumentException("goto needs ref OR x, y, z");
+        }
+        if (tool.name().equals("scene") && args.has("goal")) bot.controller().scene().goal(args.get("goal").getAsString());
         String name = bot.getGameProfile().getName();
         if (tool.name().equals("say")) {
             String text = args.get("text").getAsString().replaceAll("[\\r\\n]+", " ");
@@ -159,6 +173,11 @@ public final class BridgeTools {
         for (String key : List.of("item", "filter", "count")) {
             if (args.has(key) && !(key.equals("item") && tool.name().equals("place"))) words.add(word(args, key, null));
         }
+        for (String key : List.of("ref", "focus", "direction", "distance")) {
+            if (args.has(key)) words.add(word(args, key, null));
+        }
+        if (tool.name().equals("explore") && args.has("distance") && !args.has("direction")) words.add(words.size() - 1, "auto");
+        if (args.has("delta") && args.get("delta").getAsBoolean()) words.add("delta");
         if (args.has("face")) words.add(word(args, "face", null));
         if (args.has("sneak") && args.get("sneak").getAsBoolean()) words.add("sneak");
         bot.moments().tool(tool.name(), args);

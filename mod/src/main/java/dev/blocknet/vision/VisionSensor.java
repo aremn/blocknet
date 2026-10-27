@@ -20,7 +20,7 @@ import net.minecraft.world.phys.Vec3;
 /** Server-thread, time-sliced jittered camera. The head owns the view, including during look. */
 public final class VisionSensor {
     public static final long BUDGET_NANOS = Math.max(100_000, Long.getLong("blocknet.visionBudgetNanos", 1_500_000L));
-    public record EntitySeen(UUID uuid, String type, String category, Vec3 position, double distance, long lastSeen) {}
+    public record EntitySeen(UUID uuid, String type, String category, Vec3 position, double distance, long lastSeen, String name) {}
     private final BotPlayer bot;
     private final VoxelRay ray;
     private final VisionTiming timing = new VisionTiming();
@@ -135,7 +135,7 @@ public final class VisionSensor {
                         : entity.getType().getCategory() == MobCategory.MONSTER ? "hostile" : "passive";
                     entities.put(entity.getUUID(), new EntitySeen(entity.getUUID(),
                         BuiltInRegistries.ENTITY_TYPE.getKey(entity.getType()).getPath(), category,
-                        entity.position(), eye.distanceTo(entity.position()), bot.serverLevel().getGameTime()));
+                        entity.position(), eye.distanceTo(entity.position()), bot.serverLevel().getGameTime(), entity instanceof Player ? entity.getName().getString() : ""));
                 }
             }
         }

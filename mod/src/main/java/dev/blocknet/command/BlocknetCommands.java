@@ -98,10 +98,9 @@ public final class BlocknetCommands {
                 bot.controller().look(reporter(context.getSource(), bot));
                 return 1;
             }))
-            .then(withBot("look", false, (context, bot) -> {
-                bot.controller().look(reporter(context.getSource(), bot));
-                return 1;
-            }))
+            .then(visionCommand("look"))
+            .then(visionCommand("scene"))
+            .then(visionCommand("explore"))
             .then(withBot("look-in", true, (context, bot) -> {
                 bot.controller().lookIn(BlockPosArgument.getLoadedBlockPos(context, "pos"), reporter(context.getSource(), bot));
                 return 1;
@@ -195,20 +194,52 @@ public final class BlocknetCommands {
         return 1;
     }
 
-    private static LiteralArgumentBuilder<CommandSourceStack> gatherCommand(net.minecraft.commands.CommandBuildContext buildContext) {
-        var root = Commands.literal("gather");
-        root.then(gatherItem(buildContext, false));
-        root.then(Commands.argument("name", StringArgumentType.word()).suggests(BOT_NAMES).then(gatherItem(buildContext, true)));
-        return root;
+    private static LiteralArgumentBuilder<CommandSourceStack> visionCommand(String action) {
+        return Commands.literal(action).executes(c -> vision(c, action, ""))
+            .then(Commands.argument("query", StringArgumentType.greedyString()).suggests(BOT_NAMES)
+                .executes(c -> vision(c, action, StringArgumentType.getString(c, "query"))));
     }
 
-    private static RequiredArgumentBuilder<CommandSourceStack, net.minecraft.commands.arguments.item.ItemInput> gatherItem(
-            net.minecraft.commands.CommandBuildContext buildContext, boolean named) {
-        return Commands.argument("item", ItemArgument.item(buildContext))
-            .then(Commands.argument("count", IntegerArgumentType.integer(1, 1000000)).executes(context -> {
-                BotPlayer bot = named ? bot(context) : nearestBot(context.getSource());
-                bot.controller().gather(ItemArgument.getItem(context, "item").createItemStack(1, false),
-                    IntegerArgumentType.getInteger(context, "count"), reporter(context.getSource(), bot));
+    private static int vision(CommandContext<CommandSourceStack> c, String action, String query) throws CommandSyntaxException {
+        var words = new java.util.ArrayList<>(java.util.Arrays.asList(query.trim().split("\\s+")));
+        BotPlayer bot = words.isEmpty() ? null : BotManager.get(words.getFirst());
+        if (bot != null) words.removeFirst();
+        else bot = nearestBot(c.getSource());
+        String argument = words.isEmpty() ? "" : words.getFirst();
+        var report = reporter(c.getSource(), bot);
+        try {
+            if (action.equals("look")) {
+                if (!java.util.List.of("", "trees", "ores", "water", "danger", "built", "stations").contains(argument) || words.size() > 1)
+                    throw new IllegalArgumentException("use look [trees|ores|water|danger|built|stations]");
+                bot.controller().look(argument, report);
+            } else if (action.equals("scene")) {
+                if (words.size() > 1 || !argument.isEmpty() && !argument.equals("delta")) throw new IllegalArgumentException("use scene [delta]");
+                report.accept(argument.equals("delta") ? bot.controller().scene().delta() : bot.controller().scene().text(""));
+            } else {
+                String direction = argument.isEmpty() ? "auto" : argument;
+                if (!java.util.List.of("AUTO", "N", "NE", "E", "SE", "S", "SW", "W", "NW").contains(direction.toUpperCase(java.util.Locale.ROOT)) || words.size() > 2)
+                    throw new IllegalArgumentException("use explore [auto|N|NE|E|SE|S|SW|W|NW] [distance]");
+                int distance = words.size() > 1 ? Integer.parseInt(words.get(1)) : 32;
+                if (distance < 1 || distance > 64) throw new IllegalArgumentException("distance must be 1..64");
+                bot.controller().explore(direction, distance, report);
+            }
+        } catch (IllegalArgumentException error) { report.accept("blocked: " + error.getMessage()); }
+        return 1;
+    }
+
+    private static LiteralArgumentBuilder<CommandSourceStack> gatherCommand(net.minecraft.commands.CommandBuildContext buildContext) {
+        return Commands.literal("gather").then(Commands.argument("query", StringArgumentType.greedyString())
+            .executes(c -> {
+                var words = new java.util.ArrayList<>(java.util.Arrays.asList(StringArgumentType.getString(c, "query").trim().split("\\s+")));
+                BotPlayer bot = BotManager.get(words.getFirst());
+                if (bot != null) words.removeFirst(); else bot = nearestBot(c.getSource());
+                var report = reporter(c.getSource(), bot);
+                try {
+                    if (words.isEmpty() || words.size() > 2) throw new IllegalArgumentException("use gather <ref|category|item> [count]");
+                    int count = words.size() > 1 ? Integer.parseInt(words.get(1)) : 1;
+                    if (count < 1 || count > 1000000) throw new IllegalArgumentException("count must be 1..1000000");
+                    bot.controller().gather(words.getFirst(), count, report);
+                } catch (IllegalArgumentException error) { report.accept("blocked: " + error.getMessage()); }
                 return 1;
             }));
     }
@@ -381,11 +412,24 @@ public final class BlocknetCommands {
             }
             node.then(nearPos);
             named.then(namedPos);
+            if (literal.equals("goto")) {
+                node.then(Commands.argument("ref", StringArgumentType.word()).executes(c -> gotoRef(c, nearestBot(c.getSource()))));
+                named.then(Commands.argument("ref", StringArgumentType.word()).executes(c -> gotoRef(c, bot(c))));
+                named.executes(c -> {
+                    nearestBot(c.getSource()).controller().goTo(StringArgumentType.getString(c, "name"), reporter(c.getSource(), nearestBot(c.getSource())));
+                    return 1;
+                });
+            }
         } else {
             node.executes(context -> command.run(context, nearestBot(context.getSource())));
             named.executes(context -> command.run(context, bot(context)));
         }
         return node.then(named);
+    }
+
+    private static int gotoRef(CommandContext<CommandSourceStack> c, BotPlayer bot) {
+        bot.controller().goTo(StringArgumentType.getString(c, "ref"), reporter(c.getSource(), bot));
+        return 1;
     }
 
     private static int sneakUse(CommandContext<CommandSourceStack> c, BotPlayer bot) throws CommandSyntaxException {

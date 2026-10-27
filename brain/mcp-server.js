@@ -1,6 +1,6 @@
 import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
-import { appendFile, mkdir } from 'node:fs/promises';
+import { appendFile, mkdir, readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { appendSession, ResultSummary, failed } from './session-log.js';
@@ -8,6 +8,8 @@ import { Body, option } from './body.js';
 
 export const PROTOCOL_VERSION = '2026-07-28';
 const LEGACY_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
+export const TURN_TOOL_LIMIT = 8;
+export const TURN_LIMIT_MESSAGE = 'turn tool limit reached; answer the player or wait for the next turn';
 const serverInfo = { name: 'blocknet', version: '1.0.0' };
 
 /** JSON lines only on stdout; concurrent requests let stop interrupt a waiting action. */
@@ -22,6 +24,24 @@ export function serveMcp(body, bot, input = process.stdin, output = process.stdo
   const log = entry => appendSession(options.sessionFile ?? process.env.BLOCKNET_SESSION, { bot, ...entry });
   const feedbackFile = options.feedbackFile ?? resolve(dirname(fileURLToPath(import.meta.url)), 'logs/tool-feedback.jsonl');
   let initialized = false;
+  let calls = 0, reservation = Promise.resolve();
+  const auditFile = options.auditFile ?? process.env.BLOCKNET_AUDIT;
+  // Serialize reservations, including concurrent calls. The brain clears this ledger before each
+  // model turn; reading it also preserves the cap if an MCP subprocess reconnects mid-turn.
+  const reserve = (name, args) => {
+    const next = reservation.then(async () => {
+      if (auditFile) {
+        const ledger = await readFile(auditFile, 'utf8').catch(error => { if (error.code === 'ENOENT') return ''; throw error; });
+        calls = ledger.split('\n').filter(Boolean).length;
+      }
+      if (calls >= TURN_TOOL_LIMIT) return false;
+      calls++;
+      if (auditFile) await appendFile(auditFile, `${JSON.stringify({ time: Date.now(), tool: name, args })}\n`);
+      return true;
+    });
+    reservation = next.catch(() => {});
+    return next;
+  };
   const send = message => output.write(`${JSON.stringify(message)}\n`);
   lines.on('line', async line => {
     let request;
@@ -69,13 +89,14 @@ export function serveMcp(body, bot, input = process.stdin, output = process.stdo
           if (!initialized && !version) throw new Error('Initialize first');
           const { name, arguments: args = {} } = request.params ?? {};
           if (typeof name !== 'string') { error(-32602, 'Tool name required'); break; }
+          if (!await reserve(name, args)) {
+            reply({ content: [{ type: 'text', text: TURN_LIMIT_MESSAGE }], isError: true });
+            break;
+          }
           const started = Date.now();
           const id = `${process.pid}-${started}-${request.id}`;
           log({ type: 'tool_call', id, tool: name, args });
           try {
-            if (process.env.BLOCKNET_AUDIT) {
-              await appendFile(process.env.BLOCKNET_AUDIT, `${JSON.stringify({ time: started, tool: name, args })}\n`);
-            }
             let text;
             if (name === 'tool_feedback') {
               if (!['missing', 'confusing', 'redundant', 'bug'].includes(args.kind) || typeof args.note !== 'string'

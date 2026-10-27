@@ -279,3 +279,6 @@ Claude отключены, включён strict MCP, auth подписки со
 `brain/logs/usage.jsonl` — время/длительность вызова, токены input/output/cache, стоимость из JSON
 Claude и число вызовов MCP. Логи, state и сгенерированные MCP-конфиги игнорируются git.
 Подробности и точная команда: [brain/README.md](../brain/README.md).
+
+ADR-0009 step 3: `look [focus]` returns a ranked scene with refs; `scene` reads memory instantly, `explore [direction|auto] [distance=32]` observes safe steps then looks. `goto <ref>` and `gather <ref|category|item> [count]` use observed targets and report the next useful tool.
+The brain receives scene deltas; MCP allows eight tool calls per model turn. Self support is body sense, never visual map evidence.

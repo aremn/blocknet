@@ -100,7 +100,7 @@ public final class WorldMemory extends SavedData {
         return hit;
     }
 
-    private String contents(BotPlayer bot, Entry entry) {
+    public String contents(BotPlayer bot, Entry entry) {
         return bot.containerMemory().entries().stream().filter(snapshot ->
             snapshot.location().dimension().equals(entry.location().dimension())
                 && snapshot.positions().contains(entry.location().position()) && snapshot.blockId().equals(entry.blockId()))

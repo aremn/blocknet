@@ -257,4 +257,94 @@ public final class VisionGameTests {
             helper.succeed();
         });
     }
+    @GameTest(template = "vision_field", skyAccess = true, timeoutTicks = 600)
+    public static void sceneGroupsTreesAndSecondLookHasNoChange(GameTestHelper helper) {
+        BotPlayer bot = field(helper, "BnScene");
+        tree(helper, 24, 12, Blocks.OAK_LOG, Blocks.OAK_LEAVES);
+        tree(helper, 36, 24, Blocks.BIRCH_LOG, Blocks.BIRCH_LEAVES);
+        tree(helper, 12, 36, Blocks.OAK_LOG, Blocks.OAK_LEAVES);
+        // A fourth, different species is completely behind a tall wall.
+        for (int z = 1; z < 47; z++) for (int y = 1; y < 22; y++) helper.setBlock(new BlockPos(7, y, z), Blocks.STONE);
+        tree(helper, 3, 24, Blocks.SPRUCE_LOG, Blocks.SPRUCE_LEAVES);
+        var reports = new ArrayList<String>();
+        whenLit(helper, () -> bot.controller().look(message -> {
+            reports.add(message);
+            bot.controller().look(reports::add);
+        }));
+        helper.succeedWhen(() -> {
+            helper.assertTrue(reports.size() == 2, "two looks completed: " + reports);
+            String scene = reports.getFirst();
+            helper.assertTrue(scene.contains("you: on stone, facing") && scene.contains("holding nothing"), scene);
+            helper.assertTrue(scene.matches("(?s).*trees: .*t[0-9]+.*oak x2 .*m.*") && scene.contains("birch x1 E"), scene);
+            helper.assertTrue(!scene.contains("spruce"), "hidden species absent: " + scene);
+            helper.assertTrue(reports.get(1).startsWith("no change since last look"), reports.toString());
+            Blocknet.LOGGER.info("SCENE_SAMPLE {}", scene.replace('\n', '|'));
+            BotManager.despawn("BnScene");
+        });
+    }
+
+    @GameTest(template = "vision_field", skyAccess = true, timeoutTicks = 1000)
+    public static void gatherRefCollectsOnlyItsTree(GameTestHelper helper) {
+        BotPlayer bot = field(helper, "BnGatherRef");
+        tree(helper, 24, 19, Blocks.OAK_LOG, Blocks.OAK_LEAVES);
+        tree(helper, 34, 24, Blocks.BIRCH_LOG, Blocks.BIRCH_LEAVES);
+        bot.getInventory().clearContent();
+        var reports = new ArrayList<String>();
+        whenLit(helper, () -> bot.controller().look(message -> {
+            var tree = bot.vision().objects().stream().filter(o -> o.category().equals("tree") && o.kind().equals("oak")).findFirst().orElseThrow();
+            // Exercise the same command parser the bridge uses, including a ref and omitted count.
+            var source = bot.createCommandSourceStack().withPermission(2);
+            bot.getServer().getCommands().performPrefixedCommand(source, "blocknet gather BnGatherRef " + tree.ref() + " 3");
+            reports.add(message);
+        }));
+        helper.succeedWhen(() -> {
+            helper.assertTrue(!reports.isEmpty() && bot.getInventory().countItem(net.minecraft.world.item.Items.OAK_LOG) >= 3, "three oak logs collected");
+            helper.assertTrue(bot.getInventory().countItem(net.minecraft.world.item.Items.BIRCH_LOG) == 0, "no birch collected");
+            for (int y = 1; y <= 5; y++) helper.assertBlockPresent(Blocks.BIRCH_LOG, new BlockPos(34, y, 24));
+            BotManager.despawn("BnGatherRef");
+        });
+    }
+
+    @GameTest(template = "vision_field", skyAccess = true, timeoutTicks = 400)
+    public static void unseenLogsSuggestExploreAndStoneRequiresPickaxe(GameTestHelper helper) {
+        BotPlayer bot = field(helper, "BnGatherHint");
+        bot.getInventory().clearContent();
+        var reports = new ArrayList<String>();
+        whenLit(helper, () -> bot.controller().look(message -> {
+            bot.controller().gather("logs", 3, text -> {
+                reports.add(text);
+                bot.controller().gather("cobblestone", 5, reports::add);
+            });
+        }));
+        helper.succeedWhen(() -> {
+            helper.assertTrue(reports.size() == 2, "two results: " + reports);
+            helper.assertTrue(reports.getFirst().contains("none seen") && reports.getFirst().contains("unexplored:") && reports.getFirst().contains("try explore"), reports.toString());
+            helper.assertTrue(reports.get(1).startsWith("blocked: need a pickaxe for stone") && reports.get(1).contains("craft wooden_pickaxe: needs"), reports.toString());
+            for (int x = 1; x < 47; x++) for (int z = 1; z < 47; z++) helper.assertBlockPresent(Blocks.STONE, new BlockPos(x, 0, z));
+            helper.assertTrue(bot.getInventory().countItem(net.minecraft.world.item.Items.COBBLESTONE) == 0, "nothing broken");
+            Blocknet.LOGGER.info("GATHER_HINT_SAMPLE {}", reports);
+            BotManager.despawn("BnGatherHint");
+        });
+    }
+
+    @GameTest(template = "vision_field", skyAccess = true, timeoutTicks = 800)
+    public static void exploreOpenSideRevealsHiddenTree(GameTestHelper helper) {
+        BotPlayer bot = field(helper, "BnExplore");
+        // North wall hides a tree; east is a known, safe route around the end of that wall.
+        for (int x = 16; x <= 28; x++) for (int y = 1; y < 22; y++) helper.setBlock(new BlockPos(x, y, 19), Blocks.STONE);
+        tree(helper, 24, 13, Blocks.OAK_LOG, Blocks.OAK_LEAVES);
+        var reports = new ArrayList<String>();
+        whenLit(helper, () -> bot.controller().look(message -> {
+            helper.assertTrue(bot.vision().objects().stream().noneMatch(o -> o.category().equals("tree")), "tree initially hidden");
+            bot.controller().explore("E", 12, reports::add);
+        }));
+        helper.succeedWhen(() -> {
+            helper.assertTrue(reports.size() == 1, "explore finished: " + reports);
+            helper.assertTrue(reports.getFirst().startsWith("new:") && reports.getFirst().contains("oak") && reports.getFirst().matches(".*t[0-9]+.*"), reports.toString());
+            helper.assertTrue(bot.getX() > helper.absolutePos(new BlockPos(28, 1, 24)).getX(), "walked around the starting wall");
+            Blocknet.LOGGER.info("EXPLORE_SAMPLE {}", reports.getFirst());
+            BotManager.despawn("BnExplore");
+        });
+    }
+
 }

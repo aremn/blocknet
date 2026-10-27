@@ -187,17 +187,20 @@ export class BrainSession {
         let result, failure, called = false;
         try {
           if (!this.backend.process || this.backend.process.error || this.backend.turns >= this.backend.maxTurns) this.compact.reset();
-          let state = '';
+          let state = '', scene = '';
           if (!message.reflection) {
             const delta = await this.call('changes');
             state = this.compact.update(delta.result);
+            if (this.body.hello?.tools?.some(t => t.name === 'scene')) {
+              scene = (await this.call('scene', { delta: true, goal: message.autoplay ? this.goal : message.text })).result;
+            }
           }
           if (generation !== this.generation || this.closed) continue;
           const events = this.events.splice(0);
           const prompt = message.reflection
             ? `Session goal: ${this.goal || 'help the player'}. Give 3-5 short concrete lessons: what worked, what went wrong, which tool you missed. No tools, no game actions; reflect only. Recent events: ${JSON.stringify(events)}.`
-            : message.autoplay ? `Continue toward the goal: ${this.goal}; current state: ${state || JSON.stringify(this.compact.facts)}. Events: ${JSON.stringify(events)}. Pick the next action.`
-              : `You are ${this.bot}. ${message.from}: ${message.text}${state}${events.length ? `\nEvents: ${JSON.stringify(events)}` : ''}`;
+            : message.autoplay ? `Continue toward the goal: ${this.goal}; current state: ${state || JSON.stringify(this.compact.facts)}. Scene: ${scene || 'unknown; try look'}. Events: ${JSON.stringify(events)}. Pick the next action.`
+              : `You are ${this.bot}. ${message.from}: ${message.text}${state}${scene ? `\nScene: ${scene}` : ''}${events.length ? `\nEvents: ${JSON.stringify(events)}` : ''}`;
           this.log?.write('model_message', { role: 'user', text: prompt.slice(0, 300) });
           if (this.auditFile) await writeFile(this.auditFile, '');
           if (generation !== this.generation) continue;

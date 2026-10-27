@@ -63,11 +63,16 @@ public final class BotController {
     /** Give up on a path that has not reached its goal after this long (5 minutes). */
     private static final int MAX_PATH_TICKS = 20 * 60 * 5;
 
-    private enum Task { IDLE, GOTO, FOLLOW, MINE_APPROACH, MINE_BREAK, COLLECT, USE, EAT, PLACE, CRAFT, GATHER, CONTAINER, LOOK }
+    private enum Task { IDLE, GOTO, FOLLOW, MINE_APPROACH, MINE_BREAK, COLLECT, USE, EAT, PLACE, CRAFT, GATHER, CONTAINER, LOOK, EXPLORE }
 
     private int lookTicks;
     private float lookStartYaw;
     private long lookStartTick;
+    private String lookFocus = "";
+    private final dev.blocknet.vision.Scene scene;
+    private ExploreTask exploring;
+    private java.util.Set<String> exploreBefore;
+    public dev.blocknet.vision.Scene scene() { return scene; }
 
     @Nullable
     private CraftExecutor crafting;
@@ -132,6 +137,7 @@ public final class BotController {
 
     public BotController(BotPlayer bot) {
         this.bot = bot;
+        this.scene = new dev.blocknet.vision.Scene(bot);
     }
 
     /** The pathfinder owns movement only while this controller has a navigation leg. */
@@ -233,14 +239,39 @@ public final class BotController {
     }
 
     public void gather(ItemStack item, int count, Consumer<String> reporter) {
+        gather(BuiltInRegistries.ITEM.getKey(item.getItem()).toString(), count, reporter);
+    }
+
+    public void gather(String target, int count, Consumer<String> reporter) {
         start(Task.GATHER, bot.blockPosition(), reporter);
-        gathering = new GatherTask(bot, this, item.getItem(), count);
+        scene.goal(target);
+        gathering = new GatherTask(bot, this, target, count);
+    }
+
+    public void goTo(String ref, Consumer<String> reporter) {
+        var object = bot.vision().objects().stream().filter(o -> o.ref().equals(ref)).findFirst();
+        if (object.isEmpty()) { reporter.accept("none seen for " + ref + "; try look or explore"); return; }
+        start(Task.GOTO, object.get().nearest(), reporter);
+        navigationGoal = new GoalGetToBlock(object.get().nearest());
+    }
+
+    public void explore(String direction, int distance, Consumer<String> reporter) {
+        start(Task.EXPLORE, bot.blockPosition(), reporter);
+        exploring = new ExploreTask(bot, this, direction, Math.min(64, Math.max(1, distance)));
+    }
+
+    void explored(java.util.Set<String> before) {
+        exploring = null;
+        // Keep the same task/reporter through the final panorama, including cancellation.
+        exploreBefore = before;
+        task = Task.LOOK;
+        beginLook("");
     }
 
     void gatherMine(BlockPos pos) {
         BlockState state = bot.serverLevel().getBlockState(pos);
         if (state.requiresCorrectToolForDrops() && bestCorrectTool(state) < 0) {
-            fail("need a tool for " + BuiltInRegistries.BLOCK.getKey(state.getBlock()));
+            finish(toolHint(state));
             return;
         }
         craftMine(pos);
@@ -251,6 +282,25 @@ public final class BotController {
     void gatherFinished(String message) {
         gathering = null;
         finish(message);
+    }
+
+    String toolHint(BlockState state) {
+        if (!state.requiresCorrectToolForDrops() || bestCorrectTool(state) >= 0) return "";
+        var probes = List.of(net.minecraft.world.item.Items.WOODEN_PICKAXE, net.minecraft.world.item.Items.STONE_PICKAXE,
+            net.minecraft.world.item.Items.IRON_PICKAXE, net.minecraft.world.item.Items.DIAMOND_PICKAXE);
+        for (var tool : probes) {
+            ItemStack stack = new ItemStack(tool);
+            if (!stack.isCorrectToolForDrops(state)) continue;
+            var plan = new dev.blocknet.crafting.CraftingCalculation(bot.serverLevel(), dev.blocknet.crafting.PlannerCatalogs.get(bot.serverLevel()),
+                dev.blocknet.crafting.CraftingCalculation.Limits.DEFAULT, p -> CraftStations.EXECUTABLE.contains(p.station()))
+                .plan(stack, 1, new ArrayList<>(bot.getInventory().items), CraftStations.remembered(bot).keySet(), List.of(), CraftPlan.Mode.CRAFT);
+            String needs = plan.missing().entrySet().stream().map(e -> e.getValue() + " " + e.getKey().replace("minecraft:", ""))
+                .collect(java.util.stream.Collectors.joining(", "));
+            return "blocked: need a pickaxe for " + BuiltInRegistries.BLOCK.getKey(state.getBlock()).getPath()
+                + " (craft " + BuiltInRegistries.ITEM.getKey(tool).getPath() + ": "
+                + (needs.isEmpty() ? "try plan for materials and stations" : "needs " + needs) + ")";
+        }
+        return "blocked: need " + ToolFacts.requirement(state) + "; try inv or plan";
     }
 
     private int bestCorrectTool(BlockState state) {
@@ -361,8 +411,15 @@ public final class BotController {
     }
 
     /** A deliberate player-like sweep; other tools never start this task themselves. */
-    public void look(Consumer<String> reporter) {
+    public void look(Consumer<String> reporter) { look("", reporter); }
+
+    public void look(String focus, Consumer<String> reporter) {
         start(Task.LOOK, bot.blockPosition(), reporter);
+        beginLook(focus);
+    }
+
+    private void beginLook(String focus) {
+        lookFocus = focus;
         bot.vision().startPanorama();
         lookTicks = 0;
         lookStartYaw = bot.getYRot();
@@ -375,7 +432,8 @@ public final class BotController {
         turnTowards(yaw, pitch);
         bot.vision().tick();
         if (lookTicks == 20) {
-            String report = bot.worldMemory().looked(bot, lookStartTick) + " | " + bot.vision().report();
+            String report = exploreBefore == null ? scene.looked(lookFocus) : scene.discoveries(exploreBefore);
+            exploreBefore = null;
             bot.vision().endPanorama();
             finish(report);
         }
@@ -442,6 +500,15 @@ public final class BotController {
         return false;
     }
 
+    boolean exploreWalk(BlockPos pos) {
+        Vec3 point = Vec3.atBottomCenterOf(pos);
+        // Enter the waypoint cell before replanning; the normal 0.6m approach tolerance can
+        // otherwise report arrival while still standing in the previous cell.
+        if (bot.position().subtract(point).horizontalDistanceSqr() <= .09) return true;
+        walkTowards(point);
+        return false;
+    }
+
     void craftMine(BlockPos pos) {
         target = pos;
         task = Task.MINE_APPROACH;
@@ -454,6 +521,8 @@ public final class BotController {
     }
 
     public void stop() {
+        exploring = null;
+        exploreBefore = null;
         if (task == Task.LOOK) bot.vision().endPanorama();
         bot.releaseUsingItem();
         stopPathing();
@@ -512,6 +581,7 @@ public final class BotController {
             case GATHER -> "gathering";
             case CONTAINER -> "using container at " + where;
             case LOOK -> "looking around";
+            case EXPLORE -> "exploring observed frontier";
             case IDLE -> "idle";
         };
     }
@@ -564,6 +634,7 @@ public final class BotController {
             case GATHER -> gathering.tick();
             case CONTAINER -> containerTask.tick();
             case LOOK -> tickLook();
+            case EXPLORE -> exploring.tick();
             case IDLE -> {}
         }
     }

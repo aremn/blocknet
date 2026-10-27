@@ -109,7 +109,8 @@ final class CraftExecutor {
         replan();
         if (plan.status() == CraftPlan.Status.NO_RECIPE) {
             complete("blocked: no recipe for " + plan.target()
-                + (plan.hints().isEmpty() ? "" : "; " + String.join("; ", plan.hints())));
+                + (plan.hints().isEmpty() ? "" : "; " + String.join("; ", plan.hints()))
+                + GatherTask.sourceHint(bot, target));
         } else if (plan.status() == CraftPlan.Status.MISSING) {
             complete("blocked: missing " + plan.missing().entrySet().stream()
                 .map(entry -> entry.getValue() + " " + entry.getKey()).collect(Collectors.joining(", "))

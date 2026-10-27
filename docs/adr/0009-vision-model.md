@@ -183,3 +183,6 @@ Windows, JDK 21.0.12.1+1, NeoForge 21.1.219; семь `VisionGameTests`, пол�
   2. объекты, классы по тегам, фронтиры;
   3. суть сцены, `look`/`scene`/`explore`, ссылки в `gather` и `goto`;
   4. тест на утечку и сцены «как игрок»; повтор автоигры и сравнение отчётов.
+
+Step 3 complete (2026-10-28): ranked `Scene`, focused `look`, instant `scene`, frontier `explore`, observed refs/categories in `goto`/`gather`, survival-tool/material hints, scene deltas and an eight-call MCP turn cap.
+Support in the self line is body sense without map writes; exploration validates each walking cell with eye evidence before entering it.
