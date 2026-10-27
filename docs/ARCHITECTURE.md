@@ -12,7 +12,7 @@
   атрибуты дальности.
 - Восприятие честное: бот видит только лучами из своих глаз, у каждого факта есть происхождение
   ([ADR-0002](adr/0002-honest-perception.md)).
-- Мозг — отдельный процесс, связь по WebSocket (JSON-RPC 2.0) с версией протокола
+- Мозг — отдельный процесс, связь по TCP JSON lines (JSON-RPC 2.0) с версией протокола
   ([ADR-0003](adr/0003-brain-outside-mod.md)). LLM не вызывается на каждом тике.
 - Поиск пути — Automatone, вынесенный из PlayerEngine в отдельный LGPL-модуль
   ([ADR-0004](adr/0004-pathing-from-automatone.md)).
@@ -23,7 +23,7 @@
 
 ```
  Мозг (процесс, LLM)                    Тело (мод NeoForge, сервер)
- ┌────────────────────┐   WebSocket    ┌───────────────────────────────────────┐
+ ┌────────────────────┐   TCP lines    ┌───────────────────────────────────────┐
  │ агент, память,     │◄──JSON-RPC───► │ bridge: очередь команд, события       │
  │ знания, диалог,    │  localhost     │   │ (сетевой поток → server.execute) │
  │ MCP-обёртка        │                │   ▼                                   │
@@ -43,8 +43,7 @@
 Потоки:
 
 - Всё, что трогает мир, выполняется на серверном потоке.
-- WebSocket живёт в своём потоке и только кладёт команды в очередь, она разбирается в
-  `ServerTickEvent.Post`. Ответы возвращаются через `CompletableFuture`.
+- Сетевые потоки передают вызовы через `server.execute`. Ответы и события возвращаются после выполнения на серверном потоке.
 - Тяжёлая сводка для LLM собирается из неизменяемых снимков вне серверного потока.
 
 ## 2. Тело: `BotPlayer extends ServerPlayer`
@@ -198,51 +197,57 @@ view distance). `perception_mode`: `honest` по умолчанию, `debug_omni
 
 ## 5. Протокол тело ↔ мозг
 
-Транспорт — WebSocket на `127.0.0.1`, JSON-RPC 2.0, токен из конфига, один мозг на бота. Библиотека
-Java-WebSocket вкладывается в jar мода (jarJar), JSON через Gson. MCP-обёртка живёт в мозге.
+Реализованный транспорт — TCP на `127.0.0.1`, JSON-RPC 2.0, UTF-8, один JSON-объект на строку
+([ADR-0008](adr/0008-bridge-json-lines.md) заменяет WebSocket из ADR-0003). Только `java.net` и
+штатный Gson, без новой библиотеки. Сервер запускается и останавливается вместе с Minecraft;
+один accept-поток, reader-поток на соединение, каждый вызов через `server.execute`.
 
-Рукопожатие:
-
-```json
-→ {"jsonrpc":"2.0","id":1,"method":"hello","params":{"protocol":1,"bot":"Kirill","token":"…"}}
-← {"jsonrpc":"2.0","id":1,"result":{"epoch":7,"bot_ref":"p:2f1c…","perception_mode":"honest",
-   "modpack_fingerprint":"atm10-6.0-9c1e…","knowledge_dir":"config/blocknet_ai/knowledge/9c1e…",
-   "adapters":["storage_network:ae2"],"skills":["goto","follow","mine_visible","branch_mine","craft","smelt","deposit"]}}
-```
-
-| Группа | Методы |
-|---|---|
-| Восприятие | `observe(focus?)`, `inspect(ref)`, `find_visible(kind, limit)`, `memory.query(kind, near?, limit)`, `look(dir \| ref)` |
-| Задачи | `task.start(goal, request_id, preempt?)`, `task.cancel(id)`, `task.status(id)`, `task.list()` |
-| Инвентарь и меню | `inventory.get()`, `menu.get()`, `menu.click(...)`, `menu.close()` |
-| Машины и хранилища | `machine.inspect(ref)` (capabilities), `storage.query(item)`, `storage.craft(item, n, request_id)` (сети хранения, через адаптер при загруженном моде) |
-| Речь | `chat.say(text, to?)` |
-| Управление | `zones.get/set`, `bot.mode(follow \| idle \| autonomous)` |
-
-События (склеиваются окнами ~250 мс): `chat.heard`, `task.accepted/progress/blocked/completed/
-failed/cancelled`, `perception.noticed`, `status`, `damage`, `death`, `sound.heard`,
-`inventory.changed`, `menu.opened/closed`, `world.epoch_changed`.
-
-Пример «накопай 16 угля»:
+`config/blocknet_ai-bridge.json` содержит `port` (25599 по умолчанию) и случайный `token`,
+создаваемый при первом запуске. До успешного `hello` остальные вызовы отклоняются.
 
 ```json
-→ {"jsonrpc":"2.0","id":42,"method":"task.start","params":{"request_id":"u-105",
-   "goal":{"skill":"gather","item":"minecraft:coal","source":"mine",
-           "amount":{"mode":"additional","value":16},
-           "constraints":{"stay_near":"owner","max_duration_s":300}}}}
-← {"jsonrpc":"2.0","id":42,"result":{"task_id":"t-42","state":"accepted"}}
-← {"jsonrpc":"2.0","method":"event","params":{"epoch":7,"seq":881,"tick":183220,
-   "type":"task.progress","task_id":"t-42","phase":"searching","detail":"no visible coal; exploring frontier"}}
-← {"jsonrpc":"2.0","method":"event","params":{"epoch":7,"seq":894,"type":"task.blocked","task_id":"t-42",
-   "reason":"tool_broken","need":"tag:minecraft:pickaxes","options":["craft_pickaxe","withdraw_from_storage","abort"]}}
+→ {"jsonrpc":"2.0","id":1,"method":"hello","params":{"protocol":1,"token":"…"}}
+← {"jsonrpc":"2.0","id":1,"result":{"protocol":1,"bots":["Kirill"],"tools":[{"name":"goto","description":"Walk to exact block coordinates.","params":{"type":"object","properties":{"x":{"type":"integer"},"y":{"type":"integer"},"z":{"type":"integer"}},"required":["x","y","z"],"additionalProperties":false}}]}}
+→ {"jsonrpc":"2.0","id":2,"method":"tool.call","params":{"bot":"Kirill","tool":"goto","args":{"x":10,"y":64,"z":20}}}
+← {"jsonrpc":"2.0","id":2,"result":{"task_id":"…"}}
+← {"jsonrpc":"2.0","method":"event","params":{"type":"task.finished","bot":"Kirill","task_id":"…","result":"[Kirill] arrived"}}
 ```
 
-- Ссылки: `b:<dim>:<x>,<y>,<z>#<gen>`, `e:<uuid>`, `g:coal_patch_12`; ссылка из прошлой эпохи
-  отклоняется с `stale_ref`.
-- Ошибки: `not_visible`, `out_of_reach`, `busy`, `stale_ref`, `forbidden_zone`, `unsupported`,
-  `unknown_item`.
-- Повторный `task.start` с тем же `request_id` возвращает ту же задачу.
-- При обрыве связи бот доделывает задачу и следует за владельцем.
+Методы: `hello {protocol, token}` и `tool.call {bot, tool, args}`. `hello.tools` — единый реестр
+с описаниями и JSON Schema параметров. Инструменты используют те же команды/контроллеры и текст,
+что `/blocknet`; отдельной логики выбора следующего шага у моста нет.
+
+| Инструменты | Параметры args | Результат |
+|---|---|---|
+| `status`, `inv` | `{}` | `{result: "однострочный текст"}` |
+| `changes` | `{}` | Изменения с прошлого changes этого соединения; baseline команд и других соединений независим |
+| `memory` | `{filter?}` | Последние наблюдения контейнеров |
+| `plan` | `{item, count?, mode?: "craft" или "get"}` | План без выполнения; count по умолчанию 1 |
+| `stop` | `{}` | Немедленная отмена текущей задачи |
+| `say` | `{text}` | Всем игрокам как `<BotName> text` |
+| `look` | `{}` | Задача: осмотреться честными лучами |
+| `come`, `follow` | `{player}` | Задача к игроку по имени в том же измерении; follow до stop/замены |
+| `goto`, `mine`, `use`, `look-in` | `{x, y, z}` | Задача на один блок |
+| `craft`, `get` | `{item, count?}` | Задача; count по умолчанию 1 |
+| `deposit`, `withdraw` | `{x, y, z, filter, count?}` | Задача; filter: item id, #tag, all, junk; без count — всё подходящее |
+
+Обычные инструменты отвечают `{result:"…"}`. Задачи сначала отвечают `{task_id}`, затем ровно
+один `event {type:"task.finished", bot, task_id, result}` с существующим итоговым отчётом, включая
+ошибку, остановку или замену задачи. Итог получают все аутентифицированные соединения, чтобы
+основной мозг и MCP-процесс могли работать одновременно. Результат всегда идёт после `task_id`.
+
+Другие уведомления: `event {type:"chat", from, text}` для чата настоящих игроков
+(`ServerChatEvent`, без ботов) и `event {type:"bot.died", bot}`. Без мозга локальная игра не меняется;
+обрыв не отменяет задачу и не повторяет её. Ошибки JSON-RPC: `-32700` неверный JSON, `-32600`
+неверный запрос, `-32001` неверное рукопожатие, `-32601` неизвестный метод, `-32602` неверный вызов.
+
+Мозг (`brain/`, Node 22 без npm-зависимостей) сначала проверяет короткие ru/en правила
+stop/come/follow/look; только остальные обращения к имени/алиасу вызывают `claude -p --model haiku`.
+MCP stdio процесс отдаёт этот же реестр для одного бота и ждёт `task.finished` до 10 минут, поэтому
+для модели один вызов инструмента — действие вместе с исходом. Системный промпт короткий и
+неизменный, встроенные инструменты Claude отключены, новые сообщения стоят в очереди, stop
+действует сразу. Сессия на бота сохраняется до 30 ходов, расход и число MCP-вызовов — в JSONL.
+Эпохи, replay/idempotency и остальные проектные методы ADR-0003 пока не реализованы.
 
 ## 6. Поиск пути: вынос Automatone
 

@@ -2,6 +2,7 @@ package dev.blocknet.body;
 
 import com.mojang.authlib.GameProfile;
 import dev.blocknet.control.BotController;
+import dev.blocknet.bridge.BridgeServer;
 import dev.blocknet.memory.ContainerMemory;
 import dev.blocknet.memory.WorldMemory;
 import dev.blocknet.state.BodyStateTracker;
@@ -80,6 +81,7 @@ public final class BotPlayer extends ServerPlayer {
     public void die(DamageSource source) {
         controller.stop();
         super.die(source);
+        BridgeServer.botDied(this);
         BotManager.forget(this);
         setHealth(getMaxHealth());
         foodData = new FoodData();

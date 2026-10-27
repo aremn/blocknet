@@ -50,10 +50,15 @@ local.properties
 *.log
 crash-reports/
 
-# Brain (Python) virtualenvs and caches, for when brain/ appears
+# Local language caches
 .venv/
 __pycache__/
 *.pyc
+
+brain/logs/
+brain/state.json
+brain/mcp.json
+brain/mcp.*.json
 
 # Third-party sources pulled locally for reading, not vendored
 _src/

@@ -4,7 +4,8 @@ An AI companion that plays modded Minecraft with you, as a real player.
 
 > **Status:** early prototype. A bot joins as a real player, finds its way (around walls, up
 > ledges, digging through when there is no way around), mines and right-clicks blocks with
-> survival rules, driven by `/blocknet` commands or a radial menu. No perception or brain yet.
+> survival rules, honest visual memory and container/crafting actions. Control it through
+> `/blocknet`, a radial menu, or the separate Claude Haiku brain in [`brain/`](brain/README.md).
 > Target: Minecraft **1.21.1**, **NeoForge 21.1** (All the Mods 10).
 
 ## Idea
@@ -14,8 +15,9 @@ An AI companion that plays modded Minecraft with you, as a real player.
   machines, moving items in any mod's menus. Clients don't need the mod.
 - **Honest perception**: the bot only knows what it has seen with its own eyes (rays from its head),
   heard, or read through a machine it is looking at. No x-ray.
-- **Brain** (planned, `brain/`): a separate process with an LLM (API or local). It talks to the body
-  over a versioned JSON-RPC protocol, sets goals and reacts to events. The LLM never runs per tick.
+- **Brain** (`brain/`): a dependency-free Node 22 process using rules and Claude Haiku via `claude -p`.
+  It talks to the body over localhost TCP JSON-RPC lines; MCP exposes one action and its outcome per
+  tool call. The LLM never runs per tick. Start with `node brain/brain.js --bot Kirill`.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and the decision records in [docs/adr](docs/adr).
 
@@ -28,7 +30,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and the decision records in [do
 | `licenses/` | Licenses of third-party material |
 | `pathing/` | Pathfinding extracted from Automatone, LGPL-3.0-or-later, nested in the mod jar |
 | `crafting/` | Crafting calculation adapted from AE2, LGPL-3.0-or-later, nested in the mod jar |
-| `brain/` | *(planned)* LLM agent process |
+| `brain/` | Node 22 brain, rule routing, MCP stdio wrapper, Claude Haiku sessions and usage logs |
 | `protocol/` | *(planned)* JSON schemas of the body ↔ brain protocol |
 
 ## Building

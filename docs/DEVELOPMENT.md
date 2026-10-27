@@ -25,7 +25,7 @@ blocknet.deployModsDir=C:/Users/<ты>/AppData/Roaming/PrismLauncher/instances/<
 
 ## Отладочные команды
 
-Пока моста к мозгу нет, ботом управляют командами (нужны права оператора):
+Ботом можно управлять командами независимо от мозга (нужны права оператора):
 
 ```
 /blocknet spawn <имя>          бот входит в игру там, где стоит вызвавший
@@ -241,3 +241,32 @@ got 5 iron_ingot: had 2, took 2 from chest 12 64 -30, crafted 1
   а отдельный вложенный jar позволяет заменить библиотеку,
   и требование LGPL соблюсти проще всего.
 - Чужие исходники, скачанные только для чтения, кладём в `_src/` — он в `.gitignore`.
+
+## Мозг через Claude Haiku
+
+Нужны Node 22 и уже установленный/авторизованный `claude`. npm-зависимостей нет.
+После запуска сервера и `/blocknet spawn Kirill` из корня репозитория:
+
+```bash
+node brain/brain.js --bot Kirill
+# Для своего Prism-инстанса или выделенного сервера:
+node brain/brain.js --bot Kirill --alias Кирилл,Кир --config "<minecraft>/config/blocknet_ai-bridge.json"
+node --test brain/test/
+```
+
+По умолчанию config — `mod/run/config/blocknet_ai-bridge.json`; мод создаёт порт 25599 и случайный
+токен при первом старте сервера. Env-альтернативы: `BLOCKNET_CONFIG`, `BLOCKNET_BOT`,
+`BLOCKNET_ALIASES`. Мост слушает только `127.0.0.1`, переподключение автоматическое.
+Чат `Kirill, ко мне` / `Kirill stop` / `Kirill follow` / `Kirill, осмотрись` обрабатывают правила;
+прочие обращения вызывают Haiku. Stop прерывает и текущий вызов Claude. После смерти бота нужно
+создать снова. `/blocknet` и круговое меню работают и без мозга.
+
+`brain/mcp.json` генерируется при запуске (для других имён — `mcp.<имя>.json`); встроенные tools
+Claude отключены, включён strict MCP, auth подписки сохраняется без `--bare`. В Windows нужен
+нативный `claude.exe` (`CLAUDE_BIN`), либо `CLAUDE_BIN=node` и `CLAUDE_SCRIPT=<путь к cli.js>`
+для npm-установки: shell не запускается. Все флаги собраны в `buildClaudeArgs`.
+
+`brain/state.json` хранит session_id на бота, новая сессия после 30 ходов.
+`brain/logs/usage.jsonl` — время/длительность вызова, токены input/output/cache, стоимость из JSON
+Claude и число вызовов MCP. Логи, state и сгенерированные MCP-конфиги игнорируются git.
+Подробности и точная команда: [brain/README.md](../brain/README.md).

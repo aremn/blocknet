@@ -8,7 +8,7 @@ description: How to work in the Blocknet repository (C:\Projects\blocknet, githu
 Blocknet is an AI companion for modded Minecraft (target: All the Mods 10, Minecraft 1.21.1,
 NeoForge 21.1). The **body** is a server-side mod: the bot is a real `ServerPlayer`, so it acts
 through the same server code a human player triggers. The **brain** (an LLM, for now Claude Haiku
-through `claude -p`) will be a separate process talking to the body over a versioned protocol.
+through `claude -p`) is a separate Node 22 process talking to the body over TCP JSON-RPC lines.
 
 Before designing anything non-trivial, read `docs/ARCHITECTURE.md` and the decisions in
 `docs/adr/`. They record what was chosen and why; `docs/DEVELOPMENT.md` has the day-to-day rules.
@@ -19,7 +19,7 @@ If a change contradicts an ADR, write a new ADR that supersedes it instead of si
 - Windows, Git Bash. JDK 21 is not the system Java (that is Java 8), so every Gradle call needs
   `export JAVA_HOME="/c/Users/ncpaa/.jdks/jdk-21.0.12.1+1"` first.
 - The repo has two Gradle layers: the root (settings, wrapper, `gradle.properties`) and the `mod/`
-  subproject. The LGPL `pathing/` and `crafting/` modules sit next to `mod/`; `brain/` and `protocol/` are planned.
+  subproject. The LGPL `pathing/` and `crafting/` modules and Node 22 `brain/` sit next to `mod/`; `protocol/` schemas are planned.
 - Minecraft and NeoForge sources (Mojang names + Parchment) are in
   `mod/build/moddev/artifacts/neoforge-21.1.219-sources.jar`. Read real signatures there
   (`unzip -p <jar> net/minecraft/...java`) instead of guessing; extract files you need to `_src/`
@@ -56,9 +56,19 @@ grep -a -E "GAME TESTS COMPLETE|required tests (passed|failed)|failed at" build/
 | `memory/` | `WorldMemory`: per-bot SavedData of eye-seen stations/containers; `ContainerMemory`: component-aware menu snapshots per dimension/position, double-chest normalization, per-UUID SavedData persistence, compact memory/whereIs queries and nearest planner sources |
 | `state/` | `ItemDescriber`/`ToolFacts`: generic item facts and vanilla tool probes; `BodyState`/`BodyStateTracker`: on-demand compact sections, independent revisions, bounded inventory diff history (ADR-0006); no transport |
 | `command/` | `/blocknet` debug commands; the bot name is optional (nearest bot) |
+| `bridge/` | `BridgeConfig` (localhost port/token), `BridgeServer` (JSON-RPC lines, lifecycle/chat/death, server-thread dispatch), `BridgeTools` (one tool registry reusing commands and their reports; independent changes baselines) |
 | `client/` | Optional client side: radial menu on the mouse wheel; only sends `/blocknet` commands |
 | `mixin/` | `PlayerListMixin` installs `BotPacketListener` during `placeNewPlayer` |
 | `gametest/` | GameTests on the empty `arena` template; `TestArena` helpers |
+
+`brain/` is dependency-free Node 22 ES modules: `body.js` is the reconnecting TCP client,
+`mcp-server.js` wraps tools with task-outcome waiting, `rules.js` routes short ru/en orders,
+`brain.js` queues chat and builds Claude Haiku arguments/sessions/logs, and `prompt.md` is stable.
+Run `node brain/brain.js --bot Kirill --config <minecraft>/config/blocknet_ai-bridge.json`;
+dev config defaults to `mod/run/config/blocknet_ai-bridge.json`. Tests: `node --test brain/test/`.
+`BridgeGameTests` proves authentication, discovery, status and physical goto through a TCP socket.
+See `brain/README.md`, architecture section 5 and ADR-0008. No `claude --bare`; preserve subscription
+auth, disable built-in tools and use strict MCP. Generated configs, sessions and logs stay ignored.
 
 The LGPL `pathing/` module (Automatone) lives next to `mod/`: `BotController` drives it through
 `IBaritone.KEY.get(bot).getCustomGoalProcess()`, `BotPlayer.tick()` ticks it, and it acts through

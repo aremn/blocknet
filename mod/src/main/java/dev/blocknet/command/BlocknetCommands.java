@@ -16,6 +16,7 @@ import dev.blocknet.crafting.CraftingCalculation;
 import dev.blocknet.control.CraftStations;
 import dev.blocknet.control.ContainerFilter;
 import dev.blocknet.state.BodyState;
+import dev.blocknet.state.BodyStateTracker;
 import java.util.ArrayList;
 import java.util.function.Consumer;
 import net.minecraft.commands.CommandSourceStack;
@@ -32,7 +33,7 @@ import net.minecraft.world.item.ItemStack;
 import net.neoforged.neoforge.event.RegisterCommandsEvent;
 
 /**
- * Debug commands for driving bots by hand until the brain bridge exists.
+ * Debug commands for driving bots by hand; also reused by the bridge tool registry.
  *
  * <pre>
  * /blocknet spawn &lt;name&gt;
@@ -109,13 +110,8 @@ public final class BlocknetCommands {
                 return 1;
             }))
             .then(withBot("changes", false, (context, bot) -> {
-                var delta = bot.bodyState().changes();
-                if (delta.sections().isEmpty()) {
-                    context.getSource().sendSuccess(() -> Component.literal("no changes"), false);
-                } else {
-                    delta.sections().forEach((name, section) -> sendSection(context.getSource(), name, section));
-                    delta.inventoryDiff().forEach(line -> context.getSource().sendSuccess(() -> Component.literal(line), false));
-                }
+                reportChanges(bot.bodyState().changes(), line ->
+                    context.getSource().sendSuccess(() -> Component.literal(line), false));
                 return 1;
             }))
             .then(withBot("goto", true, (context, bot) -> {
@@ -285,6 +281,17 @@ public final class BlocknetCommands {
 
     private static void sendSection(CommandSourceStack source, String name, BodyState.Section section) {
         source.sendSuccess(() -> Component.literal(name + " r" + section.revision() + ": " + section.text()), false);
+    }
+
+    /** Shared text for debug commands and independent bridge revision baselines. */
+    public static void reportChanges(BodyStateTracker.Delta delta, Consumer<String> report) {
+        if (delta.sections().isEmpty()) {
+            report.accept("no changes");
+        } else {
+            delta.sections().forEach((name, section) ->
+                report.accept(name + " r" + section.revision() + ": " + section.text()));
+            delta.inventoryDiff().forEach(report);
+        }
     }
 
     /** A command aimed at one bot, run on behalf of a command source. */

@@ -2,6 +2,7 @@ package dev.blocknet;
 
 import com.mojang.logging.LogUtils;
 import dev.blocknet.body.BotManager;
+import dev.blocknet.bridge.BridgeServer;
 import dev.blocknet.command.BlocknetCommands;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.common.Mod;
@@ -23,6 +24,9 @@ public final class Blocknet {
         NeoForge.EVENT_BUS.addListener(BlocknetCommands::onRegisterCommands);
         NeoForge.EVENT_BUS.addListener(BotManager::onPlayerLoggedOut);
         NeoForge.EVENT_BUS.addListener(BotManager::onServerStopping);
+        NeoForge.EVENT_BUS.addListener(BridgeServer::onServerStarted);
+        NeoForge.EVENT_BUS.addListener(BridgeServer::onServerStopping);
+        NeoForge.EVENT_BUS.addListener(BridgeServer::onChat);
         LOGGER.info("Blocknet body loaded");
     }
 }
