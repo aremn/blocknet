@@ -90,6 +90,42 @@ public final class CraftExecuteGameTests {
         });
     }
 
+    /** The table the bot picked back up is forgotten, so a second craft does not walk to an empty spot. */
+    @GameTest(template = "arena", timeoutTicks = 800)
+    public static void secondCraftAfterRecoveringOwnTableWorks(GameTestHelper helper) {
+        BotPlayer bot = bot(helper, "BnCraftTwice", stack(Items.OAK_LOG, 6));
+        List<String> first = new ArrayList<>();
+        List<String> second = new ArrayList<>();
+        bot.controller().craft(new ItemStack(Items.WOODEN_PICKAXE), 1, first::add);
+        helper.startSequence()
+            .thenWaitUntil(() -> helper.assertTrue(first.size() == 1, "first craft finished"))
+            .thenExecute(() -> {
+                helper.assertTrue(first.getFirst().startsWith("crafted 1 wooden_pickaxe"), "first craft: " + first);
+                helper.assertTrue(!CraftStations.remembered(bot).containsKey("crafting_table"), "recovered table forgotten");
+                bot.controller().craft(new ItemStack(Items.WOODEN_AXE), 1, second::add);
+            })
+            .thenWaitUntil(() -> helper.assertTrue(second.size() == 1, "second craft finished"))
+            .thenExecute(() -> {
+                helper.assertTrue(second.getFirst().startsWith("crafted 1 wooden_axe"), "second craft: " + second);
+                BotManager.despawn("BnCraftTwice");
+            })
+            .thenSucceed();
+    }
+
+    /** A table right next to the bot is used without a look around, as a player would notice it. */
+    @GameTest(template = "arena", timeoutTicks = 300)
+    public static void usesTableWithinReachWithoutLooking(GameTestHelper helper) {
+        BotPlayer bot = bot(helper, "BnCraftReach", stack(Items.OAK_LOG, 2));
+        helper.setBlock(new BlockPos(4, 1, 1), Blocks.CRAFTING_TABLE);
+        List<String> reports = new ArrayList<>();
+        bot.controller().craft(new ItemStack(Items.WOODEN_PICKAXE), 1, reports::add);
+        helper.succeedWhen(() -> {
+            done(helper, bot, reports, "crafted 1 wooden_pickaxe");
+            helper.assertTrue(!reports.getFirst().contains("placed own"), "used the table nearby: " + reports);
+            BotManager.despawn("BnCraftReach");
+        });
+    }
+
     @GameTest(template = "arena", timeoutTicks = 300)
     public static void lookFindsTableBehindBotAndSavesTheThirdLog(GameTestHelper helper) {
         BotPlayer bot = bot(helper, "BnCraftPlaced", stack(Items.OAK_LOG, 2));

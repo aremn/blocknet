@@ -54,6 +54,36 @@ public final class WorldMemory extends SavedData {
             .toList();
     }
 
+    /**
+     * A glance at what is within arm's reach, in every direction: one eye ray per nearby voxel,
+     * each stopping at the first block, so nothing is seen through walls.
+     */
+    public void glance(BotPlayer bot, int radius) {
+        Vec3 eye = bot.getEyePosition();
+        BlockPos center = BlockPos.containing(eye);
+        for (BlockPos point : BlockPos.betweenClosed(center.offset(-radius, -radius, -radius), center.offset(radius, radius, radius))) {
+            Vec3 end = Vec3.atCenterOf(point);
+            if (eye.distanceToSqr(end) > radius * radius) {
+                continue;
+            }
+            observeRay(bot, end, bot.level().clip(new ClipContext(eye, end, ClipContext.Block.VISUAL, ClipContext.Fluid.NONE, bot)));
+        }
+    }
+
+    /** The bot placed this block itself, so it knows what stands there. */
+    public void remember(BotPlayer bot, BlockPos pos) {
+        Vec3 point = Vec3.atCenterOf(pos);
+        observeRay(bot, point, bot.level().clip(new ClipContext(bot.getEyePosition(), point,
+            ClipContext.Block.VISUAL, ClipContext.Fluid.NONE, bot)));
+    }
+
+    /** The bot found this position empty or changed (or took the block away itself). */
+    public void forget(BotPlayer bot, BlockPos pos) {
+        if (entries.remove(new Location(bot.level().dimension().location().toString(), pos.asLong())) != null) {
+            setDirty();
+        }
+    }
+
     /** Reuse an action ray for perception, with VISUAL geometry regardless of its mechanics. */
     public static BlockHitResult clip(BotPlayer bot, Vec3 end, ClipContext.Block shape) {
         Vec3 eye = bot.getEyePosition();

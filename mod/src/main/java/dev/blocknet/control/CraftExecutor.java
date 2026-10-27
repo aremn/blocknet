@@ -61,6 +61,7 @@ final class CraftExecutor {
     private Phase phase = Phase.WITHDRAW;
     private int withdrawalIndex;
     private ContainerTask withdrawal;
+    private static final int GLANCE_RADIUS = 5;
     private int stepIndex;
     private long repetitions;
     private int delay;
@@ -94,7 +95,7 @@ final class CraftExecutor {
         this.target = target.copyWithCount(1);
         this.count = count;
         this.mode = mode;
-        initiallyHeld = amount(new ItemKey(target));
+        initiallyHeld = bot.getInventory().countItem(target.getItem());
     }
 
     void start() {
@@ -103,6 +104,8 @@ final class CraftExecutor {
             return;
         }
         bot.closeContainer();
+        // A station within arm's reach is noticed without a full look around.
+        bot.worldMemory().glance(bot, GLANCE_RADIUS);
         replan();
         if (plan.status() == CraftPlan.Status.NO_RECIPE) {
             complete("blocked: no recipe for " + plan.target()
@@ -374,6 +377,7 @@ final class CraftExecutor {
             }
             if (bot.level().getBlockState(spot).is(net.minecraft.world.level.block.Block.byItem(CraftStations.item(step().station())))) {
                 stationPos = spot.immutable();
+                bot.worldMemory().remember(bot, stationPos);
                 stations.put(step().station(), stationPos);
                 placed.put(step().station(), stationPos);
                 notes.add("placed own " + step().station());
@@ -469,7 +473,7 @@ final class CraftExecutor {
             return;
         }
         if (!step().station().equals(CraftStations.kind(bot.level().getBlockState(stationPos)))) {
-            fail("station disappeared or changed");
+            stationGone();
             return;
         }
         bot.gameMode.useItemOn(bot, bot.serverLevel(), bot.getMainHandItem(), InteractionHand.MAIN_HAND, hit);
@@ -770,7 +774,8 @@ final class CraftExecutor {
     private void cleanup() {
         if (placed.isEmpty()) {
             ItemKey key = new ItemKey(target);
-            long held = amount(key);
+            // By item, not exact components: picking a table back up may wear the axe just crafted.
+            long held = bot.getInventory().countItem(target.getItem());
             if (held < (mode == CraftPlan.Mode.CRAFT ? initiallyHeld + count : count)
                 || mode == CraftPlan.Mode.CRAFT && craftedTarget < count) {
                 fail("target items changed before completion");
@@ -815,6 +820,7 @@ final class CraftExecutor {
             fail("station drop not collected at " + coordinates(stationPos));
             return;
         }
+        bot.worldMemory().forget(bot, stationPos);
         placed.remove(cleanupStation);
         next(Phase.CLEANUP);
     }
@@ -841,6 +847,26 @@ final class CraftExecutor {
 
     void cancel() {
         complete(failureMessage("cancelled"));
+    }
+
+    /** A remembered station is not there any more: forget it and plan again without it, once. */
+    void stationGone() {
+        String station = step().station();
+        bot.worldMemory().forget(bot, stationPos);
+        stations.remove(station);
+        stationPos = null;
+        if (replanned) {
+            fail("remembered " + station + " is gone");
+            return;
+        }
+        replanned = true;
+        replan();
+        if (plan.status() != CraftPlan.Status.OK) {
+            complete("blocked: remembered " + station + " is gone; "
+                + (plan.status() == CraftPlan.Status.MISSING ? "missing " + plan.missing() : "search limit"));
+            return;
+        }
+        next(Phase.WITHDRAW);
     }
 
     void fail(String reason) {

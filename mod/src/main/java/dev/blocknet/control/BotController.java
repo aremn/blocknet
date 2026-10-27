@@ -753,7 +753,7 @@ public final class BotController {
             if (resumeTarget != null) {
                 resume();
             } else if (crafting != null) {
-                fail("station disappeared");
+                crafting.stationGone();
             } else {
                 finish("nothing at " + pos.toShortString());
             }
