@@ -12,3 +12,6 @@ rootProject.name = 'blocknet'
 
 // NeoForge mod: the bot's body, runs on the server side.
 include 'mod'
+
+// Pathfinding (LGPL-3.0-or-later), extracted from Automatone.
+include 'pathing'
