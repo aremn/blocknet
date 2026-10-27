@@ -18,6 +18,7 @@
 package dev.blocknet.pathing.behavior;
 
 import dev.blocknet.pathing.Baritone;
+import dev.blocknet.pathing.api.Settings;
 import dev.blocknet.pathing.api.entity.BotHands;
 import dev.blocknet.pathing.utils.ToolSet;
 import java.util.ArrayList;
@@ -27,6 +28,7 @@ import java.util.function.Predicate;
 import net.minecraft.core.Direction;
 import net.minecraft.core.NonNullList;
 import net.minecraft.tags.TagKey;
+import net.minecraft.tags.ItemTags;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.Item;
@@ -38,9 +40,11 @@ import net.minecraft.world.item.context.BlockPlaceContext;
 import net.minecraft.world.item.context.UseOnContext;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.FallingBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
+import net.neoforged.neoforge.common.Tags;
 
 public final class InventoryBehavior extends Behavior {
    public InventoryBehavior(Baritone baritone) {
@@ -110,7 +114,7 @@ public final class InventoryBehavior extends Behavior {
       NonNullList<ItemStack> invy = inventory.main();
 
       for (int i = 0; i < invy.size(); i++) {
-         if (this.baritone.settings().acceptableThrowawayItems.get().contains(((ItemStack)invy.get(i)).getItem())) {
+         if (isAcceptableThrowaway(invy.get(i), this.baritone.settings())) {
             return i;
          }
       }
@@ -140,7 +144,20 @@ public final class InventoryBehavior extends Behavior {
    }
 
    public boolean hasGenericThrowaway() {
-      return this.throwaway(false, stack -> this.baritone.settings().acceptableThrowawayItems.get().contains(stack.getItem()));
+      return this.baritone.settings().allowInventory.get() && this.ctx.inventory() != null && this.firstValidThrowaway(this.ctx.inventory()) >= 0
+         || this.throwaway(false, stack -> isAcceptableThrowaway(stack, this.baritone.settings()));
+   }
+
+   // Blocknet: share tag-based selection between inventory swapping, calculation and placement.
+   public static boolean isAcceptableThrowaway(ItemStack stack, Settings settings) {
+      if (stack.isEmpty() || !(stack.getItem() instanceof BlockItem item)
+         || item.getBlock() instanceof FallingBlock || item.getBlock().defaultBlockState().hasBlockEntity()) {
+         return false;
+      }
+      return settings.acceptableThrowawayItems.get().contains(stack.getItem())
+         || stack.is(Tags.Items.COBBLESTONES) || stack.is(Tags.Items.STONES)
+         || stack.is(ItemTags.DIRT) || stack.is(ItemTags.PLANKS) || stack.is(ItemTags.LOGS)
+         || stack.is(Tags.Items.NETHERRACKS) || stack.is(Tags.Items.SANDSTONE_BLOCKS);
    }
 
    public boolean selectThrowawayForLocation(boolean select, int x, int y, int z) {
@@ -180,7 +197,7 @@ public final class InventoryBehavior extends Behavior {
          return maybe != null
                && this.throwaway(select, stack -> stack.getItem() instanceof BlockItem && ((BlockItem)stack.getItem()).getBlock().equals(maybe.getBlock()))
             ? true
-            : this.throwaway(select, stack -> this.baritone.settings().acceptableThrowawayItems.get().contains(stack.getItem()));
+            : this.throwaway(select, stack -> isAcceptableThrowaway(stack, this.baritone.settings()));
       }
    }
 
