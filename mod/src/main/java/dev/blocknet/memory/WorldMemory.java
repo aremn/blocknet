@@ -1,27 +1,23 @@
 package dev.blocknet.memory;
 
 import dev.blocknet.body.BotPlayer;
-import dev.blocknet.control.CraftStations;
+import dev.blocknet.vision.ObservedMap;
+import dev.blocknet.vision.Semantics;
+import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.stream.Collectors;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.Direction;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.nbt.CompoundTag;
-import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
-import net.minecraft.world.Container;
 import net.minecraft.world.level.ClipContext;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.level.saveddata.SavedData;
-import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.BlockHitResult;
-import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
-import net.neoforged.neoforge.capabilities.Capabilities;
 
 /** Eye observations only. Contents remain separate, menu-observed ContainerMemory snapshots. */
 public final class WorldMemory extends SavedData {
@@ -39,7 +35,11 @@ public final class WorldMemory extends SavedData {
         }
     }
 
-    private final Map<Location, Entry> entries = new LinkedHashMap<>();
+    private final ObservedMap observed = new ObservedMap(this::setDirty);
+
+    public ObservedMap observed() {
+        return observed;
+    }
 
     public static WorldMemory forBot(BotPlayer bot) {
         return bot.getServer().overworld().getDataStorage().computeIfAbsent(
@@ -48,119 +48,56 @@ public final class WorldMemory extends SavedData {
 
     public List<Entry> nearby(BotPlayer bot, double radius) {
         String dimension = bot.level().dimension().location().toString();
-        return entries.values().stream().filter(entry -> entry.location().dimension().equals(dimension)
-            && bot.position().distanceToSqr(Vec3.atCenterOf(entry.pos())) <= radius * radius)
-            .sorted(Comparator.comparingDouble(entry -> bot.position().distanceToSqr(Vec3.atCenterOf(entry.pos()))))
-            .toList();
+        ArrayList<Entry> result = new ArrayList<>();
+        observed.forEach(dimension, (pos, cell) -> {
+            if (cell.stateId() < 0 || bot.position().distanceToSqr(Vec3.atCenterOf(pos)) > radius * radius) return;
+            var state = Block.stateById(cell.stateId());
+            String category = cell.semantic().category();
+            String kind = category.equals("station") ? cell.semantic().kind() : cell.semantic().container() ? "container" : "block";
+            result.add(new Entry(new Location(dimension, pos.asLong()), BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString(),
+                kind, cell.semantic().container(), cell.tick()));
+        });
+        result.sort(Comparator.comparingDouble(entry -> bot.position().distanceToSqr(Vec3.atCenterOf(entry.pos()))));
+        return List.copyOf(result);
     }
 
-    /**
-     * A glance at what is within arm's reach, in every direction: one eye ray per nearby voxel,
-     * each stopping at the first block, so nothing is seen through walls.
-     */
+    /** Existing close-range action glance, using exactly the same visual sensor. */
     public void glance(BotPlayer bot, int radius) {
         Vec3 eye = bot.getEyePosition();
         BlockPos center = BlockPos.containing(eye);
-        for (BlockPos point : BlockPos.betweenClosed(center.offset(-radius, -radius, -radius), center.offset(radius, radius, radius))) {
+        for (BlockPos point : BlockPos.withinManhattan(center, radius, radius, radius)) {
+            if (!bot.vision().canObserve()) break;
             Vec3 end = Vec3.atCenterOf(point);
-            if (eye.distanceToSqr(end) > radius * radius) {
-                continue;
-            }
-            observeRay(bot, end, bot.level().clip(new ClipContext(eye, end, ClipContext.Block.VISUAL, ClipContext.Fluid.NONE, bot)));
+            if (eye.distanceToSqr(end) <= radius * radius) bot.vision().observe(end);
         }
     }
 
-    /** The bot placed this block itself, so it knows what stands there. */
+    /** The bot's own placement is direct knowledge, even if its visual shape is empty. */
     public void remember(BotPlayer bot, BlockPos pos) {
-        Vec3 point = Vec3.atCenterOf(pos);
-        observeRay(bot, point, bot.level().clip(new ClipContext(bot.getEyePosition(), point,
-            ClipContext.Block.VISUAL, ClipContext.Fluid.NONE, bot)));
+        var state = bot.level().getBlockState(pos);
+        observed.begin(bot.level().dimension().location().toString(), bot.serverLevel().getGameTime());
+        if (state.isAir()) observed.empty(pos.getX(), pos.getY(), pos.getZ());
+        else observed.seen(pos.getX(), pos.getY(), pos.getZ(), Block.getId(state),
+            Semantics.observed(bot, pos, state), false);
     }
 
-    /** The bot found this position empty or changed (or took the block away itself). */
+    /** Recheck from the bot's eyes: callers cannot erase a remote remembered cell by consulting the world. */
     public void forget(BotPlayer bot, BlockPos pos) {
-        if (entries.remove(new Location(bot.level().dimension().location().toString(), pos.asLong())) != null) {
-            setDirty();
-        }
+        bot.vision().observe(Vec3.atCenterOf(pos));
     }
 
-    /** Reuse an action ray for perception, with VISUAL geometry regardless of its mechanics. */
+    /** A completed own break is direct knowledge and does not need another eye ray. */
+    public void forgetOwn(BotPlayer bot, BlockPos pos) {
+        observed.begin(bot.level().dimension().location().toString(), bot.serverLevel().getGameTime());
+        observed.empty(pos.getX(), pos.getY(), pos.getZ());
+    }
+
+    /** Mechanics retain their requested shape; perception always uses the visual DDA. */
     public static BlockHitResult clip(BotPlayer bot, Vec3 end, ClipContext.Block shape) {
         Vec3 eye = bot.getEyePosition();
         BlockHitResult hit = bot.level().clip(new ClipContext(eye, end, shape, ClipContext.Fluid.NONE, bot));
-        Vec3 delta = end.subtract(eye);
-        if (delta.normalize().dot(bot.getViewVector(1)) >= 0.5) {
-            Vec3 visualEnd = delta.lengthSqr() > 16 * 16 ? eye.add(delta.normalize().scale(16)) : end;
-            BlockHitResult visual = shape == ClipContext.Block.VISUAL && delta.lengthSqr() <= 16 * 16 ? hit
-                : bot.level().clip(new ClipContext(eye, visualEnd, ClipContext.Block.VISUAL, ClipContext.Fluid.NONE, bot));
-            bot.worldMemory().observeRay(bot, visualEnd, visual);
-        }
+        if (end.subtract(eye).normalize().dot(bot.getViewVector(1)) >= 0.5) bot.vision().observe(end);
         return hit;
-    }
-
-    private static boolean lit(BotPlayer bot, BlockPos pos) {
-        return bot.getEyePosition().distanceToSqr(Vec3.atCenterOf(pos)) <= 16
-            || bot.level().getMaxLocalRawBrightness(pos.above()) >= 4;
-    }
-
-    private void observeRay(BotPlayer bot, Vec3 end, BlockHitResult hit) {
-        Vec3 eye = bot.getEyePosition();
-        Vec3 reached = hit.getType() == HitResult.Type.BLOCK ? hit.getLocation() : end;
-        String dimension = bot.level().dimension().location().toString();
-        // A ray through a remembered voxel proves its old block is gone. Occluded voxels stay remembered.
-        boolean removed = entries.values().removeIf(entry -> {
-            if (!entry.location().dimension().equals(dimension) || !lit(bot, entry.pos())
-                || new AABB(entry.pos()).clip(eye, reached).isEmpty()) {
-                return false;
-            }
-            String current = BuiltInRegistries.BLOCK.getKey(bot.level().getBlockState(entry.pos()).getBlock()).toString();
-            if (!current.equals(entry.blockId())) {
-                bot.containerMemory().forget(bot, entry.pos());
-                return true;
-            }
-            return false;
-        });
-        if (removed) {
-            setDirty();
-        }
-        if (hit.getType() != HitResult.Type.BLOCK || !lit(bot, hit.getBlockPos())) {
-            return;
-        }
-        BlockPos pos = hit.getBlockPos();
-        var state = bot.level().getBlockState(pos);
-        String blockId = BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString();
-        Location location = new Location(dimension, pos.asLong());
-        Entry old = entries.get(location);
-        if (old != null && !old.blockId().equals(blockId)) {
-            bot.containerMemory().forget(bot, pos);
-        }
-        String kind = CraftStations.kind(state);
-        boolean container = isContainer(bot, pos);
-        if (kind == null && container) {
-            kind = "container";
-        }
-        entries.put(location, new Entry(location, blockId, kind == null ? "block" : kind,
-            container, bot.getServer().overworld().getGameTime()));
-        setDirty();
-    }
-
-    private static boolean isContainer(BotPlayer bot, BlockPos pos) {
-        var blockEntity = bot.level().getBlockEntity(pos);
-        if (blockEntity == null) {
-            return false;
-        }
-        if (blockEntity instanceof Container) {
-            return true;
-        }
-        if (bot.level().getCapability(Capabilities.ItemHandler.BLOCK, pos, null) != null) {
-            return true;
-        }
-        for (Direction side : Direction.values()) {
-            if (bot.level().getCapability(Capabilities.ItemHandler.BLOCK, pos, side) != null) {
-                return true;
-            }
-        }
-        return false;
     }
 
     private String contents(BotPlayer bot, Entry entry) {
@@ -187,28 +124,25 @@ public final class WorldMemory extends SavedData {
 
     @Override
     public CompoundTag save(CompoundTag tag, HolderLookup.Provider registries) {
-        ListTag list = new ListTag();
-        for (Entry entry : entries.values()) {
-            CompoundTag value = new CompoundTag();
-            value.putString("dimension", entry.location().dimension());
-            value.putLong("position", entry.location().position());
-            value.putString("block", entry.blockId());
-            value.putString("kind", entry.kind());
-            value.putBoolean("container", entry.container());
-            value.putLong("seen", entry.seenTick());
-            list.add(value);
-        }
-        tag.put("world", list);
+        observed.save(tag);
         return tag;
     }
 
     public static WorldMemory load(CompoundTag tag, HolderLookup.Provider registries) {
         WorldMemory memory = new WorldMemory();
+        memory.observed.load(tag, registries);
+        // Migrate the old station/container-only SavedData without reading any world cells.
         for (Tag raw : tag.getList("world", Tag.TAG_COMPOUND)) {
             CompoundTag value = (CompoundTag) raw;
-            Location location = new Location(value.getString("dimension"), value.getLong("position"));
-            memory.entries.put(location, new Entry(location, value.getString("block"), value.getString("kind"),
-                value.getBoolean("container"), value.getLong("seen")));
+            BlockPos pos = BlockPos.of(value.getLong("position"));
+            var block = BuiltInRegistries.BLOCK.getOptional(ResourceLocation.parse(value.getString("block")));
+            if (block.isEmpty()) continue;
+            memory.observed.begin(value.getString("dimension"), value.getLong("seen"));
+            String kind = value.getString("kind");
+            boolean container = value.getBoolean("container");
+            String category = kind.equals("block") ? "other" : kind.equals("container") ? "container" : "station";
+            memory.observed.seen(pos.getX(), pos.getY(), pos.getZ(), Block.getId(block.get().defaultBlockState()),
+                new Semantics.Kind(category, kind, container), false);
         }
         return memory;
     }

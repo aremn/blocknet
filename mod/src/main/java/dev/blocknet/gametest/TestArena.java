@@ -27,6 +27,10 @@ final class TestArena {
     }
 
     static BotPlayer spawnBot(GameTestHelper helper, String name, Vec3 relativePos) {
+        // GameTestServer's bare PlayerList leaves this at zero, unlike a real server.
+        if (helper.getLevel().getServer().getPlayerList().getViewDistance() == 0) {
+            helper.getLevel().getServer().getPlayerList().setViewDistance(4);
+        }
         BotPlayer bot = BotManager.spawn(helper.getLevel().getServer(), name, helper.getLevel(), helper.absoluteVec(relativePos), 0.0F);
         // Test worlds reuse SavedData files; world observations belong to this fixture only.
         bot.getServer().overworld().getDataStorage().set("blocknet_world_" + bot.getUUID(), new WorldMemory());

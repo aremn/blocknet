@@ -27,6 +27,7 @@ public final class Blocknet {
         NeoForge.EVENT_BUS.addListener(BridgeServer::onServerStarted);
         NeoForge.EVENT_BUS.addListener(BridgeServer::onServerStopping);
         NeoForge.EVENT_BUS.addListener(BridgeServer::onChat);
+        NeoForge.EVENT_BUS.addListener(dev.blocknet.vision.OpacityTable::reload);
         LOGGER.info("Blocknet body loaded");
     }
 }

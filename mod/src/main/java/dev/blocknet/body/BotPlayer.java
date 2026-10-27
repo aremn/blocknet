@@ -5,6 +5,7 @@ import dev.blocknet.control.BotController;
 import dev.blocknet.bridge.BridgeServer;
 import dev.blocknet.memory.ContainerMemory;
 import dev.blocknet.memory.WorldMemory;
+import dev.blocknet.vision.VisionSensor;
 import dev.blocknet.state.BodyStateTracker;
 import dev.blocknet.pathing.api.IBaritone;
 import net.minecraft.network.DisconnectionDetails;
@@ -27,6 +28,12 @@ public final class BotPlayer extends ServerPlayer {
     public dev.blocknet.state.Moments moments() { return moments; }
 
     private final BotController controller = new BotController(this);
+    private final VisionSensor vision = new VisionSensor(this);
+
+    public VisionSensor vision() {
+        return vision;
+    }
+
     private final BodyStateTracker bodyState = new BodyStateTracker(this);
 
     public BodyStateTracker bodyState() {
@@ -56,6 +63,7 @@ public final class BotPlayer extends ServerPlayer {
             serverLevel().getChunkSource().move(this);
         }
         controller.tick();
+        vision.tick();
         // The pathfinder, when it has work, overrides this tick's inputs and rotation.
         IBaritone pathing = IBaritone.KEY.getNullable(this);
         if (pathing != null) {

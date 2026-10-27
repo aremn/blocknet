@@ -800,7 +800,7 @@ final class CraftExecutor {
             fail("station drop not collected at " + coordinates(stationPos));
             return;
         }
-        bot.worldMemory().forget(bot, stationPos);
+        bot.worldMemory().forgetOwn(bot, stationPos);
         placed.remove(cleanupStation);
         next(Phase.CLEANUP);
     }

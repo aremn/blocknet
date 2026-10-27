@@ -94,6 +94,10 @@ public final class BlocknetCommands {
             .then(containerCommand("deposit"))
             .then(containerCommand("withdraw"))
             .then(memoryCommand())
+            .then(withBot("see", false, (context, bot) -> {
+                bot.controller().look(reporter(context.getSource(), bot));
+                return 1;
+            }))
             .then(withBot("look", false, (context, bot) -> {
                 bot.controller().look(reporter(context.getSource(), bot));
                 return 1;

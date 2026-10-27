@@ -363,6 +363,7 @@ public final class BotController {
     /** A deliberate player-like sweep; other tools never start this task themselves. */
     public void look(Consumer<String> reporter) {
         start(Task.LOOK, bot.blockPosition(), reporter);
+        bot.vision().startPanorama();
         lookTicks = 0;
         lookStartYaw = bot.getYRot();
         lookStartTick = bot.getServer().overworld().getGameTime();
@@ -370,18 +371,13 @@ public final class BotController {
 
     private void tickLook() {
         float yaw = lookStartYaw + ++lookTicks * 18;
-        float pitch = 20 + 15 * (float) Math.sin(lookTicks * Math.PI / 10);
+        float pitch = Mth.clamp(36.80378F * (float) Math.sin(lookTicks * Math.PI / 5), -35, 35);
         turnTowards(yaw, pitch);
-        Vec3 eye = bot.getEyePosition();
-        for (int horizontal = -12; horizontal <= 12; horizontal += 2) {
-            for (int vertical = -45; vertical <= 55; vertical += 3) {
-                Vec3 direction = Vec3.directionFromRotation(Mth.clamp(bot.getXRot() + vertical, -89, 89),
-                    bot.getYRot() + horizontal);
-                WorldMemory.clip(bot, eye.add(direction.scale(16)), ClipContext.Block.VISUAL);
-            }
-        }
+        bot.vision().tick();
         if (lookTicks == 20) {
-            finish(bot.worldMemory().looked(bot, lookStartTick));
+            String report = bot.worldMemory().looked(bot, lookStartTick) + " | " + bot.vision().report();
+            bot.vision().endPanorama();
+            finish(report);
         }
     }
 
@@ -458,6 +454,7 @@ public final class BotController {
     }
 
     public void stop() {
+        if (task == Task.LOOK) bot.vision().endPanorama();
         bot.releaseUsingItem();
         stopPathing();
         abortBreaking();
@@ -777,6 +774,7 @@ public final class BotController {
         ServerLevel level = bot.serverLevel();
         BlockState state = level.getBlockState(pos);
         if (state.isAir()) {
+            bot.worldMemory().forgetOwn(bot, pos);
             bot.containerMemory().forget(bot, pos);
             if (resumeTarget != null) {
                 resume();
