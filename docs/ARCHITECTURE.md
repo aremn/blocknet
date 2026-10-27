@@ -16,6 +16,8 @@
   ([ADR-0003](adr/0003-brain-outside-mod.md)). LLM не вызывается на каждом тике.
 - Поиск пути — Automatone, вынесенный из PlayerEngine в отдельный LGPL-модуль
   ([ADR-0004](adr/0004-pathing-from-automatone.md)).
+- Тело не знает модов по имени: общий слой (capabilities, меню, реестры), адаптеры только там,
+  где общего слоя не хватает ([ADR-0005](adr/0005-mod-agnostic-body.md)).
 
 ## 1. Общая схема
 
@@ -33,7 +35,7 @@
                                        │   ▼        │                          │
                                        │ BotPlayer (ServerPlayer)  Sensor+Memory│
                                        │ Pathing (Automatone, LGPL-модуль)     │
-                                       │ Machines (capabilities, адаптер AE2)  │
+                                       │ Machines (capabilities, меню, слоты)  │
                                        │ Knowledge dump (рецепты, теги, лут)   │
                                        └───────────────────────────────────────┘
 ```
@@ -116,13 +118,25 @@
 - Кнопки: `containerMenu.clickMenuButton(player, id)`.
 - Крафт: серверная обработка книги рецептов (`handlePlaceRecipe`) раскладывает ингредиенты сама.
 - Закрыть: `player.closeContainer()`.
-- Модовые кнопки и бинды (свои пакеты) — через адаптер конкретного мода. Общий путь «пакет в
-  соединение» может упереться в проверку согласованных каналов NeoForge (проверить).
+- Модовые кнопки и бинды, которые работают своими пакетами, общий слой не покрывает: для них
+  опциональные адаптеры (раздел 3.4). Общий путь «пакет в соединение» может упереться в проверку
+  согласованных каналов NeoForge (проверить).
 
 Мозгу отдаётся `menu.get`: тип меню, слоты, известные кнопки, плюс энергия и прогресс через
 capabilities.
 
-### 3.4 Навыки и задачи
+### 3.4 Модовый контент без хардкода
+
+Тело не знает модов по имени ([ADR-0005](adr/0005-mod-agnostic-body.md)).
+
+- Общий слой: блоки и предметы по реестру и тегам, машины через capabilities NeoForge (предметы,
+  жидкости, энергия по сторонам), интерфейсы через меню и слоты, рецепты через `RecipeManager`.
+- Адаптер под мод — только если общий слой физически не даёт нужного (содержимое сети AE2 терминал
+  показывает своими пакетами, а не слотами). Адаптер реализует общий интерфейс (`StorageNetwork`),
+  включается только при загруженном моде и не добавляет логики в тело.
+- Реальные моды в репозитории — только тестовая среда для проверки общего слоя.
+
+### 3.5 Навыки и задачи
 
 - Навык — детерминированный автомат: `goto`, `follow`, `mine_visible`, `collect_drops`,
   `branch_mine`, `explore_frontier`, `craft`, `smelt`, `deposit`, `withdraw`, `place_blueprint`.
@@ -193,7 +207,7 @@ Java-WebSocket вкладывается в jar мода (jarJar), JSON чере�
 → {"jsonrpc":"2.0","id":1,"method":"hello","params":{"protocol":1,"bot":"Kirill","token":"…"}}
 ← {"jsonrpc":"2.0","id":1,"result":{"epoch":7,"bot_ref":"p:2f1c…","perception_mode":"honest",
    "modpack_fingerprint":"atm10-6.0-9c1e…","knowledge_dir":"config/blocknet_ai/knowledge/9c1e…",
-   "adapters":["capabilities","ae2"],"skills":["goto","follow","mine_visible","branch_mine","craft","smelt","deposit"]}}
+   "adapters":["storage_network:ae2"],"skills":["goto","follow","mine_visible","branch_mine","craft","smelt","deposit"]}}
 ```
 
 | Группа | Методы |
@@ -201,7 +215,7 @@ Java-WebSocket вкладывается в jar мода (jarJar), JSON чере�
 | Восприятие | `observe(focus?)`, `inspect(ref)`, `find_visible(kind, limit)`, `memory.query(kind, near?, limit)`, `look(dir \| ref)` |
 | Задачи | `task.start(goal, request_id, preempt?)`, `task.cancel(id)`, `task.status(id)`, `task.list()` |
 | Инвентарь и меню | `inventory.get()`, `menu.get()`, `menu.click(...)`, `menu.close()` |
-| Машины | `machine.inspect(ref)`, `me.query(item)`, `me.craft(item, n, request_id)` |
+| Машины и хранилища | `machine.inspect(ref)` (capabilities), `storage.query(item)`, `storage.craft(item, n, request_id)` (сети хранения, через адаптер при загруженном моде) |
 | Речь | `chat.say(text, to?)` |
 | Управление | `zones.get/set`, `bot.mode(follow \| idle \| autonomous)` |
 
@@ -267,7 +281,7 @@ mod/src/main/java/dev/blocknet/
   skills/      Goto, Follow, MineVisible, BranchMine, ExploreFrontier, CollectDrops, Craft, Smelt, Deposit
   sensor/      VisionSensor, OpticalPolicy, CandidateCheck, EntityVision, LightRule, Hearing
   memory/      ObservationStore, ObjectGraph, Summarizer
-  machines/    CapabilityInspector, adapters/ae2
+  machines/    CapabilityInspector, StorageNetwork, adapters/<мод> (опционально)
   knowledge/   RecipeDump, TagDump, LootDump, WorldgenHeights
   bridge/      WsServer, JsonRpc, EventBus, Auth
   safety/      Zones, ProtectedBlocks, ActionLog
@@ -280,4 +294,4 @@ mod/src/main/java/dev/blocknet/
 3. Сенсор: фоновый обзор, память, отладочная визуализация.
 4. Навык «накопай угля» целиком без LLM.
 5. Мост и простой мозг.
-6. Меню, capabilities, AE2 только на чтение.
+6. Меню и capabilities (общий слой), сети хранения только на чтение.

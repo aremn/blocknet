@@ -45,7 +45,8 @@ export JAVA_HOME="$HOME/.jdks/jdk-21.0.12.1+1"   # путь к своему JDK 
   записываем в ADR, а нужный код переносим отдельным чистым коммитом.
 - Сообщения коммитов в стиле [Conventional Commits](https://www.conventionalcommits.org/):
   `feat(body): spawn bot as ServerPlayer`, `docs(adr): …`, `build: …`.
-- Pull request вливается через squash: одна задача — один коммит в `main`.
+- Pull request вливается через squash (одна задача — один коммит в `main`) или через rebase, если
+  в нём несколько аккуратных коммитов, которые стоит сохранить.
 - Релизы помечаются тегами `vX.Y.Z` по semver.
 - Секреты (API-ключи, токены моста) в репозиторий не попадают: только `.env` и локальные
   конфиги, они в `.gitignore`.
