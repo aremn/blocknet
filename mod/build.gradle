@@ -180,6 +180,24 @@ sourceSets.main.resources.srcDir generateModMetadata
 // To avoid having to run "generateModMetadata" manually, make it run on every project reload
 neoForge.ideSyncTask generateModMetadata
 
+// Copies the built jar into a local launcher instance (e.g. Prism) after every build, so the next
+// game launch there runs the new code. Off unless the machine sets the mods folder, usually in
+// ~/.gradle/gradle.properties: blocknet.deployModsDir=C:/.../instances/<name>/minecraft/mods
+var deployModsDir = providers.gradleProperty('blocknet.deployModsDir')
+if (deployModsDir.isPresent()) {
+    // Old versions of this mod go first, so the instance never loads two copies.
+    var removeOldDeployedJars = tasks.register('removeOldDeployedJars', Delete) {
+        delete fileTree(deployModsDir.get()) { include "${mod_id}-*.jar" }
+    }
+    var deployJar = tasks.register('deployJar', Copy) {
+        description = 'Copies the mod jar into the folder set by blocknet.deployModsDir.'
+        dependsOn removeOldDeployedJars
+        from tasks.named('jar')
+        into deployModsDir.get()
+    }
+    tasks.named('build') { finalizedBy deployJar }
+}
+
 // Example configuration to allow publishing using the maven-publish plugin
 publishing {
     publications {

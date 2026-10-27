@@ -13,6 +13,16 @@ export JAVA_HOME="$HOME/.jdks/jdk-21.0.12.1+1"   # путь к своему JDK 
 ./gradlew :mod:runGameTestServer   # автотесты GameTest
 ```
 
+Чтобы играть с модом в своём лаунчере (например, в отдельном инстансе Prism), укажи папку `mods`
+инстанса в `~/.gradle/gradle.properties`:
+
+```properties
+blocknet.deployModsDir=C:/Users/<ты>/AppData/Roaming/PrismLauncher/instances/<инстанс>/minecraft/mods
+```
+
+Тогда каждый `./gradlew build` кладёт туда свежий jar и убирает старые версии мода. Запущенная игра
+подхватит его только после перезапуска.
+
 ## Отладочные команды
 
 Пока моста к мозгу нет, ботом управляют командами (нужны права оператора):
