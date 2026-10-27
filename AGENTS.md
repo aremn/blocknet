@@ -10,5 +10,5 @@ Short version:
   then grep the log for `required tests` and `failed at` (Gradle's exit code is not enough).
 - The body never names a mod (ADR-0005); the bot acts through player code paths; it must not see
   through walls (ADR-0002).
-- `pathing/` is LGPL-3.0-or-later (keep file headers); everything else is MIT.
+- `pathing/` and `crafting/` are LGPL-3.0-or-later (keep file headers); everything else is MIT.
 - Do not commit or push; leave changes in the working tree for review.

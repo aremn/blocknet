@@ -1,6 +1,7 @@
 package dev.blocknet.command;
 
 import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.builder.RequiredArgumentBuilder;
@@ -10,14 +11,18 @@ import com.mojang.brigadier.exceptions.SimpleCommandExceptionType;
 import com.mojang.brigadier.suggestion.SuggestionProvider;
 import dev.blocknet.body.BotManager;
 import dev.blocknet.body.BotPlayer;
+import dev.blocknet.crafting.CraftingCalculation;
 import dev.blocknet.state.BodyState;
+import java.util.ArrayList;
 import java.util.function.Consumer;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.commands.SharedSuggestionProvider;
 import net.minecraft.commands.arguments.coordinates.BlockPosArgument;
+import net.minecraft.commands.arguments.item.ItemArgument;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.item.ItemStack;
 import net.neoforged.neoforge.event.RegisterCommandsEvent;
 
 /**
@@ -29,6 +34,7 @@ import net.neoforged.neoforge.event.RegisterCommandsEvent;
  * /blocknet list
  * /blocknet status [name]
  * /blocknet inv [name]
+ * /blocknet plan [name] &lt;item&gt; [count]
  * /blocknet changes [name]
  * /blocknet goto [name] &lt;pos&gt;
  * /blocknet come [name]
@@ -55,10 +61,10 @@ public final class BlocknetCommands {
     private BlocknetCommands() {}
 
     public static void onRegisterCommands(RegisterCommandsEvent event) {
-        register(event.getDispatcher());
+        register(event.getDispatcher(), event.getBuildContext());
     }
 
-    private static void register(CommandDispatcher<CommandSourceStack> dispatcher) {
+    private static void register(CommandDispatcher<CommandSourceStack> dispatcher, net.minecraft.commands.CommandBuildContext buildContext) {
         dispatcher.register(Commands.literal("blocknet")
             .requires(source -> source.hasPermission(Commands.LEVEL_GAMEMASTERS))
             .then(Commands.literal("spawn")
@@ -69,6 +75,7 @@ public final class BlocknetCommands {
                     .executes(BlocknetCommands::despawn)))
             .then(Commands.literal("list")
                 .executes(BlocknetCommands::list))
+            .then(planCommand(buildContext))
             .then(withBot("status", false, (context, bot) -> {
                 var snapshot = bot.bodyState().snapshot();
                 sendSection(context.getSource(), "body", snapshot.sections().get("body"));
@@ -123,6 +130,33 @@ public final class BlocknetCommands {
                 bot.controller().stop();
                 return 1;
             })));
+    }
+
+    private static LiteralArgumentBuilder<CommandSourceStack> planCommand(net.minecraft.commands.CommandBuildContext buildContext) {
+        var root = Commands.literal("plan");
+        root.then(planItem(buildContext, false));
+        root.then(Commands.argument("name", StringArgumentType.word()).suggests(BOT_NAMES).then(planItem(buildContext, true)));
+        return root;
+    }
+
+    private static RequiredArgumentBuilder<CommandSourceStack, net.minecraft.commands.arguments.item.ItemInput> planItem(
+            net.minecraft.commands.CommandBuildContext buildContext, boolean named) {
+        return Commands.argument("item", ItemArgument.item(buildContext))
+            .executes(c -> plan(c, named, 1))
+            .then(Commands.argument("count", IntegerArgumentType.integer(1, 1000000))
+                .executes(c -> plan(c, named, IntegerArgumentType.getInteger(c, "count"))));
+    }
+
+    private static int plan(CommandContext<CommandSourceStack> context, boolean named, int count) throws CommandSyntaxException {
+        BotPlayer bot = named ? bot(context) : nearestBot(context.getSource());
+        var inventory = new ArrayList<ItemStack>();
+        for (int slot = 0; slot < bot.getInventory().getContainerSize(); slot++)
+            inventory.add(bot.getInventory().getItem(slot).copy());
+        var result = new CraftingCalculation(bot.serverLevel(), dev.blocknet.crafting.PlannerCatalogs.get(bot.serverLevel()))
+            .plan(ItemArgument.getItem(context, "item").createItemStack(1, false), count, inventory);
+        for (String line : result.text().split("\\n"))
+            context.getSource().sendSuccess(() -> Component.literal(line), false);
+        return 1;
     }
 
     private static void sendSection(CommandSourceStack source, String name, BodyState.Section section) {

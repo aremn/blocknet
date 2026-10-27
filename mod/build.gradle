@@ -7,6 +7,7 @@ plugins {
 
 // The pathing module's source set is used in the mods block below.
 evaluationDependsOn(':pathing')
+evaluationDependsOn(':crafting')
 
 version = mod_version
 group = mod_group_id
@@ -110,6 +111,7 @@ neoForge {
             sourceSet(sourceSets.main)
             // The LGPL pathing module runs as part of the mod in dev runs and GameTests.
             sourceSet(project(':pathing').sourceSets.main)
+            sourceSet(project(':crafting').sourceSets.main)
         }
     }
 }
@@ -127,6 +129,8 @@ dependencies {
     // In dev runs its classes come from the mods block above, so here it is compile-only.
     compileOnly project(':pathing')
     jarJar(project(':pathing'))
+    compileOnly project(':crafting')
+    jarJar(project(':crafting'))
 
     // Test fixture mods: real modded blocks and machines to check the mod-agnostic body against,
     // in dev runs and GameTests only. localRuntime keeps them out of the published mod.

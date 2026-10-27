@@ -19,7 +19,7 @@ If a change contradicts an ADR, write a new ADR that supersedes it instead of si
 - Windows, Git Bash. JDK 21 is not the system Java (that is Java 8), so every Gradle call needs
   `export JAVA_HOME="/c/Users/ncpaa/.jdks/jdk-21.0.12.1+1"` first.
 - The repo has two Gradle layers: the root (settings, wrapper, `gradle.properties`) and the `mod/`
-  subproject. Future modules (`pathing/`, `brain/`, `protocol/`) sit next to `mod/`.
+  subproject. The LGPL `pathing/` and `crafting/` modules sit next to `mod/`; `brain/` and `protocol/` are planned.
 - Minecraft and NeoForge sources (Mojang names + Parchment) are in
   `mod/build/moddev/artifacts/neoforge-21.1.219-sources.jar`. Read real signatures there
   (`unzip -p <jar> net/minecraft/...java`) instead of guessing; extract files you need to `_src/`
@@ -64,6 +64,17 @@ The LGPL `pathing/` module (Automatone) lives next to `mod/`: `BotController` dr
 `BotHands`/`PlayerInteractionController`. It is compile-only for the mod (dev runs get its classes
 from the `mods` block, the jar nests it via jarJar) — adding it as `implementation` duplicates its
 packages and the game refuses to start.
+
+The LGPL `crafting/` module adapts AE2's crafting calculation (ADR-0007): `RecipeCatalog` /
+`Process` read server recipes, `ItemKey` includes components, `CraftingSimulationState` copies
+inventory and commits successful branches, `CraftingCalculation` searches with bounds,
+`CraftPlan` returns immutable steps/material balances and text. `PlannerCatalogs` caches the
+recipe index across requests and detects reloads. `/blocknet plan [name] <item> [count]` is
+planning only, server-thread synchronous, no brain or item movement. Like pathing, compileOnly
+plus dev sourceSet and a nested GAMELIBRARY jar; preserve LGPL attribution. Index construction
+is outside the 50ms search budget; search also caps depth/variants/operations. Stations count
+only from inventory (future perception hook). `CraftPlanGameTests` covers crafting and budgets.
+Vanilla wooden pickaxe + table needs 9 planks, so 3 logs; with an owned table, 2 logs suffice.
 
 ## Rules that came from real bugs
 

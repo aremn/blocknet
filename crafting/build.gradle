@@ -1,0 +1,32 @@
+// Crafting calculation adapted from AE2; LGPL-3.0-or-later.
+plugins {
+    id 'java-library'
+    id 'net.neoforged.moddev' version '2.0.148'
+}
+
+version = mod_version
+group = mod_group_id
+
+java.toolchain.languageVersion = JavaLanguageVersion.of(21)
+
+neoForge {
+    version = project.neo_version
+
+    parchment {
+        mappingsVersion = project.parchment_mappings_version
+        minecraftVersion = project.parchment_minecraft_version
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.compilerArgs.addAll(['-Xmaxerrs', '5000'])
+}
+
+// Loaded into the game layer as a library (not a mod of its own) when nested in the Blocknet jar.
+tasks.named('jar', Jar).configure {
+    from(files('LICENSE', 'COPYING', 'README.md')) { into 'META-INF/licenses/crafting' }
+    manifest {
+        attributes('FMLModType': 'GAMELIBRARY')
+    }
+}

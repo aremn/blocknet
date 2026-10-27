@@ -270,9 +270,23 @@ failed/cancelled`, `perception.noticed`, `status`, `damage`, `death`, `sound.hea
 Порядок: подпроект `pathing` под LGPL-3.0 → компиляция без PlayerEngine → `BotHands` → GameTest
 (яма, столб, копание вниз, лава, дверь) → подключение к TaskManager.
 
+## Планирование крафта (ADR-0007)
+
+`crafting/` — отдельная LGPL-3.0-or-later библиотека (`dev.blocknet.crafting`), как `pathing/`:
+`GAMELIBRARY`, compileOnly для `mod/`, sourceSet в dev-запусках, jarJar в готовом моде.
+`RecipeCatalog` превращает рецепты сервера в `Process`, `ItemKey` сохраняет data components.
+`CraftingCalculation` адаптирует дерево AE2: сначала инвентарь, затем дочерние симуляции рецептов,
+замены ингредиентов, защита от рекурсии, возврат контейнеров и второй проход с недостающим.
+`CraftPlan` — неизменяемый результат со списком шагов в порядке исполнения и компактным текстом.
+`PlannerCatalogs` кэширует индекс до смены рецептов; каждый расчёт получает копию инвентаря.
+Пока только синхронный расчёт через `/blocknet plan`, без исполнения, восприятия станций и моста
+к мозгу. Новые API не зависят от типов сети/CPU AE2 и не называют модов.
+
 ## 7. Раскладка мода
 
 ```
+crafting/src/main/java/dev/blocknet/crafting/  LGPL planner, recipes, simulation, plan DTO
+pathing/                                    LGPL navigation library
 mod/src/main/java/dev/blocknet/
   body/        BotPlayer, BotConnection, BotSpawner, BotRegistry (SavedData)
   control/     Controller, BotHands

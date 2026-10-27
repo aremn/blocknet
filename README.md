@@ -27,6 +27,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and the decision records in [do
 | `docs/` | Architecture, decision records (ADR), development guide |
 | `licenses/` | Licenses of third-party material |
 | `pathing/` | Pathfinding extracted from Automatone, LGPL-3.0-or-later, nested in the mod jar |
+| `crafting/` | Crafting calculation adapted from AE2, LGPL-3.0-or-later, nested in the mod jar |
 | `brain/` | *(planned)* LLM agent process |
 | `protocol/` | *(planned)* JSON schemas of the body ↔ brain protocol |
 
@@ -45,11 +46,12 @@ More in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 Blocknet's own code is under the [MIT License](LICENSE). The `pathing/` module is derived from
 Automatone and Baritone and stays under LGPL-3.0-or-later, with its own license files; the mod jar
-carries it as a separate nested jar. Third-party
+carries it as a separate nested jar. The [crafting/](crafting/) module adapts the AE2 crafting
+calculation under LGPL-3.0-or-later and ships as another replaceable nested jar. Third-party
 notices are in [licenses/](licenses).
 
 ---
 
 **По-русски:** Blocknet — ИИ-напарник для модового Minecraft, который играет как настоящий игрок на
 сервере. Тело — мод NeoForge, мозг — отдельный процесс с LLM. Архитектура и решения описаны в `docs/`.
-Лицензия: MIT, кроме модуля `pathing/` (LGPL-3.0).
+Лицензия: MIT, кроме модулей `pathing/` и `crafting/` (LGPL-3.0-or-later).

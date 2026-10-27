@@ -23,5 +23,6 @@ SOFTWARE.
 ---
 
 This license covers the Blocknet code in this repository except the `pathing/`
-module, which is derived from Automatone and Baritone and is licensed under the
-GNU Lesser General Public License v3.0; see the license files in that module.
+module (derived from Automatone and Baritone) and the `crafting/` module (derived
+from Applied Energistics 2). These modules are licensed under the GNU Lesser
+General Public License v3.0 or later; see LICENSE and COPYING in each module.
