@@ -69,13 +69,15 @@ public final class BlocknetClient {
         }
     }
 
-    /** Test set of actions; more will follow. Both go to the bot nearest to the player. */
+    /** Orders for the bot nearest to the player. */
     private static List<RadialMenuScreen.Action> botActions(Minecraft minecraft) {
         // The block under the crosshair is taken when the menu opens, before the cursor moves.
         HitResult hit = minecraft.hitResult;
         BlockPos lookedAt = hit instanceof BlockHitResult blockHit && hit.getType() == HitResult.Type.BLOCK ? blockHit.getBlockPos() : null;
         return List.of(
             new RadialMenuScreen.Action(Component.translatable("blocknet_ai.radial.come"), () -> sendCommand(minecraft, "blocknet come")),
+            new RadialMenuScreen.Action(Component.translatable("blocknet_ai.radial.follow"), () -> sendCommand(minecraft, "blocknet follow")),
+            new RadialMenuScreen.Action(Component.translatable("blocknet_ai.radial.stop"), () -> sendCommand(minecraft, "blocknet stop")),
             new RadialMenuScreen.Action(Component.translatable("blocknet_ai.radial.mine_this"), () -> {
                 if (lookedAt == null) {
                     minecraft.gui.setOverlayMessage(Component.translatable("blocknet_ai.radial.no_block"), false);

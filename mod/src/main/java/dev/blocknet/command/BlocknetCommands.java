@@ -28,6 +28,7 @@ import net.neoforged.neoforge.event.RegisterCommandsEvent;
  * /blocknet list
  * /blocknet goto [name] &lt;pos&gt;
  * /blocknet come [name]
+ * /blocknet follow [name]
  * /blocknet mine [name] &lt;pos&gt;
  * /blocknet use [name] &lt;pos&gt;
  * /blocknet close [name]
@@ -41,6 +42,8 @@ public final class BlocknetCommands {
         new SimpleCommandExceptionType(Component.literal("No bot with that name"));
     private static final SimpleCommandExceptionType NO_BOT_NEARBY =
         new SimpleCommandExceptionType(Component.literal("No bot in this dimension"));
+    private static final SimpleCommandExceptionType NO_FOLLOW_ENTITY =
+        new SimpleCommandExceptionType(Component.literal("Follow requires a command source with an entity"));
 
     private static final SuggestionProvider<CommandSourceStack> BOT_NAMES = (context, builder) ->
         SharedSuggestionProvider.suggest(BotManager.all().stream().map(bot -> bot.getGameProfile().getName()), builder);
@@ -70,6 +73,14 @@ public final class BlocknetCommands {
                 Entity sender = context.getSource().getEntity();
                 boolean onGround = sender != null && sender.onGround();
                 bot.controller().come(context.getSource().getPosition(), onGround, reporter(context.getSource(), bot));
+                return 1;
+            }))
+            .then(withBot("follow", false, (context, bot) -> {
+                Entity sender = context.getSource().getEntity();
+                if (sender == null) {
+                    throw NO_FOLLOW_ENTITY.create();
+                }
+                bot.controller().follow(sender, reporter(context.getSource(), bot));
                 return 1;
             }))
             .then(withBot("mine", true, (context, bot) -> {

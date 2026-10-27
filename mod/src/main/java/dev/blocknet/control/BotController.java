@@ -23,6 +23,7 @@ import net.minecraft.tags.BlockTags;
 import net.minecraft.util.Mth;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.item.ItemStack;
@@ -53,7 +54,7 @@ public final class BotController {
     /** Give up on a path that has not reached its goal after this long (5 minutes). */
     private static final int MAX_PATH_TICKS = 20 * 60 * 5;
 
-    private enum Task { IDLE, GOTO, MINE_APPROACH, MINE_BREAK, COLLECT, USE }
+    private enum Task { IDLE, GOTO, FOLLOW, MINE_APPROACH, MINE_BREAK, COLLECT, USE }
 
     private final BotPlayer bot;
     private Task task = Task.IDLE;
@@ -72,6 +73,15 @@ public final class BotController {
     private int pathTicks;
     @Nullable
     private Goal navigationGoal;
+    @Nullable
+    private Entity followTarget;
+    private String followName;
+    private Vec3 lastSeenFollowPosition;
+    private boolean lastSeenFollowOnGround;
+    @Nullable
+    private Vec3 followLegPosition;
+    private int followRetryTicks;
+    private boolean followAllowSprint;
     private enum Strategy { NORMAL, BUILD, FALL, CLOSEST }
     private Strategy strategy = Strategy.NORMAL;
     private int closestRange;
@@ -118,9 +128,17 @@ public final class BotController {
         // Same feet rule as the pathfinder: a hair above the position, so slabs and paths count.
         BlockPos feet = BlockPos.containing(source.x, source.y + 0.1251, source.z);
         start(Task.GOTO, feet, reporter);
+        if (!setGroundGoal(source, sourceOnGround)) {
+            fail("no ground within 16 blocks below " + feet.toShortString());
+        }
+    }
+
+    /** Shares come's feet/ground projection and horizontal goal with each follow leg. */
+    private boolean setGroundGoal(Vec3 source, boolean sourceOnGround) {
+        BlockPos feet = BlockPos.containing(source.x, source.y + 0.1251, source.z);
         if (sourceOnGround) {
             setComeGoal(feet);
-            return;
+            return true;
         }
         ServerLevel level = bot.serverLevel();
         for (int down = 1; down <= 16; down++) {
@@ -130,10 +148,21 @@ public final class BotController {
             }
             if (canStandOn(level, ground) && isRoom(level, ground.above()) && isRoom(level, ground.above(2))) {
                 setComeGoal(ground.above());
-                return;
+                return true;
             }
         }
-        fail("no ground within 16 blocks below " + feet.toShortString());
+        return false;
+    }
+
+    /** Follows until cancelled or the target leaves; individual route failures are silent. */
+    public void follow(Entity leader, Consumer<String> reporter) {
+        start(Task.FOLLOW, leader.blockPosition(), reporter);
+        followTarget = leader;
+        followName = leader.getName().getString();
+        // The command supplies the initial location. Later locations require a clear sight line.
+        lastSeenFollowPosition = leader.position();
+        lastSeenFollowOnGround = leader.onGround();
+        followAllowSprint = pathing().settings().allowSprint.get();
     }
 
     private void setComeGoal(BlockPos spot) {
@@ -174,6 +203,7 @@ public final class BotController {
     }
 
     public void stop() {
+        boolean wasFollowing = task == Task.FOLLOW;
         stopPathing();
         abortBreaking();
         task = Task.IDLE;
@@ -181,6 +211,13 @@ public final class BotController {
         resumeTarget = null;
         resumeTask = null;
         navigationGoal = null;
+        followTarget = null;
+        followLegPosition = null;
+        followRetryTicks = 0;
+        if (wasFollowing) {
+            pathing().settings().allowSprint.set(followAllowSprint);
+            reporter.accept("stopped");
+        }
     }
 
     public String describe() {
@@ -191,6 +228,7 @@ public final class BotController {
         String clearing = resumeTarget == null ? "" : "clearing the way to " + resumeTarget.toShortString() + ": ";
         return clearing + switch (task) {
             case GOTO -> "walking to " + where;
+            case FOLLOW -> "following " + followName;
             case MINE_APPROACH -> "approaching block at " + where;
             case MINE_BREAK -> String.format(Locale.ROOT, "mining block at %s (%.0f%%)", where, breakProgress * 100.0F);
             case COLLECT -> "collecting drops at " + where;
@@ -221,6 +259,7 @@ public final class BotController {
         }
         switch (task) {
             case GOTO -> tickGoTo(target);
+            case FOLLOW -> tickFollow();
             case MINE_APPROACH -> tickMineApproach(target);
             case MINE_BREAK -> tickMineBreak(target);
             case COLLECT -> tickCollect(target);
@@ -262,7 +301,7 @@ public final class BotController {
             if (pathing.getPathingBehavior().getInProgress().isPresent()) {
                 return PathState.MOVING;
             }
-            if (task == Task.GOTO) {
+            if (task == Task.GOTO || task == Task.FOLLOW) {
                 configureAttempt();
             }
             pathGoal = goal;
@@ -298,6 +337,61 @@ public final class BotController {
     }
 
     private enum PathState { MOVING, ARRIVED, FAILED }
+
+    private void tickFollow() {
+        Entity leader = followTarget;
+        // Check dimension before removal: changing dimension can replace/remove the old entity.
+        if (leader.level() != bot.level()) {
+            fail(followName + " is in another dimension");
+            return;
+        }
+        if (!leader.isAlive() || leader.isRemoved()
+            || bot.serverLevel().getEntity(leader.getUUID()) != leader) {
+            fail(followName + " is gone");
+            return;
+        }
+        boolean visible = bot.level().clip(new ClipContext(bot.getEyePosition(), leader.getEyePosition(),
+            ClipContext.Block.VISUAL, ClipContext.Fluid.NONE, bot)).getType() == HitResult.Type.MISS;
+        if (visible) {
+            lastSeenFollowPosition = leader.position();
+            lastSeenFollowOnGround = leader.onGround();
+        }
+        double distanceSq = bot.position().distanceToSqr(lastSeenFollowPosition);
+        pathing().settings().allowSprint.set(followAllowSprint && distanceSq > 64);
+        if (distanceSq <= 9 && bot.onGround()) {
+            stopPathing();
+            bot.zza = 0;
+            bot.xxa = 0;
+            bot.setJumping(false);
+            bot.setSprinting(false);
+            followLegPosition = null;
+            if (visible) {
+                lookAt(leader.getEyePosition());
+            }
+            return;
+        }
+        boolean moved = followLegPosition != null && lastSeenFollowPosition.distanceToSqr(followLegPosition) > 9;
+        if (moved || followLegPosition == null && followRetryTicks-- <= 0) {
+            stopPathing();
+            strategy = Strategy.NORMAL;
+            closestRange = 1;
+            navigationTicks = 0;
+            followLegPosition = lastSeenFollowPosition;
+            if (!setGroundGoal(lastSeenFollowPosition, lastSeenFollowOnGround)) {
+                finishFollowLeg();
+                return;
+            }
+        }
+        if (followLegPosition != null) {
+            tickGoTo(target);
+        }
+    }
+
+    private void finishFollowLeg() {
+        stopPathing();
+        followLegPosition = null;
+        followRetryTicks = 20;
+    }
 
     private void tickGoTo(BlockPos pos) {
         if (++navigationTicks > MAX_PATH_TICKS) {
@@ -350,6 +444,10 @@ public final class BotController {
     }
 
     private void finishNavigation(BlockPos pos) {
+        if (task == Task.FOLLOW) {
+            finishFollowLeg();
+            return;
+        }
         if (navigationGoal.isInGoal(bot.blockPosition())
             || navigationGoal instanceof GoalBlock && bot.blockPosition().distSqr(pos) <= 1) {
             finish("arrived at " + pos.toShortString());
@@ -618,20 +716,16 @@ public final class BotController {
     }
 
     private void finish(String message) {
-        stopPathing();
+        if (task == Task.FOLLOW) {
+            pathing().settings().allowSprint.set(followAllowSprint);
+        }
+        // Clear FOLLOW before stop so it cannot emit a second terminal report.
         task = Task.IDLE;
-        target = null;
-        resumeTarget = null;
-        resumeTask = null;
+        stop();
         reporter.accept(message);
     }
 
     private void fail(String message) {
-        stopPathing();
-        task = Task.IDLE;
-        target = null;
-        resumeTarget = null;
-        resumeTask = null;
-        reporter.accept("failed: " + message);
+        finish("failed: " + message);
     }
 }
