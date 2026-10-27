@@ -80,7 +80,9 @@ public final class InputOverrideHandler extends Behavior implements IInputOverri
          entity.zza = 0.0F;
          entity.setShiftKeyDown(false);
          entity.setJumping(this.isInputForcedDown(Input.JUMP));
-         float speed = 0.3F;
+         // Blocknet: a player's held movement key is a full 1.0 impulse (Automatone used 0.3 for mobs,
+         // which made a player bot walk at a third of normal speed).
+         float speed = 1.0F;
          if (this.isInputForcedDown(Input.MOVE_FORWARD)) {
             entity.zza += speed;
          }

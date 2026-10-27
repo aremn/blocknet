@@ -55,6 +55,10 @@ public final class BotManager {
         server.getPlayerList().placeNewPlayer(BotConnection.create(), bot, cookie);
 
         bot.setGameMode(GameType.SURVIVAL);
+        // Player data saved by an older build after a death can hold zero health.
+        if (bot.isDeadOrDying()) {
+            bot.setHealth(bot.getMaxHealth());
+        }
         bot.teleportTo(level, pos.x, pos.y, pos.z, yaw, 0.0F);
         BOTS.put(key(name), bot);
         Blocknet.LOGGER.info("Spawned bot {} at {}", name, pos);
@@ -82,12 +86,17 @@ public final class BotManager {
     /** The bot in {@code level} closest to {@code pos}, if there is any. */
     public static Optional<BotPlayer> nearest(ServerLevel level, Vec3 pos) {
         return BOTS.values().stream()
-            .filter(bot -> bot.serverLevel() == level)
+            .filter(bot -> bot.serverLevel() == level && bot.isAlive() && !bot.isRemoved())
             .min(Comparator.comparingDouble(bot -> bot.position().distanceToSqr(pos)));
     }
 
     public static Collection<BotPlayer> all() {
         return Collections.unmodifiableCollection(BOTS.values());
+    }
+
+    /** Stops tracking a bot that is leaving (for example after dying), so no command reaches it. */
+    static void forget(BotPlayer bot) {
+        BOTS.values().remove(bot);
     }
 
     public static void onPlayerLoggedOut(PlayerEvent.PlayerLoggedOutEvent event) {

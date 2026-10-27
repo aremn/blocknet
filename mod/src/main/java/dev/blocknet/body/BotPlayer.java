@@ -10,6 +10,7 @@ import net.minecraft.server.level.ClientInformation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.damagesource.DamageSource;
+import net.minecraft.world.food.FoodData;
 
 /**
  * The bot's body: a real server-side player without a client.
@@ -45,11 +46,17 @@ public final class BotPlayer extends ServerPlayer {
     }
 
     /**
-     * Until respawning is implemented, a dead bot leaves the game; its items drop as usual.
+     * Until respawning is implemented, a dead bot leaves the game; its items drop as usual. Health
+     * and hunger are reset before it leaves, because leaving saves player data and a bot spawned
+     * again under the same name would otherwise load in dead.
      */
     @Override
     public void die(DamageSource source) {
         super.die(source);
+        controller.stop();
+        BotManager.forget(this);
+        setHealth(getMaxHealth());
+        foodData = new FoodData();
         if (connection instanceof BotPacketListener listener) {
             listener.disconnect(new DisconnectionDetails(Component.literal("Died")));
         }
