@@ -47,6 +47,9 @@ public final class BotPacketListener extends ServerGamePacketListenerImpl {
             return;
         }
         disconnected = true;
+        if (player instanceof BotPlayer bot) {
+            bot.controller().stop();
+        }
         server.execute(() -> onDisconnect(details));
     }
 
@@ -56,6 +59,9 @@ public final class BotPacketListener extends ServerGamePacketListenerImpl {
             return;
         }
         disconnected = true;
+        if (player instanceof BotPlayer bot) {
+            bot.controller().stop();
+        }
         onDisconnect(details);
     }
 }

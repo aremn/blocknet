@@ -26,12 +26,14 @@ import net.minecraft.util.Mth;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 
@@ -56,7 +58,10 @@ public final class BotController {
     /** Give up on a path that has not reached its goal after this long (5 minutes). */
     private static final int MAX_PATH_TICKS = 20 * 60 * 5;
 
-    private enum Task { IDLE, GOTO, FOLLOW, MINE_APPROACH, MINE_BREAK, COLLECT, USE }
+    private enum Task { IDLE, GOTO, FOLLOW, MINE_APPROACH, MINE_BREAK, COLLECT, USE, CRAFT }
+
+    @Nullable
+    private CraftExecutor crafting;
 
     private final BotPlayer bot;
     private Task task = Task.IDLE;
@@ -231,10 +236,37 @@ public final class BotController {
         start(Task.USE, pos, reporter);
     }
 
+    public void craft(ItemStack item, int count, Consumer<String> reporter) {
+        start(Task.CRAFT, bot.blockPosition(), reporter);
+        crafting = new CraftExecutor(bot, this, item, count);
+        crafting.start();
+    }
+
+    BlockHitResult craftApproach(BlockPos pos) {
+        target = pos;
+        return approachAndAim(pos);
+    }
+
+    void craftMine(BlockPos pos) {
+        target = pos;
+        task = Task.MINE_APPROACH;
+    }
+
+    void craftFinished(String message) {
+        abortBreaking();
+        crafting = null;
+        finish(message);
+    }
+
     public void stop() {
-        boolean wasFollowing = task == Task.FOLLOW;
         stopPathing();
         abortBreaking();
+        if (crafting != null) {
+            CraftExecutor cancelled = crafting;
+            crafting = null;
+            cancelled.cancel();
+        }
+        boolean wasFollowing = task == Task.FOLLOW;
         task = Task.IDLE;
         target = null;
         resumeTarget = null;
@@ -251,6 +283,9 @@ public final class BotController {
     }
 
     public String describe() {
+        if (crafting != null) {
+            return crafting.describe();
+        }
         if (task == Task.IDLE || target == null) {
             return "idle, open menu: " + openMenuDescription();
         }
@@ -263,6 +298,7 @@ public final class BotController {
             case MINE_BREAK -> String.format(Locale.ROOT, "mining block at %s (%.0f%%)", where, breakProgress * 100.0F);
             case COLLECT -> "collecting drops at " + where;
             case USE -> "going to use block at " + where;
+            case CRAFT -> "crafting";
             case IDLE -> "idle";
         };
     }
@@ -294,6 +330,7 @@ public final class BotController {
             case MINE_BREAK -> tickMineBreak(target);
             case COLLECT -> tickCollect(target);
             case USE -> tickUse(target);
+            case CRAFT -> crafting.tick();
             case IDLE -> {}
         }
     }
@@ -531,11 +568,21 @@ public final class BotController {
     }
 
     private void tickCollect(BlockPos pos) {
-        Vec3 goal = Vec3.atBottomCenterOf(pos);
+        // Drops can bounce away from the mined block. Follow the visible item rather than
+        // declaring success at the old block center while its drop remains just out of range.
+        var drops = bot.level().getEntitiesOfClass(ItemEntity.class, new AABB(pos).inflate(3),
+            item -> item.isAlive() && bot.hasLineOfSight(item));
+        var nearest = drops.stream().min(java.util.Comparator.comparingDouble(bot::distanceToSqr));
+        Vec3 goal = nearest.map(ItemEntity::position).orElseGet(() -> Vec3.atBottomCenterOf(pos));
         if (!hasArrived(goal)) {
             walkTowards(goal);
         }
-        if (--collectTicks <= 0 || (hasArrived(goal) && collectTicks < COLLECT_TICKS - 10)) {
+        if (--collectTicks <= 0 || (drops.isEmpty() && hasArrived(goal) && collectTicks < COLLECT_TICKS - 10)) {
+            if (crafting != null) {
+                task = Task.CRAFT;
+                crafting.collected();
+                return;
+            }
             finish("mined block at " + pos.toShortString());
         }
     }
@@ -569,6 +616,8 @@ public final class BotController {
         if (level.getBlockState(pos).isAir()) {
             if (resumeTarget != null) {
                 resume();
+            } else if (crafting != null) {
+                fail("station disappeared");
             } else {
                 finish("nothing at " + pos.toShortString());
             }
@@ -765,6 +814,10 @@ public final class BotController {
     }
 
     private void fail(String message) {
+        if (crafting != null) {
+            crafting.fail(message);
+            return;
+        }
         finish("failed: " + message);
     }
 }

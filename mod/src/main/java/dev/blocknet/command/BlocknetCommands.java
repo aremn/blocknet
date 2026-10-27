@@ -12,6 +12,7 @@ import com.mojang.brigadier.suggestion.SuggestionProvider;
 import dev.blocknet.body.BotManager;
 import dev.blocknet.body.BotPlayer;
 import dev.blocknet.crafting.CraftingCalculation;
+import dev.blocknet.control.CraftStations;
 import dev.blocknet.state.BodyState;
 import java.util.ArrayList;
 import java.util.function.Consumer;
@@ -35,6 +36,7 @@ import net.neoforged.neoforge.event.RegisterCommandsEvent;
  * /blocknet status [name]
  * /blocknet inv [name]
  * /blocknet plan [name] &lt;item&gt; [count]
+ * /blocknet craft [name] &lt;item&gt; [count]
  * /blocknet changes [name]
  * /blocknet goto [name] &lt;pos&gt;
  * /blocknet come [name]
@@ -76,6 +78,7 @@ public final class BlocknetCommands {
             .then(Commands.literal("list")
                 .executes(BlocknetCommands::list))
             .then(planCommand(buildContext))
+            .then(craftCommand(buildContext))
             .then(withBot("status", false, (context, bot) -> {
                 var snapshot = bot.bodyState().snapshot();
                 sendSection(context.getSource(), "body", snapshot.sections().get("body"));
@@ -139,6 +142,28 @@ public final class BlocknetCommands {
         return root;
     }
 
+    private static LiteralArgumentBuilder<CommandSourceStack> craftCommand(net.minecraft.commands.CommandBuildContext buildContext) {
+        var root = Commands.literal("craft");
+        root.then(craftItem(buildContext, false));
+        root.then(Commands.argument("name", StringArgumentType.word()).suggests(BOT_NAMES).then(craftItem(buildContext, true)));
+        return root;
+    }
+
+    private static RequiredArgumentBuilder<CommandSourceStack, net.minecraft.commands.arguments.item.ItemInput> craftItem(
+            net.minecraft.commands.CommandBuildContext buildContext, boolean named) {
+        return Commands.argument("item", ItemArgument.item(buildContext))
+            .executes(c -> craft(c, named, 1))
+            .then(Commands.argument("count", IntegerArgumentType.integer(1, 1000000))
+                .executes(c -> craft(c, named, IntegerArgumentType.getInteger(c, "count"))));
+    }
+
+    private static int craft(CommandContext<CommandSourceStack> context, boolean named, int count) throws CommandSyntaxException {
+        BotPlayer bot = named ? bot(context) : nearestBot(context.getSource());
+        bot.controller().craft(ItemArgument.getItem(context, "item").createItemStack(1, false), count,
+            reporter(context.getSource(), bot));
+        return 1;
+    }
+
     private static RequiredArgumentBuilder<CommandSourceStack, net.minecraft.commands.arguments.item.ItemInput> planItem(
             net.minecraft.commands.CommandBuildContext buildContext, boolean named) {
         return Commands.argument("item", ItemArgument.item(buildContext))
@@ -153,7 +178,7 @@ public final class BlocknetCommands {
         for (int slot = 0; slot < bot.getInventory().getContainerSize(); slot++)
             inventory.add(bot.getInventory().getItem(slot).copy());
         var result = new CraftingCalculation(bot.serverLevel(), dev.blocknet.crafting.PlannerCatalogs.get(bot.serverLevel()))
-            .plan(ItemArgument.getItem(context, "item").createItemStack(1, false), count, inventory);
+            .plan(ItemArgument.getItem(context, "item").createItemStack(1, false), count, inventory, CraftStations.visible(bot).keySet());
         for (String line : result.text().split("\\n"))
             context.getSource().sendSuccess(() -> Component.literal(line), false);
         return 1;

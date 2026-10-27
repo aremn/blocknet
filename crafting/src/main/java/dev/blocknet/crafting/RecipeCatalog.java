@@ -90,11 +90,24 @@ public final class RecipeCatalog {
     }
 
     /** Quantity-free closure: an optimistic feasibility filter, never proof of sufficient stock. */
-    Set<ItemKey> reachable(Set<ItemKey> supplied, Runnable checkpoint) {
+    Set<ItemKey> reachable(Set<ItemKey> supplied, Set<String> stations, Runnable checkpoint) {
         Set<ItemKey> reached = new HashSet<>(supplied);
         Deque<ItemKey> queue = new ArrayDeque<>(new TreeSet<>(supplied));
         boolean[] satisfied = new boolean[gateCount];
         int[] remaining = requirements.clone();
+        for (var dependencies : dependents.values()) {
+            for (var dependency : dependencies) {
+                if (dependency.input == null && stations.contains(allProcesses.get(dependency.process).station)) {
+                    satisfied[dependency.gate] = true;
+                    if (--remaining[dependency.process] == 0) {
+                        ItemKey output = allProcesses.get(dependency.process).output;
+                        if (reached.add(output)) {
+                            queue.addLast(output);
+                        }
+                    }
+                }
+            }
+        }
         while (!queue.isEmpty()) {
             checkpoint.run();
             var stack = queue.removeFirst().stack();

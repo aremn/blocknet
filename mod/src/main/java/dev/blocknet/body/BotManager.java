@@ -61,6 +61,7 @@ public final class BotManager {
             bot.setHealth(bot.getMaxHealth());
         }
         bot.teleportTo(level, pos.x, pos.y, pos.z, yaw, 0.0F);
+        bot.setYHeadRot(yaw);
         PathingDefaults.apply(IBaritone.KEY.get(bot).settings());
         BOTS.put(key(name), bot);
         Blocknet.LOGGER.info("Spawned bot {} at {}", name, pos);
@@ -103,6 +104,7 @@ public final class BotManager {
 
     public static void onPlayerLoggedOut(PlayerEvent.PlayerLoggedOutEvent event) {
         if (event.getEntity() instanceof BotPlayer bot) {
+            bot.controller().stop();
             BOTS.values().remove(bot);
             // The pathfinder keeps per-entity state by UUID; a bot spawned again starts fresh.
             IBaritone.KEY.remove(bot);

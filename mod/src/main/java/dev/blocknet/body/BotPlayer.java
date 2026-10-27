@@ -68,8 +68,8 @@ public final class BotPlayer extends ServerPlayer {
      */
     @Override
     public void die(DamageSource source) {
-        super.die(source);
         controller.stop();
+        super.die(source);
         BotManager.forget(this);
         setHealth(getMaxHealth());
         foodData = new FoodData();

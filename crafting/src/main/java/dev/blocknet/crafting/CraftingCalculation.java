@@ -91,6 +91,7 @@ public final class CraftingCalculation {
     private Set<ItemKey> supplied;
     private Set<ItemKey> reachable;
     private boolean truncated;
+    private Set<String> availableStations = Set.of();
 
     public CraftingCalculation(ServerLevel level, RecipeCatalog catalog) {
         this(level, catalog, Limits.DEFAULT);
@@ -103,6 +104,12 @@ public final class CraftingCalculation {
     }
 
     public CraftPlan plan(ItemStack output, long count, Iterable<ItemStack> inventory) {
+        return plan(output, count, inventory, Set.of());
+    }
+
+    /** Stations observed by the caller from the player's eyes; never discovers world blocks. */
+    public CraftPlan plan(ItemStack output, long count, Iterable<ItemStack> inventory, Set<String> availableStations) {
+        this.availableStations = Set.copyOf(availableStations);
         if (!level.getServer().isSameThread()) {
             throw new IllegalStateException("planner requires server thread");
         }
@@ -120,7 +127,7 @@ public final class CraftingCalculation {
         var state = new CraftingSimulationState(initial);
         CraftPlan.Status status;
         try {
-            reachable = catalog.reachable(supplied, () -> {
+            reachable = catalog.reachable(supplied, availableStations, () -> {
                 if (System.nanoTime() >= deadline) {
                     throw new SearchLimit();
                 }
@@ -448,11 +455,10 @@ public final class CraftingCalculation {
 
     private void ensureStation(
         Process process, CraftingSimulationState state, LinkedHashSet<ItemKey> path, boolean simulate) {
-        if (process.stationItem == null || state.stations.contains(process.station)) {
+        if (process.stationItem == null || availableStations.contains(process.station) || state.stations.contains(process.station)) {
             return;
         }
 
-        // Future perception hook: consult known placed stations here. For now only inventory counts.
         var owned = state.keys()
             .stream()
             .filter(key -> key.stack().is(process.stationItem) && state.available(key) > 0)
@@ -546,7 +552,7 @@ public final class CraftingCalculation {
             }
             total = Math.min(1_000_000, total + best);
         }
-        if (process.stationItem != null) {
+        if (process.stationItem != null && !availableStations.contains(process.station)) {
             int stationCost = cost(new ItemKey(new ItemStack(process.stationItem)),
                 new HashSet<>(path), path.size());
             total = Math.min(1_000_000, total + stationCost);
@@ -587,7 +593,7 @@ public final class CraftingCalculation {
             for (var entry : pending) {
                 Signature signature = entry.getKey();
                 long times = entry.getValue();
-                boolean station = signature.station.equals("inventory")
+                boolean station = signature.station.equals("inventory") || availableStations.contains(signature.station)
                     || stock.keySet().stream().anyMatch(
                         key -> key.id().equals("minecraft:" + signature.station) && stock.get(key) > 0);
                 if (!station

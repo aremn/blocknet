@@ -52,7 +52,7 @@ grep -a -E "GAME TESTS COMPLETE|required tests (passed|failed)|failed at" build/
 | Package | What |
 |---|---|
 | `body/` | `BotPlayer` (ServerPlayer, runs its own physics in `tick()`), `BotConnection`, `BotPacketListener`, `BotManager` (spawn/despawn/nearest) |
-| `control/` | `BotController`: one task at a time (goto, mine, use), head turning, aiming, tool choice |
+| `control/` | `BotController`: one task at a time (goto, mine, use, craft), head turning, aiming, tool choice; `CraftExecutor`: delayed menu/grid/cooking/cleanup phases; `CraftStations`: bounded eye-ray station query |
 | `state/` | `ItemDescriber`/`ToolFacts`: generic item facts and vanilla tool probes; `BodyState`/`BodyStateTracker`: on-demand compact sections, independent revisions, bounded inventory diff history (ADR-0006); no transport |
 | `command/` | `/blocknet` debug commands; the bot name is optional (nearest bot) |
 | `client/` | Optional client side: radial menu on the mouse wheel; only sends `/blocknet` commands |
@@ -70,10 +70,16 @@ The LGPL `crafting/` module adapts AE2's crafting calculation (ADR-0007): `Recip
 inventory and commits successful branches, `CraftingCalculation` searches with bounds,
 `CraftPlan` returns immutable steps/material balances and text. `PlannerCatalogs` caches the
 recipe index across requests and detects reloads. `/blocknet plan [name] <item> [count]` is
-planning only, server-thread synchronous, no brain or item movement. Like pathing, compileOnly
+planning only, server-thread synchronous, no brain or item movement. `/blocknet craft [name] <item> [count]`
+executes an OK plan with `CraftExecutor`: vanilla recipe-book placement, menu clicks (3 ticks apart),
+station placement/opening through useItemOn, real furnace ticks, and station breaking/drop collection
+through the controller. Missing plans report once without execution; inputs are checked before each
+step, with one replan allowed. Cancellation/death/logout close menus and report once. Like pathing, compileOnly
 plus dev sourceSet and a nested GAMELIBRARY jar; preserve LGPL attribution. Index construction
 is outside the 50ms search budget; search also caps depth/variants/operations. Stations count
-only from inventory (future perception hook). `CraftPlanGameTests` covers crafting and budgets.
+from inventory and the caller's visible stations (`CraftStations`, eye rays within 6 blocks/FOV).
+`CraftPlanGameTests` covers planning and budgets; `CraftExecuteGameTests` covers real menus, station
+recovery, cooking time, modded recipe fixtures, cancellation/replanning and command reports.
 Vanilla wooden pickaxe + table needs 9 planks, so 3 logs; with an owned table, 2 logs suffice.
 
 ## Rules that came from real bugs
