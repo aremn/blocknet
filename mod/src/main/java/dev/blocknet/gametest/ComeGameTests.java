@@ -17,6 +17,7 @@ import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.item.Items;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.neoforge.gametest.GameTestHolder;
 import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
@@ -100,6 +101,54 @@ public final class ComeGameTests {
             helper.assertTrue(feet.equals(nextToPlatform), "walked next to the platform, is at " + feet);
             BotManager.despawn("BnComeClose");
         });
+    }
+
+    /**
+     * The player stands on a treetop (leaves on a log trunk). Leaves have no support face, and an
+     * earlier version took the ground under the tree as the goal and said "arrived" there.
+     */
+    @GameTest(template = "arena_tall", timeoutTicks = 1200)
+    public static void climbsTreeToPlayerWithBlocks(GameTestHelper helper) {
+        tree(helper);
+        BotPlayer bot = spawn(helper, "BnComeTree", new Vec3(1.5, 1, 4.5));
+        bot.getInventory().setItem(0, new ItemStack(Items.DIRT, 32));
+        List<String> reports = command(helper, "blocknet come", new Vec3(6.5, 5, 4.5));
+        helper.succeedWhen(() -> {
+            assertFinished(helper, bot, reports, false);
+            BlockPos feet = bot.blockPosition();
+            BlockPos top = helper.absolutePos(new BlockPos(6, 5, 4));
+            double dx = feet.getX() - top.getX();
+            double dz = feet.getZ() - top.getZ();
+            helper.assertTrue(feet.getY() == top.getY() && dx * dx + dz * dz <= 4, "came up onto the treetop, is at " + feet);
+            BotManager.despawn("BnComeTree");
+        });
+    }
+
+    /** Same tree, nothing to build with: the bot must not claim it arrived under the tree. */
+    @GameTest(template = "arena_tall", timeoutTicks = 1200)
+    public static void doesNotClaimArrivalUnderTree(GameTestHelper helper) {
+        tree(helper);
+        BotPlayer bot = spawn(helper, "BnComeUnder", new Vec3(1.5, 1, 4.5));
+        List<String> reports = command(helper, "blocknet come", new Vec3(6.5, 5, 4.5));
+        helper.succeedWhen(() -> {
+            assertFinished(helper, bot, reports, true);
+            helper.assertTrue(reports.getFirst().contains("got as close as I could"), reports.toString());
+            BotManager.despawn("BnComeUnder");
+        });
+    }
+
+    /** A log trunk at (6, 1..3, 4) under a 3x3 layer of leaves at y = 4. */
+    private static void tree(GameTestHelper helper) {
+        TestArena.floor(helper);
+        for (int y = 1; y <= 3; y++) {
+            helper.setBlock(new BlockPos(6, y, 4), Blocks.OAK_LOG);
+        }
+        var leaves = Blocks.OAK_LEAVES.defaultBlockState().setValue(net.minecraft.world.level.block.LeavesBlock.PERSISTENT, true);
+        for (int x = 5; x <= 7; x++) {
+            for (int z = 3; z <= 5; z++) {
+                helper.setBlock(new BlockPos(x, 4, z), leaves);
+            }
+        }
     }
 
     @GameTest(template = "arena_tall", timeoutTicks = 800)

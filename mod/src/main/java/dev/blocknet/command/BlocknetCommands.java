@@ -16,6 +16,7 @@ import net.minecraft.commands.Commands;
 import net.minecraft.commands.SharedSuggestionProvider;
 import net.minecraft.commands.arguments.coordinates.BlockPosArgument;
 import net.minecraft.network.chat.Component;
+import net.minecraft.world.entity.Entity;
 import net.neoforged.neoforge.event.RegisterCommandsEvent;
 
 /**
@@ -66,7 +67,9 @@ public final class BlocknetCommands {
                 return 1;
             }))
             .then(withBot("come", false, (context, bot) -> {
-                bot.controller().come(context.getSource().getPosition(), reporter(context.getSource(), bot));
+                Entity sender = context.getSource().getEntity();
+                boolean onGround = sender != null && sender.onGround();
+                bot.controller().come(context.getSource().getPosition(), onGround, reporter(context.getSource(), bot));
                 return 1;
             }))
             .then(withBot("mine", true, (context, bot) -> {

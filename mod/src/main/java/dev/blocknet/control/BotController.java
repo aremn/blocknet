@@ -109,34 +109,58 @@ public final class BotController {
         navigationGoal = new GoalBlock(pos);
     }
 
-    /** Comes within two horizontal blocks of a standing spot below the command source. */
-    public void come(Vec3 source, Consumer<String> reporter) {
-        BlockPos feet = BlockPos.containing(source);
+    /**
+     * Comes within two horizontal blocks of where the command source stands. If the source stands
+     * on something (ground, leaves on a tree, a roof), that height is the goal; only a source in the
+     * air (flying) is projected down to the first block below that can be stood on.
+     */
+    public void come(Vec3 source, boolean sourceOnGround, Consumer<String> reporter) {
+        // Same feet rule as the pathfinder: a hair above the position, so slabs and paths count.
+        BlockPos feet = BlockPos.containing(source.x, source.y + 0.1251, source.z);
         start(Task.GOTO, feet, reporter);
+        if (sourceOnGround) {
+            setComeGoal(feet);
+            return;
+        }
         ServerLevel level = bot.serverLevel();
-        for (int down = 0; down <= 16; down++) {
+        for (int down = 1; down <= 16; down++) {
             BlockPos ground = feet.below(down);
             if (ground.getY() < level.getMinBuildHeight()) {
                 break;
             }
-            // Grass, flowers and snow layers at the player's feet still count as room to stand in.
-            if (level.getBlockState(ground).isFaceSturdy(level, ground, Direction.UP)
-                && level.getBlockState(ground.above()).getCollisionShape(level, ground.above()).isEmpty()
-                && level.getBlockState(ground.above(2)).getCollisionShape(level, ground.above(2)).isEmpty()) {
-                target = ground.above();
-                List<Goal> spots = new ArrayList<>();
-                for (int dx = -2; dx <= 2; dx++) {
-                    for (int dz = -2; dz <= 2; dz++) {
-                        if (dx * dx + dz * dz <= 4) {
-                            spots.add(new GoalBlock(target.offset(dx, 0, dz)));
-                        }
-                    }
-                }
-                navigationGoal = new GoalComposite(spots.toArray(Goal[]::new));
+            if (canStandOn(level, ground) && isRoom(level, ground.above()) && isRoom(level, ground.above(2))) {
+                setComeGoal(ground.above());
                 return;
             }
         }
         fail("no ground within 16 blocks below " + feet.toShortString());
+    }
+
+    private void setComeGoal(BlockPos spot) {
+        target = spot;
+        List<Goal> spots = new ArrayList<>();
+        for (int dx = -2; dx <= 2; dx++) {
+            for (int dz = -2; dz <= 2; dz++) {
+                if (dx * dx + dz * dz <= 4) {
+                    spots.add(new GoalBlock(spot.offset(dx, 0, dz)));
+                }
+            }
+        }
+        navigationGoal = new GoalComposite(spots.toArray(Goal[]::new));
+    }
+
+    /**
+     * A block with a top a player can stand on. Collision, not "sturdy": leaves have no support face
+     * (nothing can hang on them) but are solid to walk on, which made the bot ignore treetops.
+     */
+    private static boolean canStandOn(ServerLevel level, BlockPos pos) {
+        var shape = level.getBlockState(pos).getCollisionShape(level, pos);
+        return !shape.isEmpty() && shape.max(Direction.Axis.Y) >= 0.5;
+    }
+
+    /** Grass, flowers and snow layers still count as room to stand in. */
+    private static boolean isRoom(ServerLevel level, BlockPos pos) {
+        return level.getBlockState(pos).getCollisionShape(level, pos).isEmpty();
     }
 
     /** Walks into reach of the block, breaks it and picks up the drops. */
