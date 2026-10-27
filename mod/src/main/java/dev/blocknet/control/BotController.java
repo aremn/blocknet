@@ -1,6 +1,8 @@
 package dev.blocknet.control;
 
 import dev.blocknet.body.BotPlayer;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.function.Consumer;
 import javax.annotation.Nullable;
@@ -9,6 +11,7 @@ import net.minecraft.core.Direction;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.protocol.game.ServerboundPlayerActionPacket;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.tags.BlockTags;
 import net.minecraft.util.Mth;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
@@ -36,6 +39,8 @@ public final class BotController {
     private static final int STUCK_TICKS = 60;
     private static final int COLLECT_TICKS = 40;
     private static final int MAX_BREAK_TICKS = 20 * 60;
+    /** How many leaves or plants the bot may clear on the way to one target. */
+    private static final int MAX_CLEARED_OBSTACLES = 8;
 
     private enum Task { IDLE, GOTO, MINE_APPROACH, MINE_BREAK, COLLECT, USE }
 
@@ -44,6 +49,12 @@ public final class BotController {
     @Nullable
     private BlockPos target;
     private Consumer<String> reporter = message -> {};
+    /** The real target and task while the bot clears an obstacle (leaves, grass) in the way. */
+    @Nullable
+    private BlockPos resumeTarget;
+    @Nullable
+    private Task resumeTask;
+    private int clearedObstacles;
 
     private double bestDistanceSq;
     private int ticksWithoutProgress;
@@ -76,6 +87,8 @@ public final class BotController {
         abortBreaking();
         task = Task.IDLE;
         target = null;
+        resumeTarget = null;
+        resumeTask = null;
     }
 
     public String describe() {
@@ -83,7 +96,8 @@ public final class BotController {
             return "idle, open menu: " + openMenuDescription();
         }
         String where = target.getX() + " " + target.getY() + " " + target.getZ();
-        return switch (task) {
+        String clearing = resumeTarget == null ? "" : "clearing the way to " + resumeTarget.toShortString() + ": ";
+        return clearing + switch (task) {
             case GOTO -> "walking to " + where;
             case MINE_APPROACH -> "approaching block at " + where;
             case MINE_BREAK -> String.format(Locale.ROOT, "mining block at %s (%.0f%%)", where, breakProgress * 100.0F);
@@ -128,6 +142,7 @@ public final class BotController {
         bestDistanceSq = Double.MAX_VALUE;
         ticksWithoutProgress = 0;
         breakTicks = 0;
+        clearedObstacles = 0;
     }
 
     private void tickGoTo(BlockPos pos) {
@@ -162,6 +177,10 @@ public final class BotController {
         ServerLevel level = bot.serverLevel();
         BlockState state = level.getBlockState(pos);
         if (state.isAir()) {
+            if (resumeTarget != null) {
+                resume();
+                return;
+            }
             task = Task.COLLECT;
             collectTicks = COLLECT_TICKS;
             bestDistanceSq = Double.MAX_VALUE;
@@ -209,19 +228,27 @@ public final class BotController {
     }
 
     /**
-     * Walks into reach of the block and turns to face it. Returns the hit on the face the bot sees
-     * once it is ready to act; returns null while still approaching or turning, or after failing.
+     * Walks into reach of the block and turns to face it. Returns the hit on a face the bot can see
+     * once it is ready to act; returns null while still approaching, turning or clearing the view,
+     * or after failing.
+     *
+     * <p>Like a player, the bot does not give up on the first blocked look: it tries every face
+     * turned toward it, breaks leaves or plants in the way, and steps closer past anything else.
      */
     @Nullable
     private BlockHitResult approachAndAim(BlockPos pos) {
         ServerLevel level = bot.serverLevel();
         if (level.getBlockState(pos).isAir()) {
-            finish("nothing at " + pos.toShortString());
+            if (resumeTarget != null) {
+                resume();
+            } else {
+                finish("nothing at " + pos.toShortString());
+            }
             return null;
         }
+        Vec3 goal = Vec3.atBottomCenterOf(pos);
         // Small margin so the server's own reach checks always pass.
         if (!bot.canInteractWithBlock(pos, -0.5)) {
-            Vec3 goal = Vec3.atBottomCenterOf(pos);
             walkTowards(goal);
             if (isStuck(goal)) {
                 fail("cannot get within reach of " + pos.toShortString());
@@ -234,18 +261,72 @@ public final class BotController {
         if (!isLookingAt(center)) {
             return null;
         }
+        BlockHitResult visible = findVisibleFace(level, pos);
+        if (visible != null) {
+            return visible;
+        }
+
         Vec3 eye = bot.getEyePosition();
-        BlockHitResult hit = level.clip(new ClipContext(eye, center, ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, bot));
-        if (hit.getType() == HitResult.Type.BLOCK && !hit.getBlockPos().equals(pos)) {
-            fail("view of " + pos.toShortString() + " is blocked by " + level.getBlockState(hit.getBlockPos()).getBlock().getName().getString());
+        BlockPos blocker = level.clip(new ClipContext(eye, center, ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, bot)).getBlockPos();
+        BlockState blockerState = level.getBlockState(blocker);
+        if (resumeTarget == null && isClearable(blockerState) && clearedObstacles < MAX_CLEARED_OBSTACLES
+            && bot.canInteractWithBlock(blocker, -0.5)) {
+            resumeTarget = pos;
+            resumeTask = task;
+            clearedObstacles++;
+            target = blocker;
+            task = Task.MINE_APPROACH;
             return null;
         }
-        if (hit.getType() != HitResult.Type.BLOCK) {
-            // The ray reached the center without touching the outline (a thin block): aim at the nearest face.
-            Direction face = Direction.getNearest(eye.x - center.x, eye.y - center.y, eye.z - center.z);
-            return new BlockHitResult(center, face, pos, false);
+        // Something solid in the way: step closer and look again.
+        walkTowards(goal);
+        if (isStuck(goal)) {
+            fail("view of " + pos.toShortString() + " is blocked by " + blockerState.getBlock().getName().getString());
         }
-        return hit;
+        return null;
+    }
+
+    /** A ray from the eyes to the block's center or to a face turned toward the bot that is not blocked. */
+    @Nullable
+    private BlockHitResult findVisibleFace(ServerLevel level, BlockPos pos) {
+        Vec3 eye = bot.getEyePosition();
+        Vec3 center = Vec3.atCenterOf(pos);
+        List<Vec3> points = new ArrayList<>();
+        points.add(center);
+        for (Direction face : Direction.values()) {
+            Vec3 normal = Vec3.atLowerCornerOf(face.getNormal());
+            if (normal.dot(eye.subtract(center)) > 0.0) {
+                points.add(center.add(normal.scale(0.45)));
+            }
+        }
+        for (Vec3 point : points) {
+            BlockHitResult hit = level.clip(new ClipContext(eye, point, ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, bot));
+            if (hit.getType() == HitResult.Type.BLOCK && hit.getBlockPos().equals(pos)) {
+                return hit;
+            }
+            if (hit.getType() == HitResult.Type.MISS) {
+                // The ray reached the point without touching any outline (a thin block): aim at the nearest face.
+                Direction face = Direction.getNearest(eye.x - center.x, eye.y - center.y, eye.z - center.z);
+                return new BlockHitResult(point, face, pos, false);
+            }
+        }
+        return null;
+    }
+
+    /** Leaves and plants a player would just break through to reach a block behind them. */
+    private static boolean isClearable(BlockState state) {
+        return !state.isAir() && (state.is(BlockTags.LEAVES) || state.canBeReplaced());
+    }
+
+    /** Back to the real target after clearing an obstacle. */
+    private void resume() {
+        target = resumeTarget;
+        task = resumeTask;
+        resumeTarget = null;
+        resumeTask = null;
+        bestDistanceSq = Double.MAX_VALUE;
+        ticksWithoutProgress = 0;
+        breakTicks = 0;
     }
 
     private void walkTowards(Vec3 goal) {
@@ -336,12 +417,16 @@ public final class BotController {
     private void finish(String message) {
         task = Task.IDLE;
         target = null;
+        resumeTarget = null;
+        resumeTask = null;
         reporter.accept(message);
     }
 
     private void fail(String message) {
         task = Task.IDLE;
         target = null;
+        resumeTarget = null;
+        resumeTask = null;
         reporter.accept("failed: " + message);
     }
 }

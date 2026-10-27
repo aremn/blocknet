@@ -10,6 +10,8 @@ import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.LeavesBlock;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.neoforge.gametest.GameTestHolder;
 import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
@@ -96,6 +98,28 @@ public final class BotGameTests {
             // Stone by hand: 150 ticks of digging.
             helper.assertTrue(helper.getTick() >= 150, "stone broke too fast: tick " + helper.getTick());
             BotManager.despawn("BnPuncher");
+        });
+    }
+
+    /** Leaves between the bot and its target: it breaks through them instead of giving up. */
+    @GameTest(template = "arena", timeoutTicks = 300)
+    public static void breaksLeavesInTheWay(GameTestHelper helper) {
+        TestArena.floor(helper);
+        BlockPos dirt = new BlockPos(4, 1, 4);
+        helper.setBlock(dirt, Blocks.DIRT);
+        BlockState leaves = Blocks.OAK_LEAVES.defaultBlockState().setValue(LeavesBlock.PERSISTENT, true);
+        for (int z = 3; z <= 5; z++) {
+            for (int y = 1; y <= 3; y++) {
+                helper.setBlock(new BlockPos(3, y, z), leaves);
+            }
+        }
+        helper.setBlock(new BlockPos(4, 2, 4), leaves);
+        BotPlayer bot = TestArena.spawnBot(helper, "BnLeaves", new Vec3(1.5, 1, 4.5));
+        bot.controller().mine(helper.absolutePos(dirt), message -> {});
+        helper.succeedWhen(() -> {
+            helper.assertBlockPresent(Blocks.AIR, dirt);
+            helper.assertTrue(bot.getInventory().countItem(Items.DIRT) >= 1, "bot picked up the dirt behind the leaves");
+            BotManager.despawn("BnLeaves");
         });
     }
 }
