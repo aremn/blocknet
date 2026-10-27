@@ -1,0 +1,22 @@
+package dev.blocknet;
+
+import com.mojang.logging.LogUtils;
+import net.neoforged.bus.api.IEventBus;
+import net.neoforged.fml.common.Mod;
+import org.slf4j.Logger;
+
+/**
+ * Entry point of the Blocknet body mod.
+ *
+ * <p>The body is a server-side mod: the bot is a real {@code ServerPlayer}, so clients do not need
+ * this mod installed. The "brain" (LLM agent) runs as a separate process, see docs/ARCHITECTURE.md.
+ */
+@Mod(Blocknet.MOD_ID)
+public final class Blocknet {
+    public static final String MOD_ID = "blocknet_ai";
+    public static final Logger LOGGER = LogUtils.getLogger();
+
+    public Blocknet(IEventBus modEventBus) {
+        LOGGER.info("Blocknet body loaded");
+    }
+}

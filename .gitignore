@@ -1,0 +1,59 @@
+### Gradle ###
+.gradle
+build/
+!gradle/wrapper/gradle-wrapper.jar
+!**/src/**/build/
+
+### IntelliJ IDEA ###
+.idea/
+*.iws
+*.iml
+*.ipr
+out/
+!**/src/**/out/
+
+.run/
+
+### Eclipse ###
+.apt_generated
+.classpath
+.eclipse/
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+bin/
+!**/src/**/bin/
+
+### VS Code ###
+.vscode/
+
+### Mac OS ###
+.DS_Store
+
+### Minecraft Modding ###
+run/
+!**/src/**/run/
+**/src/generated/**/.cache/
+repo/
+!**/src/**/repo/
+
+### Blocknet ###
+# Local secrets and machine-specific settings: never commit
+.env
+.env.*
+*.local.properties
+local.properties
+
+# Logs and crash reports from local runs
+*.log
+crash-reports/
+
+# Brain (Python) virtualenvs and caches, for when brain/ appears
+.venv/
+__pycache__/
+*.pyc
+
+# Third-party sources pulled locally for reading, not vendored
+_src/
