@@ -29,6 +29,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.function.Predicate;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.item.ItemStack;
@@ -84,6 +85,7 @@ public final class CraftingCalculation {
     private final ServerLevel level;
     private final RecipeCatalog catalog;
     private final Limits limits;
+    private final Predicate<Process> supported;
     private final Map<ItemKey, Integer> costs = new HashMap<>();
     private final Set<FailedRequest> failed = new HashSet<>();
     private long deadline;
@@ -100,9 +102,18 @@ public final class CraftingCalculation {
     }
 
     public CraftingCalculation(ServerLevel level, RecipeCatalog catalog, Limits limits) {
+        this(level, catalog, limits, process -> true);
+    }
+
+    public CraftingCalculation(ServerLevel level, RecipeCatalog catalog, Limits limits, Predicate<Process> supported) {
         this.level = level;
         this.catalog = catalog;
         this.limits = limits;
+        this.supported = supported;
+    }
+
+    private List<Process> processes(ItemKey key) {
+        return catalog.processes(key).stream().filter(supported).toList();
     }
 
     public CraftPlan plan(ItemStack output, long count, Iterable<ItemStack> inventory) {
@@ -114,8 +125,14 @@ public final class CraftingCalculation {
         return plan(output, count, inventory, availableStations, List.of());
     }
 
+    /** Craft a new batch, preserving the caller's existing target stock. */
     public CraftPlan plan(ItemStack output, long count, Iterable<ItemStack> inventory,
         Set<String> availableStations, List<RememberedSource> sources) {
+        return plan(output, count, inventory, availableStations, sources, CraftPlan.Mode.CRAFT);
+    }
+
+    public CraftPlan plan(ItemStack output, long count, Iterable<ItemStack> inventory,
+        Set<String> availableStations, List<RememberedSource> sources, CraftPlan.Mode mode) {
         this.sources = List.copyOf(sources);
         this.availableStations = Set.copyOf(availableStations);
         if (!level.getServer().isSameThread()) {
@@ -129,6 +146,11 @@ public final class CraftingCalculation {
         carried = Map.copyOf(initial.original);
         for (RememberedSource source : sources) {
             source.contents().forEach((key, amount) -> initial.original.merge(key, amount, Long::sum));
+        }
+        if (mode == CraftPlan.Mode.CRAFT) {
+            // Reserve all existing target stock, including remembered stock. It cannot pay for
+            // the order, even indirectly through a compression cycle or recipe remainder.
+            initial.original.remove(target);
         }
         supplied = initial.keys();
         costs.clear();
@@ -160,6 +182,10 @@ public final class CraftingCalculation {
         if (status == CraftPlan.Status.LIMIT) {
             state = new CraftingSimulationState(initial);
         }
+        if (status == CraftPlan.Status.MISSING && processes(target).isEmpty()
+            && state.missing.containsKey(target.text())) {
+            status = CraftPlan.Status.NO_RECIPE;
+        }
         List<CraftPlan.Step> steps = compact(state.steps, initial);
         var remaining = new TreeMap<>(state.taken);
         var inventoryTaken = new TreeMap<ItemKey, Long>();
@@ -180,7 +206,7 @@ public final class CraftingCalculation {
                 }
             });
         }
-        return new CraftPlan(status, target, count, steps, inventoryTaken, state.missing, state.generated,
+        return new CraftPlan(status, mode, target, count, steps, inventoryTaken, state.missing, state.generated,
             state.stations, List.copyOf(state.hints), withdrawals);
     }
 
@@ -206,7 +232,7 @@ public final class CraftingCalculation {
         }
         var path = new LinkedHashSet<>(ancestors);
         path.add(key);
-        var patterns = new ArrayList<>(catalog.processes(key));
+        var patterns = new ArrayList<>(processes(key));
         var scores = new HashMap<Process, Integer>();
         for (var process : patterns) {
             scores.put(process, processCost(process, new HashSet<>(path)));
@@ -262,6 +288,11 @@ public final class CraftingCalculation {
         state.missing.merge(label == null ? key.text() : label, count, Long::sum);
         for (String type : catalog.hints(key)) {
             state.hints.add(key.text() + ": can be made in " + type);
+        }
+        for (Process process : catalog.processes(key)) {
+            if (!supported.test(process)) {
+                state.hints.add(key.text() + ": can be made in " + process.type());
+            }
         }
     }
 
@@ -592,8 +623,8 @@ public final class CraftingCalculation {
             path.remove(key);
             return cached;
         }
-        int best = catalog.processes(key).isEmpty() ? 100 : 1_000_000;
-        for (Process process : catalog.processes(key)) {
+        int best = processes(key).isEmpty() ? 100 : 1_000_000;
+        for (Process process : processes(key)) {
             best = Math.min(best, processCost(process, path));
         }
         path.remove(key);

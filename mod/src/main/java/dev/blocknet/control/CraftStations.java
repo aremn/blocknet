@@ -3,6 +3,7 @@ package dev.blocknet.control;
 import dev.blocknet.body.BotPlayer;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.ResourceLocation;
@@ -13,6 +14,7 @@ import net.minecraft.world.phys.Vec3;
 
 /** A bounded view query: only the first block hit by an eye ray can supply a station fact. */
 public final class CraftStations {
+    public static final Set<String> EXECUTABLE = Set.of("inventory", "crafting_table", "furnace", "blast_furnace", "smoker");
     private static final int VIEW_DISTANCE = 6;
     private static final String[] STATIONS = {"crafting_table", "furnace", "blast_furnace", "smoker", "stonecutter", "smithing_table"};
 

@@ -425,14 +425,13 @@ public final class CraftExecuteGameTests {
     }
 
     @GameTest(template = "arena", timeoutTicks = 80)
-    public static void unsupportedStationFailsWithoutInventingOutput(GameTestHelper helper) {
+    public static void unsupportedStationCannotReplaceMissingRunnableRecipeInputs(GameTestHelper helper) {
         BotPlayer bot = bot(helper, "BnCraftCut", stack(Items.STONE, 1), stack(Items.STONECUTTER, 1));
         var before = inventory(bot);
         List<String> reports = new ArrayList<>();
         bot.controller().craft(new ItemStack(Items.STONE_STAIRS), 1, reports::add);
         helper.succeedWhen(() -> {
-            done(helper, bot, reports, "failed: step 1 ");
-            helper.assertTrue(reports.getFirst().endsWith("unsupported station stonecutter"), reports.toString());
+            done(helper, bot, reports, "blocked: missing ");
             helper.assertTrue(inventory(bot).equals(before), "no unsupported output or ingredient movement");
             BotManager.despawn("BnCraftCut");
         });

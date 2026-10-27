@@ -38,10 +38,16 @@ final class CraftExecutor {
     static final int CLICK_DELAY = 3;
     private enum Phase { WITHDRAW, STEP, STATION, OPEN, PLACE, READY, TAKE, LOAD, COOK, DRAIN, CLEANUP, COLLECT }
 
+    private record SourceItem(String dimension, long position, String description, ItemKey item) {}
+
     private final BotPlayer bot;
     private final BotController controller;
     private final ItemStack target;
     private final int count;
+    private final CraftPlan.Mode mode;
+    private final long initiallyHeld;
+    private long craftedTarget;
+    private final Map<SourceItem, Long> taken = new LinkedHashMap<>();
     private final Map<String, BlockPos> stations = new LinkedHashMap<>();
     private final Map<String, BlockPos> placed = new LinkedHashMap<>();
     private final List<String> notes = new ArrayList<>();
@@ -73,17 +79,26 @@ final class CraftExecutor {
     private Map<ItemKey, Long> beforeStep;
     private AbstractContainerMenu expectedMenu;
 
-    CraftExecutor(BotPlayer bot, BotController controller, ItemStack target, int count) {
+    CraftExecutor(BotPlayer bot, BotController controller, ItemStack target, int count, CraftPlan.Mode mode) {
         this.bot = bot;
         this.controller = controller;
         this.target = target.copyWithCount(1);
         this.count = count;
+        this.mode = mode;
+        initiallyHeld = amount(new ItemKey(target));
     }
 
     void start() {
+        if (mode == CraftPlan.Mode.OBTAIN && initiallyHeld >= count) {
+            complete("already have " + initiallyHeld + " " + new ItemKey(target));
+            return;
+        }
         bot.closeContainer();
         replan();
-        if (plan.status() == CraftPlan.Status.MISSING) {
+        if (plan.status() == CraftPlan.Status.NO_RECIPE) {
+            complete("blocked: no recipe for " + plan.target()
+                + (plan.hints().isEmpty() ? "" : "; " + String.join("; ", plan.hints())));
+        } else if (plan.status() == CraftPlan.Status.MISSING) {
             complete("blocked: missing " + plan.missing().entrySet().stream()
                 .map(entry -> entry.getValue() + " " + entry.getKey()).collect(Collectors.joining(", ")));
         } else if (plan.status() != CraftPlan.Status.OK) {
@@ -96,8 +111,15 @@ final class CraftExecutor {
         var inventory = new ArrayList<ItemStack>();
         // Recipe placement uses the player's main inventory, not equipped armor or offhand.
         bot.getInventory().items.forEach(stack -> inventory.add(stack.copy()));
-        plan = new CraftingCalculation(bot.serverLevel(), PlannerCatalogs.get(bot.serverLevel()))
-            .plan(target, count, inventory, stations.keySet(), bot.containerMemory().sources(bot));
+        long remaining = mode == CraftPlan.Mode.CRAFT ? count - craftedTarget : count;
+        if (remaining <= 0) {
+            stepIndex = plan.steps().size();
+            withdrawalIndex = plan.withdrawals().size();
+            return;
+        }
+        plan = new CraftingCalculation(bot.serverLevel(), PlannerCatalogs.get(bot.serverLevel()),
+            CraftingCalculation.Limits.DEFAULT, process -> CraftStations.EXECUTABLE.contains(process.station()))
+            .plan(target, remaining, inventory, stations.keySet(), bot.containerMemory().sources(bot), mode);
         stepIndex = 0;
         withdrawalIndex = 0;
     }
@@ -168,12 +190,19 @@ final class CraftExecutor {
             fail("container is in another dimension");
             return;
         }
+        long beforeWithdrawal = amount(step.item());
         withdrawal = new ContainerTask(bot, controller, BlockPos.of(step.source().position()),
             ContainerTask.Action.WITHDRAW, stack -> !stack.isEmpty() && new ItemKey(stack).equals(step.item()),
             step.count(), report -> {
                 withdrawal = null;
                 if (finished) {
                     return;
+                }
+                long moved = amount(step.item()) - beforeWithdrawal;
+                if (moved > 0) {
+                    var sourceItem = new SourceItem(step.source().dimension(), step.source().position(),
+                        step.source().description(), step.item());
+                    taken.merge(sourceItem, moved, Long::sum);
                 }
                 if (report.startsWith("failed:")) {
                     if (replanned) {
@@ -231,7 +260,7 @@ final class CraftExecutor {
             return;
         }
         String station = step().station();
-        if (!List.of("inventory", "crafting_table", "furnace", "blast_furnace", "smoker").contains(station)) {
+        if (!CraftStations.EXECUTABLE.contains(station)) {
             fail("unsupported station " + station);
             return;
         }
@@ -612,13 +641,39 @@ final class CraftExecutor {
             fail("material balance changed");
             return;
         }
+        ItemKey targetKey = new ItemKey(target);
+        craftedTarget += step().outputs().getOrDefault(targetKey, 0L)
+            - step().inputs().getOrDefault(targetKey, 0L);
         stepIndex++;
         next(Phase.STEP);
     }
 
     private void cleanup() {
         if (placed.isEmpty()) {
-            complete("crafted " + count + " " + new ItemKey(target));
+            ItemKey key = new ItemKey(target);
+            long held = amount(key);
+            if (held < (mode == CraftPlan.Mode.CRAFT ? initiallyHeld + count : count)
+                || mode == CraftPlan.Mode.CRAFT && craftedTarget < count) {
+                fail("target items changed before completion");
+                return;
+            }
+            var details = new ArrayList<String>();
+            if (mode == CraftPlan.Mode.OBTAIN && initiallyHeld > 0) {
+                details.add("had " + initiallyHeld);
+            }
+            taken.forEach((sourceItem, amount) -> details.add("took " + amount
+                + (mode == CraftPlan.Mode.OBTAIN && sourceItem.item().equals(key) ? "" : " " + sourceItem.item())
+                + " from " + sourceItem.description()));
+            if (mode == CraftPlan.Mode.OBTAIN && craftedTarget > 0) {
+                details.add("crafted " + craftedTarget);
+            }
+            String message = mode == CraftPlan.Mode.CRAFT ? "crafted " + craftedTarget + " " + key
+                : "got " + held + " " + key;
+            if (!details.isEmpty()) {
+                message += mode == CraftPlan.Mode.CRAFT ? " (" + String.join(", ", details) + ")"
+                    : ": " + String.join(", ", details);
+            }
+            complete(message);
             return;
         }
         var entry = placed.entrySet().iterator().next();

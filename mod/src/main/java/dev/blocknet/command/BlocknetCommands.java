@@ -11,6 +11,7 @@ import com.mojang.brigadier.exceptions.SimpleCommandExceptionType;
 import com.mojang.brigadier.suggestion.SuggestionProvider;
 import dev.blocknet.body.BotManager;
 import dev.blocknet.body.BotPlayer;
+import dev.blocknet.crafting.CraftPlan;
 import dev.blocknet.crafting.CraftingCalculation;
 import dev.blocknet.control.CraftStations;
 import dev.blocknet.control.ContainerFilter;
@@ -39,8 +40,9 @@ import net.neoforged.neoforge.event.RegisterCommandsEvent;
  * /blocknet list
  * /blocknet status [name]
  * /blocknet inv [name]
- * /blocknet plan [name] &lt;item&gt; [count]
+ * /blocknet plan [craft|get] [name] &lt;item&gt; [count]
  * /blocknet craft [name] &lt;item&gt; [count]
+ * /blocknet get [name] &lt;item&gt; [count]
  * /blocknet changes [name]
  * /blocknet goto [name] &lt;pos&gt;
  * /blocknet come [name]
@@ -82,7 +84,8 @@ public final class BlocknetCommands {
             .then(Commands.literal("list")
                 .executes(BlocknetCommands::list))
             .then(planCommand(buildContext))
-            .then(craftCommand(buildContext))
+            .then(craftCommand(buildContext, CraftPlan.Mode.CRAFT))
+            .then(craftCommand(buildContext, CraftPlan.Mode.OBTAIN))
             .then(containerCommand("deposit"))
             .then(containerCommand("withdraw"))
             .then(memoryCommand())
@@ -150,47 +153,66 @@ public final class BlocknetCommands {
         var root = Commands.literal("plan");
         root.then(planItem(buildContext, false));
         root.then(Commands.argument("name", StringArgumentType.word()).suggests(BOT_NAMES).then(planItem(buildContext, true)));
+        for (CraftPlan.Mode mode : CraftPlan.Mode.values()) {
+            var option = Commands.literal(mode == CraftPlan.Mode.CRAFT ? "craft" : "get");
+            option.then(planItem(buildContext, false, mode));
+            option.then(Commands.argument("name", StringArgumentType.word()).suggests(BOT_NAMES)
+                .then(planItem(buildContext, true, mode)));
+            root.then(option);
+        }
         return root;
     }
 
-    private static LiteralArgumentBuilder<CommandSourceStack> craftCommand(net.minecraft.commands.CommandBuildContext buildContext) {
-        var root = Commands.literal("craft");
-        root.then(craftItem(buildContext, false));
-        root.then(Commands.argument("name", StringArgumentType.word()).suggests(BOT_NAMES).then(craftItem(buildContext, true)));
+    private static LiteralArgumentBuilder<CommandSourceStack> craftCommand(
+            net.minecraft.commands.CommandBuildContext buildContext, CraftPlan.Mode mode) {
+        var root = Commands.literal(mode == CraftPlan.Mode.CRAFT ? "craft" : "get");
+        root.then(craftItem(buildContext, false, mode));
+        root.then(Commands.argument("name", StringArgumentType.word()).suggests(BOT_NAMES).then(craftItem(buildContext, true, mode)));
         return root;
     }
 
     private static RequiredArgumentBuilder<CommandSourceStack, net.minecraft.commands.arguments.item.ItemInput> craftItem(
-            net.minecraft.commands.CommandBuildContext buildContext, boolean named) {
+            net.minecraft.commands.CommandBuildContext buildContext, boolean named, CraftPlan.Mode mode) {
         return Commands.argument("item", ItemArgument.item(buildContext))
-            .executes(c -> craft(c, named, 1))
+            .executes(c -> craft(c, named, 1, mode))
             .then(Commands.argument("count", IntegerArgumentType.integer(1, 1000000))
-                .executes(c -> craft(c, named, IntegerArgumentType.getInteger(c, "count"))));
+                .executes(c -> craft(c, named, IntegerArgumentType.getInteger(c, "count"), mode)));
     }
 
-    private static int craft(CommandContext<CommandSourceStack> context, boolean named, int count) throws CommandSyntaxException {
+    private static int craft(CommandContext<CommandSourceStack> context, boolean named, int count,
+            CraftPlan.Mode mode) throws CommandSyntaxException {
         BotPlayer bot = named ? bot(context) : nearestBot(context.getSource());
-        bot.controller().craft(ItemArgument.getItem(context, "item").createItemStack(1, false), count,
-            reporter(context.getSource(), bot));
+        var item = ItemArgument.getItem(context, "item").createItemStack(1, false);
+        if (mode == CraftPlan.Mode.CRAFT) {
+            bot.controller().craft(item, count, reporter(context.getSource(), bot));
+        } else {
+            bot.controller().get(item, count, reporter(context.getSource(), bot));
+        }
         return 1;
     }
 
     private static RequiredArgumentBuilder<CommandSourceStack, net.minecraft.commands.arguments.item.ItemInput> planItem(
             net.minecraft.commands.CommandBuildContext buildContext, boolean named) {
-        return Commands.argument("item", ItemArgument.item(buildContext))
-            .executes(c -> plan(c, named, 1))
-            .then(Commands.argument("count", IntegerArgumentType.integer(1, 1000000))
-                .executes(c -> plan(c, named, IntegerArgumentType.getInteger(c, "count"))));
+        return planItem(buildContext, named, CraftPlan.Mode.CRAFT);
     }
 
-    private static int plan(CommandContext<CommandSourceStack> context, boolean named, int count) throws CommandSyntaxException {
+    private static RequiredArgumentBuilder<CommandSourceStack, net.minecraft.commands.arguments.item.ItemInput> planItem(
+            net.minecraft.commands.CommandBuildContext buildContext, boolean named, CraftPlan.Mode mode) {
+        return Commands.argument("item", ItemArgument.item(buildContext))
+            .executes(c -> plan(c, named, 1, mode))
+            .then(Commands.argument("count", IntegerArgumentType.integer(1, 1000000))
+                .executes(c -> plan(c, named, IntegerArgumentType.getInteger(c, "count"), mode)));
+    }
+
+    private static int plan(CommandContext<CommandSourceStack> context, boolean named, int count,
+            CraftPlan.Mode mode) throws CommandSyntaxException {
         BotPlayer bot = named ? bot(context) : nearestBot(context.getSource());
         var inventory = new ArrayList<ItemStack>();
-        for (int slot = 0; slot < bot.getInventory().getContainerSize(); slot++)
-            inventory.add(bot.getInventory().getItem(slot).copy());
-        var result = new CraftingCalculation(bot.serverLevel(), dev.blocknet.crafting.PlannerCatalogs.get(bot.serverLevel()))
+        bot.getInventory().items.forEach(stack -> inventory.add(stack.copy()));
+        var result = new CraftingCalculation(bot.serverLevel(), dev.blocknet.crafting.PlannerCatalogs.get(bot.serverLevel()),
+            CraftingCalculation.Limits.DEFAULT, process -> CraftStations.EXECUTABLE.contains(process.station()))
             .plan(ItemArgument.getItem(context, "item").createItemStack(1, false), count, inventory,
-                CraftStations.visible(bot).keySet(), bot.containerMemory().sources(bot));
+                CraftStations.visible(bot).keySet(), bot.containerMemory().sources(bot), mode);
         for (String line : result.text().split("\\n"))
             context.getSource().sendSuccess(() -> Component.literal(line), false);
         return 1;

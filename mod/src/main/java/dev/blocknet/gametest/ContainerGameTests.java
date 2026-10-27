@@ -254,6 +254,9 @@ public final class ContainerGameTests {
                 bot.controller().craft(new ItemStack(Items.IRON_PICKAXE), 1, reports::add);
             }).thenWaitUntil(() -> {
                 report(helper, bot, reports, "crafted 1 iron_pickaxe");
+                BlockPos pos = helper.absolutePos(CHEST);
+                helper.assertTrue(reports.equals(List.of("crafted 1 iron_pickaxe (took 3 iron_ingot from chest "
+                    + pos.getX() + " " + pos.getY() + " " + pos.getZ() + ")")), reports.toString());
                 helper.assertTrue(bot.getInventory().countItem(Items.IRON_PICKAXE) == 1 && chest.countItem(Items.IRON_INGOT) == 0, "craft consumed chest iron");
                 helper.assertTrue(remembered(bot).isEmpty(), "memory remembers empty chest");
             }).thenExecute(() -> BotManager.despawn("BnContainerCraft")).thenSucceed();

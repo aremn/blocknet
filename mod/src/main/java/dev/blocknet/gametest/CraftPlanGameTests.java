@@ -282,10 +282,36 @@ public final class CraftPlanGameTests {
     public static void keepsDataComponentsDistinct(GameTestHelper helper) {
         var named = stack(Items.STICK, 3);
         named.set(DataComponents.CUSTOM_NAME, Component.literal("kept"));
-        var plan = plan(helper, Items.STICK, 2, named, stack(Items.STICK, 2));
+        var plan = new CraftingCalculation(helper.getLevel(), PlannerCatalogs.get(helper.getLevel()))
+            .plan(stack(Items.STICK, 1), 2, List.of(named, stack(Items.STICK, 2)), Set.of(), List.of(),
+                CraftPlan.Mode.OBTAIN);
         ok(helper, plan);
         helper.assertTrue(
             plan.steps().isEmpty() && plan.taken().size() == 1 && amount(plan.taken(), Items.STICK) == 2,
+            plan.text());
+        helper.succeed();
+    }
+
+    @GameTest(template = "arena")
+    public static void craftKeepsOriginalTargetSeparateFromNewByproducts(GameTestHelper helper) {
+        var ingredients = NonNullList.<Ingredient>create();
+        ingredients.add(Ingredient.of(Items.MILK_BUCKET));
+        var intermediate = new ShapelessRecipe("", CraftingBookCategory.MISC, stack(Items.STONE, 1), ingredients) {
+            @Override
+            public NonNullList<ItemStack> getRemainingItems(CraftingInput input) {
+                return NonNullList.withSize(input.size(), stack(Items.DIAMOND, 1));
+            }
+        };
+        var holder = new RecipeHolder<>(ResourceLocation.fromNamespaceAndPath(Blocknet.MOD_ID, "target_byproduct"), intermediate);
+        var catalog = new RecipeCatalog(helper.getLevel(), List.of(holder,
+            fixture("target_order", Items.DIAMOND, Ingredient.of(Items.STONE))));
+        var plan = new CraftingCalculation(helper.getLevel(), catalog)
+            .plan(stack(Items.DIAMOND, 1), 3, List.of(stack(Items.DIAMOND, 5), stack(Items.MILK_BUCKET, 3)));
+        ok(helper, plan);
+        helper.assertTrue(amount(plan.taken(), Items.DIAMOND) == 0
+            && amount(plan.taken(), Items.MILK_BUCKET) == 3 && amount(plan.leftovers(), Items.DIAMOND) == 3,
+            "three recipe results plus three new byproducts, keeping five old diamonds: " + plan.text());
+        helper.assertTrue(plan.steps().stream().mapToLong(step -> amount(step.outputs(), Items.DIAMOND)).sum() == 6,
             plan.text());
         helper.succeed();
     }
@@ -561,7 +587,7 @@ public final class CraftPlanGameTests {
         var catalog = new RecipeCatalog(helper.getLevel(), List.of(holder));
         var plan =
             new CraftingCalculation(helper.getLevel(), catalog).plan(stack(Items.DIAMOND, 1), 1, List.of());
-        helper.assertTrue(plan.status() == CraftPlan.Status.MISSING
+        helper.assertTrue(plan.status() == CraftPlan.Status.NO_RECIPE
                 && plan.hints().stream().anyMatch(
                     hint -> hint.contains("can be made in " + type.getKey().location())),
             plan.text());

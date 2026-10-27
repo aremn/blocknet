@@ -1,6 +1,7 @@
 package dev.blocknet.control;
 
 import dev.blocknet.body.BotPlayer;
+import dev.blocknet.crafting.CraftPlan;
 import dev.blocknet.memory.ContainerMemory;
 import dev.blocknet.state.ItemDescriber;
 import dev.blocknet.state.ToolFacts;
@@ -272,8 +273,16 @@ public final class BotController {
     }
 
     public void craft(ItemStack item, int count, Consumer<String> reporter) {
+        craft(item, count, CraftPlan.Mode.CRAFT, reporter);
+    }
+
+    public void get(ItemStack item, int count, Consumer<String> reporter) {
+        craft(item, count, CraftPlan.Mode.OBTAIN, reporter);
+    }
+
+    private void craft(ItemStack item, int count, CraftPlan.Mode mode, Consumer<String> reporter) {
         start(Task.CRAFT, bot.blockPosition(), reporter);
-        crafting = new CraftExecutor(bot, this, item, count);
+        crafting = new CraftExecutor(bot, this, item, count, mode);
         crafting.start();
     }
 

@@ -89,6 +89,10 @@ public final class Process {
         return station;
     }
 
+    public ResourceLocation type() {
+        return BuiltInRegistries.RECIPE_TYPE.getKey(holder.value().getType());
+    }
+
     public ItemKey output() {
         return output;
     }

@@ -12,9 +12,12 @@ import java.util.stream.Collectors;
 import net.minecraft.resources.ResourceLocation;
 
 /** Value-only plan. Missing plans are hypothetical; limit plans must never be executed. */
-public record CraftPlan(Status status, ItemKey target, long count, List<Step> steps, Map<ItemKey, Long> taken,
+public record CraftPlan(Status status, Mode mode, ItemKey target, long count, List<Step> steps, Map<ItemKey, Long> taken,
     Map<String, Long> missing, Map<ItemKey, Long> leftovers, Set<String> neededStations, List<String> hints, List<Withdrawal> withdrawals) {
-    public enum Status { OK, MISSING, LIMIT }
+    public enum Status { OK, MISSING, NO_RECIPE, LIMIT }
+
+    /** CRAFT adds new recipe output; OBTAIN may satisfy the target from existing stock. */
+    public enum Mode { CRAFT, OBTAIN }
 
     public record Withdrawal(RememberedSource source, ItemKey item, long count) {}
 
@@ -49,7 +52,11 @@ public record CraftPlan(Status status, ItemKey target, long count, List<Step> st
 
     public String text() {
         StringBuilder text =
-            new StringBuilder("plan " + count + " " + target + ": " + status.name().toLowerCase(Locale.ROOT));
+            new StringBuilder("plan " + (mode == Mode.CRAFT ? "craft " : "get ") + count + " " + target
+                + ": " + status.name().toLowerCase(Locale.ROOT));
+        if (status == Status.NO_RECIPE) {
+            text.append("\nblocked: no recipe for ").append(target);
+        }
         if (!taken.isEmpty()) {
             text.append("\nuse: ").append(items(taken));
         }
