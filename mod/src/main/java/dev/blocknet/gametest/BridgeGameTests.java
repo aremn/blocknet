@@ -41,7 +41,9 @@ public final class BridgeGameTests {
                 check(read(input).has("error"), "wrong token rejected");
                 output.println("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"hello\",\"params\":{\"protocol\":1,\"token\":\"test-secret\"}}");
                 var hello = read(input).getAsJsonObject("result");
-                check(hello.get("protocol").getAsInt() == 1 && hello.getAsJsonArray("tools").size() == 18, "hello lists all tools");
+                check(hello.get("protocol").getAsInt() == 1 && hello.getAsJsonArray("tools").size() == 19, "hello lists all tools");
+                check(hello.getAsJsonArray("tools").asList().stream()
+                    .anyMatch(tool -> tool.getAsJsonObject().get("name").getAsString().equals("gather")), "hello lists gather");
                 check(hello.getAsJsonArray("bots").toString().contains("BnBridge"), "hello lists bot");
                 output.println("{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tool.call\",\"params\":{\"bot\":\"BnBridge\",\"tool\":\"status\"}}");
                 check(read(input).getAsJsonObject("result").get("result").getAsString().contains("health"), "status reports body");

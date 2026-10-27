@@ -88,6 +88,7 @@ public final class BlocknetCommands {
             .then(planCommand(buildContext))
             .then(craftCommand(buildContext, CraftPlan.Mode.CRAFT))
             .then(craftCommand(buildContext, CraftPlan.Mode.OBTAIN))
+            .then(gatherCommand(buildContext))
             .then(containerCommand("deposit"))
             .then(containerCommand("withdraw"))
             .then(memoryCommand())
@@ -148,6 +149,24 @@ public final class BlocknetCommands {
                 bot.controller().stop();
                 return 1;
             })));
+    }
+
+    private static LiteralArgumentBuilder<CommandSourceStack> gatherCommand(net.minecraft.commands.CommandBuildContext buildContext) {
+        var root = Commands.literal("gather");
+        root.then(gatherItem(buildContext, false));
+        root.then(Commands.argument("name", StringArgumentType.word()).suggests(BOT_NAMES).then(gatherItem(buildContext, true)));
+        return root;
+    }
+
+    private static RequiredArgumentBuilder<CommandSourceStack, net.minecraft.commands.arguments.item.ItemInput> gatherItem(
+            net.minecraft.commands.CommandBuildContext buildContext, boolean named) {
+        return Commands.argument("item", ItemArgument.item(buildContext))
+            .then(Commands.argument("count", IntegerArgumentType.integer(1, 1000000)).executes(context -> {
+                BotPlayer bot = named ? bot(context) : nearestBot(context.getSource());
+                bot.controller().gather(ItemArgument.getItem(context, "item").createItemStack(1, false),
+                    IntegerArgumentType.getInteger(context, "count"), reporter(context.getSource(), bot));
+                return 1;
+            }));
     }
 
     private static LiteralArgumentBuilder<CommandSourceStack> planCommand(net.minecraft.commands.CommandBuildContext buildContext) {

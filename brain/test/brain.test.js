@@ -25,7 +25,7 @@ test('rules route Russian and English short orders without the model', () => {
   assert.equal(routeRule('stop and mine coal', 'Alex'), null);
 });
 
-test('Claude arguments disable built-ins, restrict MCP, use Haiku and resume sessions', () => {
+test('Claude arguments disable built-ins, restrict MCP and stream a persistent Haiku session', () => {
   const args = buildClaudeArgs();
   const value = name => args[args.indexOf(name) + 1];
   assert.equal(value('--model'), 'haiku');
@@ -34,11 +34,12 @@ test('Claude arguments disable built-ins, restrict MCP, use Haiku and resume ses
   assert.equal(value('--permission-mode'), 'dontAsk');
   assert.equal(value('--mcp-config'), 'brain/mcp.json');
   assert.equal(value('--system-prompt-file'), 'brain/prompt.md');
-  assert.equal(value('--output-format'), 'json');
+  assert.equal(value('--input-format'), 'stream-json');
+  assert.equal(value('--output-format'), 'stream-json');
+  assert.ok(args.includes('--verbose'));
   assert.ok(args.includes('--strict-mcp-config'));
   assert.ok(!args.includes('--bare'));
   assert.ok(!args.includes('--resume'));
-  assert.deepEqual(buildClaudeArgs({ sessionId: 'abc' }).slice(-2), ['--resume', 'abc']);
 });
 
 test('MCP JSON-lines initialize and tools/list use the body registry; calls await outcome', async () => {

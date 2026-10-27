@@ -1,83 +1,84 @@
-import { spawn } from 'node:child_process';
 import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Body, configPath, option } from './body.js';
 import { addressed, routeRule } from './rules.js';
+import { ClaudeBackend } from './claude-backend.js';
+import { CodexBackend } from './codex-backend.js';
+export { buildClaudeArgs } from './claude-backend.js';
 
 const brainDir = dirname(fileURLToPath(import.meta.url));
 const rootDir = dirname(brainDir);
 
-/** All Claude switches live here so CLI changes are easy to adjust and test. */
-export function buildClaudeArgs({ sessionId, mcpConfig = 'brain/mcp.json', promptFile = 'brain/prompt.md' } = {}) {
-  const args = ['-p', '--model', 'haiku', '--mcp-config', mcpConfig, '--strict-mcp-config',
-    '--tools', '', '--allowedTools', 'mcp__blocknet', '--permission-mode', 'dontAsk',
-    '--output-format', 'json', '--system-prompt-file', promptFile];
-  if (sessionId) args.push('--resume', sessionId);
-  return args;
+export function createBackend(name, options) {
+  if (name === 'claude') return new ClaudeBackend(options);
+  if (name === 'codex') return new CodexBackend(options);
+  throw new Error('--backend must be claude or codex');
 }
 
-function runClaude(args, prompt, onChild) {
-  return new Promise((resolveCall, reject) => {
-    // Native claude/claude.exe, or node + CLAUDE_SCRIPT for Windows npm installs; never a shell.
-    const command = process.env.CLAUDE_BIN ?? 'claude';
-    const prefix = process.env.CLAUDE_SCRIPT ? [process.env.CLAUDE_SCRIPT] : [];
-    const child = spawn(command, [...prefix, ...args], { cwd: rootDir, shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
-    onChild(child);
-    let stdout = '';
-    let stderr = '';
-    child.stdout.setEncoding('utf8').on('data', text => { stdout += text; });
-    child.stderr.setEncoding('utf8').on('data', text => { stderr = (stderr + text).slice(-8000); });
-    child.on('error', reject);
-    child.on('close', code => {
-      if (code !== 0) { reject(new Error(`Claude exited ${code}: ${stderr}`)); return; }
-      try { resolveCall(JSON.parse(stdout)); }
-      catch { reject(new Error('Claude did not return JSON; check CLI flags in buildClaudeArgs')); }
-    });
-    child.stdin.on('error', () => {});
-    child.stdin.end(prompt);
-  });
+/** Acknowledge only turns which are still waiting after the short grace period. */
+export async function sendWithAck(backend, text, say, { delayMs = 700, ack = 'On it.' } = {}) {
+  let acknowledgement;
+  const timer = setTimeout(() => {
+    acknowledgement = Promise.resolve().then(() => say(ack)).catch(error => process.stderr.write(`${error.message}\n`));
+  }, delayMs);
+  try { return await backend.send(text); }
+  finally { clearTimeout(timer); await acknowledgement; }
+}
+
+/** Keep inventory/held/low-health facts from the revision-based changes tool. */
+export class CompactState {
+  facts = { inventory: 'unknown', held: 'empty', health: '' };
+  previous = '';
+  update(delta) {
+    const text = String(delta ?? '');
+    const body = text.match(/body r\d+: ([^\n]*)/u)?.[1];
+    if (body) {
+      const health = body.match(/health ([\d.]+)\/([\d.]+)/u);
+      this.facts.health = health && +health[1] / +health[2] < 0.4 ? `health low (${health[1]}/${health[2]})` : '';
+    }
+    const inventory = text.match(/inventory r\d+: ([\s\S]*?)(?=\n(?:body|task) r\d+:|$)/u)?.[1];
+    if (inventory) {
+      this.facts.held = inventory.match(/^main: (?:\d+ )?([\w:./-]+)/mu)?.[1] ?? 'empty';
+      this.facts.inventory = inventory.split('\n').filter(line => line.includes(' slots [')).map(line => {
+        const match = line.match(/^(?:(\d+) )?([\w:./-]+)/u);
+        return match ? `${match[1] ?? 1} ${match[2]}` : '';
+      }).filter(Boolean).join(', ') || 'empty';
+    }
+    const current = `inventory: ${this.facts.inventory}; held: ${this.facts.held}${this.facts.health ? `; ${this.facts.health}` : ''}`;
+    if (current === this.previous) return '';
+    this.previous = current;
+    return `\nState: ${current}`;
+  }
+  reset() { this.previous = ''; }
 }
 
 function shortReply(text) {
-  return String(text ?? '').trim().split(/\r?\n/).filter(Boolean).slice(0, 2).join(' ').slice(0, 300);
+  return String(text ?? '').trim().replace(/\s+/gu, ' ').split(' ').slice(0, 12).join(' ').slice(0, 200);
 }
 
 export async function main() {
   const bot = option('bot', process.env.BLOCKNET_BOT ?? 'Kirill');
   const aliases = option('alias', process.env.BLOCKNET_ALIASES ?? '').split(',').map(s => s.trim()).filter(Boolean);
+  if (!/^[A-Za-z0-9_]{3,16}$/.test(bot)) throw new Error('Invalid Minecraft bot name');
   const config = configPath();
   const body = new Body(config);
   body.on('diagnostic', text => process.stderr.write(`${text}\n`));
-  const stateFile = resolve(brainDir, 'state.json');
-  let state = {};
-  try { state = JSON.parse(await readFile(stateFile, 'utf8')); }
-  catch (error) { if (error.code !== 'ENOENT') throw error; }
-  const session = state[bot] ?? { turns: 0 };
-  state[bot] = session;
-  // Keep different bots' generated MCP configurations independent.
   const mcpConfig = bot === 'Kirill' ? 'brain/mcp.json' : `brain/mcp.${bot}.json`;
   const auditFile = resolve(brainDir, `logs/tool-calls.${bot}.jsonl`);
-  if (!/^[A-Za-z0-9_]{3,16}$/.test(bot)) throw new Error('Invalid Minecraft bot name');
-  await writeFile(resolve(rootDir, mcpConfig), `${JSON.stringify({ mcpServers: { blocknet: {
-    type: 'stdio', command: process.execPath, args: [resolve(brainDir, 'mcp-server.js')],
-    env: { BLOCKNET_CONFIG: config, BLOCKNET_BOT: bot, BLOCKNET_AUDIT: auditFile },
-  } } }, null, 2)}\n`);
+  const mcpServer = { command: process.execPath, args: [resolve(brainDir, 'mcp-server.js')],
+    env: { BLOCKNET_CONFIG: config, BLOCKNET_BOT: bot, BLOCKNET_AUDIT: auditFile } };
+  await writeFile(resolve(rootDir, mcpConfig), `${JSON.stringify({ mcpServers: { blocknet: { type: 'stdio', ...mcpServer } } }, null, 2)}\n`);
   await mkdir(resolve(brainDir, 'logs'), { recursive: true });
-  let child;
+  const backend = createBackend(option('backend', process.env.BLOCKNET_BACKEND ?? 'codex'), {
+    cwd: rootDir, mcpConfig, mcpServer, prompt: await readFile(resolve(brainDir, 'prompt.md'), 'utf8'),
+    maxTurns: Number(option('max-turns', '30')),
+  });
+  const compact = new CompactState();
   let busy = false;
   let generation = 0;
   const queue = [];
   const say = text => body.call(bot, 'say', { text });
-  const save = async () => {
-    // Other bots can have their own brain process and sessions in this file.
-    const current = await readFile(stateFile, 'utf8').then(JSON.parse).catch(error => {
-      if (error.code !== 'ENOENT') throw error;
-      return {};
-    });
-    current[bot] = session;
-    await writeFile(stateFile, `${JSON.stringify(current, null, 2)}\n`);
-  };
 
   async function processQueue() {
     if (busy) return;
@@ -95,38 +96,32 @@ export async function main() {
         let failure;
         let called = false;
         try {
-          if (session.turns >= 30) { delete session.sessionId; session.turns = 0; }
+          if (!backend.process || backend.process.error || backend.turns >= backend.maxTurns) compact.reset();
           const delta = await body.call(bot, 'changes');
           if (turnGeneration !== generation) continue;
-          const prompt = `You are ${bot}. ${message.from}: ${message.text}\nChanges: ${delta.result}`;
+          const prompt = `You are ${bot}. ${message.from}: ${message.text}${compact.update(delta.result)}`;
           await writeFile(auditFile, '');
           if (turnGeneration !== generation) continue;
           called = true;
-          result = await runClaude(buildClaudeArgs({ sessionId: session.sessionId, mcpConfig }), prompt, value => { child = value; });
+          const acks = /[а-яё]/iu.test(message.text) ? ['Щас.', 'Ок.', 'Делаю.'] : ['On it.'];
+          result = await sendWithAck(backend, prompt, text => turnGeneration === generation ? say(text) : undefined,
+            { ack: acks[Math.floor(Math.random() * acks.length)] });
           if (turnGeneration !== generation) continue;
-          if (result.is_error) throw new Error(shortReply(result.result) || 'Claude returned an error');
-          session.sessionId = result.session_id;
-          session.turns++;
-          await save();
-          const reply = shortReply(result.result);
+          const reply = shortReply(result.text);
           if (reply) await say(reply);
         } catch (error) {
           failure = error.message;
+          compact.reset();
           if (turnGeneration === generation) process.stderr.write(`${failure}\n`);
         } finally {
-          child = null;
-          const usage = result?.usage ?? {};
-          const toolUsage = result?.modelUsage ?? {};
           if (called) {
             const audit = await readFile(auditFile, 'utf8').catch(() => '');
             await appendFile(resolve(brainDir, 'logs/usage.jsonl'), `${JSON.stringify({
-              time: new Date(started).toISOString(), bot, duration_ms: Date.now() - started,
-              input_tokens: usage.input_tokens ?? null, output_tokens: usage.output_tokens ?? null,
-              cache_creation_input_tokens: usage.cache_creation_input_tokens ?? null,
-              cache_read_input_tokens: usage.cache_read_input_tokens ?? null,
-              total_cost_usd: result?.total_cost_usd ?? null, modelUsage: toolUsage,
-              usage, cost_usd: result?.cost_usd ?? null,
-              tool_calls: audit.trim() ? audit.trim().split('\n').length : 0, error: failure ?? null,
+              time: new Date(started).toISOString(), bot, backend: backend.backend, model: backend.model,
+              ms: result?.ms ?? Date.now() - started, ttft_ms: result?.ttftMs ?? null,
+              usage: result?.usage ?? null,
+              tool_calls: audit.trim() ? audit.trim().split('\n').length : result?.toolCalls ?? 0,
+              error: failure ?? null,
             })}\n`);
           }
         }
@@ -144,14 +139,15 @@ export async function main() {
     }
   }
 
+  function cancel() {
+    generation++;
+    backend.close();
+    compact.reset();
+    queue.length = 0;
+  }
   body.on('event', event => {
     if (event.type === 'bot.died' && event.bot.toLowerCase() === bot.toLowerCase()) {
-      generation++;
-      child?.kill();
-      queue.length = 0;
-      delete session.sessionId;
-      session.turns = 0;
-      save().catch(error => process.stderr.write(`${error.message}\n`));
+      cancel();
       process.stderr.write(`${bot} died; spawn it again to continue.\n`);
       return;
     }
@@ -159,30 +155,17 @@ export async function main() {
     const order = addressed(event.text, bot, aliases);
     if (order === null || !order) return;
     const rule = routeRule(order, event.from);
-    if (rule) {
-      if (rule.tool === 'stop') {
-        generation++;
-        child?.kill();
-        delete session.sessionId;
-        session.turns = 0;
-        queue.length = 0;
-        save().catch(error => process.stderr.write(`${error.message}\n`));
-        runRule(rule).catch(error => process.stderr.write(`${error.message}\n`));
-        return;
-      }
-      queue.push({ rule });
-      processQueue().catch(error => process.stderr.write(`${error.stack}\n`));
+    if (rule?.tool === 'stop') {
+      cancel();
+      runRule(rule).catch(error => process.stderr.write(`${error.message}\n`));
       return;
     }
-    queue.push({ from: event.from, text: event.text });
+    queue.push(rule ? { rule } : { from: event.from, text: order });
     processQueue().catch(error => process.stderr.write(`${error.stack}\n`));
   });
-  for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => {
-    child?.kill();
-    body.close();
-  });
+  for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => { cancel(); body.close(); });
   await body.ready();
-  process.stderr.write(`Brain ready for ${bot}${aliases.length ? ` (${aliases.join(', ')})` : ''}.\n`);
+  process.stderr.write(`Brain ready for ${bot}: ${backend.backend}/${backend.model}.\n`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

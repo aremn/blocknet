@@ -30,6 +30,7 @@ public final class BridgeTools {
         add("follow", "Follow a player until stopped or replaced by another task.", true, "player");
         add("goto", "Walk to exact block coordinates.", true, "x", "y", "z");
         add("mine", "Walk to and mine one block, then collect its drops; needs a suitable tool.", true, "x", "y", "z");
+        add("gather", "Mine visible blocks for count MORE items and collect drops; matching ground permits a simple staircase.", true, "item", "count");
         add("use", "Walk to and right-click one block through player interaction.", true, "x", "y", "z");
         add("craft", "Craft a count of NEW items; look for stations first and read missing-material hints.", true, "item", "count?");
         add("get", "Obtain at least count items, counting inventory and remembered sources.", true, "item", "count?");

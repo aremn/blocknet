@@ -63,7 +63,7 @@ public final class BotController {
     /** Give up on a path that has not reached its goal after this long (5 minutes). */
     private static final int MAX_PATH_TICKS = 20 * 60 * 5;
 
-    private enum Task { IDLE, GOTO, FOLLOW, MINE_APPROACH, MINE_BREAK, COLLECT, USE, CRAFT, CONTAINER, LOOK }
+    private enum Task { IDLE, GOTO, FOLLOW, MINE_APPROACH, MINE_BREAK, COLLECT, USE, CRAFT, GATHER, CONTAINER, LOOK }
 
     private int lookTicks;
     private float lookStartYaw;
@@ -71,6 +71,7 @@ public final class BotController {
 
     @Nullable
     private CraftExecutor crafting;
+    private GatherTask gathering;
     private ContainerTask containerTask;
     private BlockPos usedContainerPos;
     private AbstractContainerMenu usedContainerMenu;
@@ -231,6 +232,27 @@ public final class BotController {
         miningToolAlmostBroken = tool >= 0 && ItemDescriber.wear(bot.getInventory().getItem(tool)).equals("almost broken");
     }
 
+    public void gather(ItemStack item, int count, Consumer<String> reporter) {
+        start(Task.GATHER, bot.blockPosition(), reporter);
+        gathering = new GatherTask(bot, this, item.getItem(), count);
+    }
+
+    void gatherMine(BlockPos pos) {
+        BlockState state = bot.serverLevel().getBlockState(pos);
+        if (state.requiresCorrectToolForDrops() && bestCorrectTool(state) < 0) {
+            fail("need a tool for " + BuiltInRegistries.BLOCK.getKey(state.getBlock()));
+            return;
+        }
+        craftMine(pos);
+        bestDistanceSq = Double.MAX_VALUE;
+        ticksWithoutProgress = 0;
+    }
+
+    void gatherFinished(String message) {
+        gathering = null;
+        finish(message);
+    }
+
     private int bestCorrectTool(BlockState state) {
         int selected = bot.getInventory().selected;
         ItemStack held = bot.getInventory().getItem(selected);
@@ -352,6 +374,10 @@ public final class BotController {
     public void stop() {
         stopPathing();
         abortBreaking();
+        if (gathering != null) {
+            gathering = null;
+            reporter.accept("failed: cancelled");
+        }
         if (containerTask != null) {
             ContainerTask cancelled = containerTask;
             containerTask = null;
@@ -379,6 +405,7 @@ public final class BotController {
     }
 
     public String describe() {
+        if (gathering != null) return gathering.describe();
         if (crafting != null) {
             return crafting.describe();
         }
@@ -395,6 +422,7 @@ public final class BotController {
             case COLLECT -> "collecting drops at " + where;
             case USE -> "going to use block at " + where;
             case CRAFT -> "crafting";
+            case GATHER -> "gathering";
             case CONTAINER -> "using container at " + where;
             case LOOK -> "looking around";
             case IDLE -> "idle";
@@ -432,6 +460,7 @@ public final class BotController {
         if (crafting != null && !crafting.checkTimeout()) {
             return;
         }
+        if (gathering != null && !gathering.checkTimeout()) return;
         if (target == null) {
             return;
         }
@@ -443,6 +472,7 @@ public final class BotController {
             case COLLECT -> tickCollect(target);
             case USE -> tickUse(target);
             case CRAFT -> crafting.tick();
+            case GATHER -> gathering.tick();
             case CONTAINER -> containerTask.tick();
             case LOOK -> tickLook();
             case IDLE -> {}
@@ -697,6 +727,11 @@ public final class BotController {
                 crafting.collected();
                 return;
             }
+            if (gathering != null) {
+                task = Task.GATHER;
+                gathering.collected();
+                return;
+            }
             finish("mined block at " + pos.toShortString());
         }
     }
@@ -754,6 +789,8 @@ public final class BotController {
                 resume();
             } else if (crafting != null) {
                 crafting.stationGone();
+            } else if (gathering != null) {
+                task = Task.GATHER;
             } else {
                 finish("nothing at " + pos.toShortString());
             }
@@ -938,6 +975,7 @@ public final class BotController {
     }
 
     private void finish(String message) {
+        gathering = null;
         if (miningToolAlmostBroken) message += " (tool almost broken)";
         miningToolAlmostBroken = false;
         if (task == Task.FOLLOW) {

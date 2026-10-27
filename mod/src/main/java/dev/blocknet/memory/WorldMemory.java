@@ -139,14 +139,9 @@ public final class WorldMemory extends SavedData {
         if (kind == null && container) {
             kind = "container";
         }
-        if (kind == null) {
-            if (entries.remove(location) != null) {
-                setDirty();
-            }
-        } else {
-            entries.put(location, new Entry(location, blockId, kind, container, bot.getServer().overworld().getGameTime()));
-            setDirty();
-        }
+        entries.put(location, new Entry(location, blockId, kind == null ? "block" : kind,
+            container, bot.getServer().overworld().getGameTime()));
+        setDirty();
     }
 
     private static boolean isContainer(BotPlayer bot, BlockPos pos) {
@@ -177,7 +172,7 @@ public final class WorldMemory extends SavedData {
     }
 
     public String looked(BotPlayer bot, long since) {
-        String result = nearby(bot, 17).stream().filter(entry -> entry.seenTick() >= since)
+        String result = nearby(bot, 17).stream().filter(entry -> entry.seenTick() >= since && !entry.kind().equals("block"))
             .map(entry -> entry.description() + " [" + entry.kind()
                 + (entry.container() ? ", contents " + contents(bot, entry) : "") + "]")
             .collect(Collectors.joining("; "));
