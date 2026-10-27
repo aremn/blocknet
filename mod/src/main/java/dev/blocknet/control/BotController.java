@@ -1,6 +1,7 @@
 package dev.blocknet.control;
 
 import dev.blocknet.body.BotPlayer;
+import dev.blocknet.memory.ContainerMemory;
 import dev.blocknet.state.ItemDescriber;
 import dev.blocknet.state.ToolFacts;
 import dev.blocknet.pathing.api.IBaritone;
@@ -15,6 +16,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
 import javax.annotation.Nullable;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -29,6 +31,7 @@ import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.inventory.AbstractContainerMenu;
+import net.minecraft.world.inventory.CraftingMenu;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.block.state.BlockState;
@@ -58,10 +61,13 @@ public final class BotController {
     /** Give up on a path that has not reached its goal after this long (5 minutes). */
     private static final int MAX_PATH_TICKS = 20 * 60 * 5;
 
-    private enum Task { IDLE, GOTO, FOLLOW, MINE_APPROACH, MINE_BREAK, COLLECT, USE, CRAFT }
+    private enum Task { IDLE, GOTO, FOLLOW, MINE_APPROACH, MINE_BREAK, COLLECT, USE, CRAFT, CONTAINER }
 
     @Nullable
     private CraftExecutor crafting;
+    private ContainerTask containerTask;
+    private BlockPos usedContainerPos;
+    private AbstractContainerMenu usedContainerMenu;
 
     private final BotPlayer bot;
     private Task task = Task.IDLE;
@@ -236,6 +242,35 @@ public final class BotController {
         start(Task.USE, pos, reporter);
     }
 
+    public void lookIn(BlockPos pos, Consumer<String> reporter) {
+        container(pos, ContainerTask.Action.INSPECT, stack -> true, 0, reporter);
+    }
+
+    public void deposit(BlockPos pos, String filter, int count, Consumer<String> reporter) {
+        transfer(pos, ContainerTask.Action.DEPOSIT, filter, count, reporter);
+    }
+
+    public void withdraw(BlockPos pos, String filter, int count, Consumer<String> reporter) {
+        transfer(pos, ContainerTask.Action.WITHDRAW, filter, count, reporter);
+    }
+
+    private void transfer(BlockPos pos, ContainerTask.Action action, String filter, int count, Consumer<String> reporter) {
+        try {
+            container(pos, action, ContainerFilter.parse(bot, filter), count, reporter);
+        } catch (IllegalArgumentException exception) {
+            reporter.accept("failed: " + exception.getMessage());
+        }
+    }
+
+    private void container(BlockPos pos, ContainerTask.Action action, Predicate<ItemStack> filter,
+        int count, Consumer<String> reporter) {
+        start(Task.CONTAINER, pos, reporter);
+        containerTask = new ContainerTask(bot, this, pos, action, filter, count, message -> {
+            containerTask = null;
+            finish(message);
+        });
+    }
+
     public void craft(ItemStack item, int count, Consumer<String> reporter) {
         start(Task.CRAFT, bot.blockPosition(), reporter);
         crafting = new CraftExecutor(bot, this, item, count);
@@ -261,6 +296,11 @@ public final class BotController {
     public void stop() {
         stopPathing();
         abortBreaking();
+        if (containerTask != null) {
+            ContainerTask cancelled = containerTask;
+            containerTask = null;
+            cancelled.fail("cancelled");
+        }
         if (crafting != null) {
             CraftExecutor cancelled = crafting;
             crafting = null;
@@ -299,6 +339,7 @@ public final class BotController {
             case COLLECT -> "collecting drops at " + where;
             case USE -> "going to use block at " + where;
             case CRAFT -> "crafting";
+            case CONTAINER -> "using container at " + where;
             case IDLE -> "idle";
         };
     }
@@ -314,6 +355,14 @@ public final class BotController {
 
     /** Called from {@link BotPlayer#tick()} before physics: sets this tick's inputs. */
     public void tick() {
+        if (usedContainerMenu != null) {
+            if (bot.containerMenu == usedContainerMenu && usedContainerMenu.stillValid(bot)) {
+                bot.containerMemory().observe(bot, usedContainerPos);
+            } else {
+                usedContainerMenu = null;
+                usedContainerPos = null;
+            }
+        }
         // While the pathfinder drives, it owns the legs (it sets the inputs after this).
         if (pathGoal == null) {
             bot.zza = 0.0F;
@@ -331,6 +380,7 @@ public final class BotController {
             case COLLECT -> tickCollect(target);
             case USE -> tickUse(target);
             case CRAFT -> crafting.tick();
+            case CONTAINER -> containerTask.tick();
             case IDLE -> {}
         }
     }
@@ -542,6 +592,7 @@ public final class BotController {
         ServerLevel level = bot.serverLevel();
         BlockState state = level.getBlockState(pos);
         if (state.isAir()) {
+            bot.containerMemory().forget(bot, pos);
             if (resumeTarget != null) {
                 resume();
                 return;
@@ -599,6 +650,12 @@ public final class BotController {
         if (result.shouldSwing()) {
             bot.swing(InteractionHand.MAIN_HAND);
         }
+        if (!(bot.containerMenu instanceof CraftingMenu)
+            && !ContainerMemory.containerSlots(bot).isEmpty()) {
+            usedContainerPos = pos.immutable();
+            usedContainerMenu = bot.containerMenu;
+            bot.containerMemory().observe(bot, pos);
+        }
         finish("used " + block + " at " + pos.toShortString() + ": " + result + ", open menu: " + openMenuDescription());
     }
 
@@ -613,7 +670,23 @@ public final class BotController {
     @Nullable
     private BlockHitResult approachAndAim(BlockPos pos) {
         ServerLevel level = bot.serverLevel();
+        boolean usingContainer = containerTask != null || crafting != null && crafting.isWithdrawing();
+        if (usingContainer && !bot.canInteractWithBlock(pos, -0.5)) {
+            if (pathTo(new GoalGetToBlock(pos)) == PathState.FAILED) {
+                fail("cannot reach container at " + pos.toShortString());
+            }
+            return null;
+        }
         if (level.getBlockState(pos).isAir()) {
+            // Only forget when this is actually visible, never on a remote position lookup.
+            boolean visible = bot.canInteractWithBlock(pos, -0.5) && findVisibleFace(level, pos) != null;
+            if (visible) {
+                bot.containerMemory().forget(bot, pos);
+            }
+            if (usingContainer) {
+                fail(visible ? "not a container" : "cannot see container at " + pos.toShortString());
+                return null;
+            }
             if (resumeTarget != null) {
                 resume();
             } else if (crafting != null) {
@@ -814,6 +887,10 @@ public final class BotController {
     }
 
     private void fail(String message) {
+        if (containerTask != null) {
+            containerTask.fail(message);
+            return;
+        }
         if (crafting != null) {
             crafting.fail(message);
             return;

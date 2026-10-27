@@ -13,13 +13,17 @@ import dev.blocknet.body.BotManager;
 import dev.blocknet.body.BotPlayer;
 import dev.blocknet.crafting.CraftingCalculation;
 import dev.blocknet.control.CraftStations;
+import dev.blocknet.control.ContainerFilter;
 import dev.blocknet.state.BodyState;
 import java.util.ArrayList;
 import java.util.function.Consumer;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.commands.SharedSuggestionProvider;
+import net.minecraft.commands.arguments.ResourceOrTagKeyArgument;
 import net.minecraft.commands.arguments.coordinates.BlockPosArgument;
+import net.minecraft.commands.arguments.coordinates.Coordinates;
+import net.minecraft.core.registries.Registries;
 import net.minecraft.commands.arguments.item.ItemArgument;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.entity.Entity;
@@ -79,6 +83,13 @@ public final class BlocknetCommands {
                 .executes(BlocknetCommands::list))
             .then(planCommand(buildContext))
             .then(craftCommand(buildContext))
+            .then(containerCommand("deposit"))
+            .then(containerCommand("withdraw"))
+            .then(memoryCommand())
+            .then(withBot("look-in", true, (context, bot) -> {
+                bot.controller().lookIn(BlockPosArgument.getLoadedBlockPos(context, "pos"), reporter(context.getSource(), bot));
+                return 1;
+            }))
             .then(withBot("status", false, (context, bot) -> {
                 var snapshot = bot.bodyState().snapshot();
                 sendSection(context.getSource(), "body", snapshot.sections().get("body"));
@@ -178,10 +189,71 @@ public final class BlocknetCommands {
         for (int slot = 0; slot < bot.getInventory().getContainerSize(); slot++)
             inventory.add(bot.getInventory().getItem(slot).copy());
         var result = new CraftingCalculation(bot.serverLevel(), dev.blocknet.crafting.PlannerCatalogs.get(bot.serverLevel()))
-            .plan(ItemArgument.getItem(context, "item").createItemStack(1, false), count, inventory, CraftStations.visible(bot).keySet());
+            .plan(ItemArgument.getItem(context, "item").createItemStack(1, false), count, inventory,
+                CraftStations.visible(bot).keySet(), bot.containerMemory().sources(bot));
         for (String line : result.text().split("\\n"))
             context.getSource().sendSuccess(() -> Component.literal(line), false);
         return 1;
+    }
+
+    private static String filter(CommandContext<CommandSourceStack> context) {
+        String value = context.getArgument("filter", ResourceOrTagKeyArgument.Result.class).asPrintable();
+        return value.equals("minecraft:all") ? "all" : value.equals("minecraft:junk") ? "junk" : value;
+    }
+
+    private static LiteralArgumentBuilder<CommandSourceStack> containerCommand(String action) {
+        return Commands.literal(action).then(containerPosition(action, false))
+            .then(Commands.argument("name", StringArgumentType.word()).suggests(BOT_NAMES)
+                .then(containerPosition(action, true)));
+    }
+
+    private static RequiredArgumentBuilder<CommandSourceStack, Coordinates> containerPosition(String action, boolean named) {
+        return Commands.argument("pos", BlockPosArgument.blockPos())
+            .then(Commands.argument("filter", ResourceOrTagKeyArgument.resourceOrTagKey(Registries.ITEM))
+                .executes(c -> transfer(c, action, named, 0))
+                .then(Commands.argument("count", IntegerArgumentType.integer(1, 1000000))
+                    .executes(c -> transfer(c, action, named, IntegerArgumentType.getInteger(c, "count")))));
+    }
+
+    private static int transfer(CommandContext<CommandSourceStack> context, String action, boolean named, int count)
+        throws CommandSyntaxException {
+        BotPlayer bot = named ? bot(context) : nearestBot(context.getSource());
+        var pos = BlockPosArgument.getLoadedBlockPos(context, "pos");
+        String filter = filter(context);
+        if (action.equals("deposit")) {
+            bot.controller().deposit(pos, filter, count, reporter(context.getSource(), bot));
+        } else {
+            bot.controller().withdraw(pos, filter, count, reporter(context.getSource(), bot));
+        }
+        return 1;
+    }
+
+    private static LiteralArgumentBuilder<CommandSourceStack> memoryCommand() {
+        return Commands.literal("memory").executes(c -> memory(c, nearestBot(c.getSource()), null))
+            .then(Commands.argument("query", StringArgumentType.greedyString()).suggests(BOT_NAMES)
+                .executes(c -> {
+                    String[] parts = StringArgumentType.getString(c, "query").trim().split("\\s+");
+                    BotPlayer bot = BotManager.get(parts[0]);
+                    if (parts.length > 2 || parts.length == 2 && bot == null) {
+                        throw NO_SUCH_BOT.create();
+                    }
+                    return memory(c, bot == null ? nearestBot(c.getSource()) : bot,
+                        parts.length == 2 ? parts[1] : bot == null ? parts[0] : null);
+                }));
+    }
+
+    private static int memory(CommandContext<CommandSourceStack> context, BotPlayer bot, String filter) {
+        try {
+            String text = bot.containerMemory().text(bot.getServer().overworld().getGameTime(),
+                filter == null ? null : ContainerFilter.parse(bot, filter));
+            for (String line : text.split("\\n")) {
+                context.getSource().sendSuccess(() -> Component.literal(line), false);
+            }
+            return 1;
+        } catch (IllegalArgumentException exception) {
+            context.getSource().sendFailure(Component.literal(exception.getMessage()));
+            return 0;
+        }
     }
 
     private static void sendSection(CommandSourceStack source, String name, BodyState.Section section) {

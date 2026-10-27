@@ -36,7 +36,7 @@ import net.minecraft.world.phys.Vec3;
 /** Tick-driven player actions. The plan is a material forecast, never permission to edit stacks. */
 final class CraftExecutor {
     static final int CLICK_DELAY = 3;
-    private enum Phase { STEP, STATION, OPEN, PLACE, READY, TAKE, LOAD, COOK, DRAIN, CLEANUP, COLLECT }
+    private enum Phase { WITHDRAW, STEP, STATION, OPEN, PLACE, READY, TAKE, LOAD, COOK, DRAIN, CLEANUP, COLLECT }
 
     private final BotPlayer bot;
     private final BotController controller;
@@ -47,7 +47,9 @@ final class CraftExecutor {
     private final List<String> notes = new ArrayList<>();
     private final Deque<Runnable> clicks = new ArrayDeque<>();
     private CraftPlan plan;
-    private Phase phase = Phase.STEP;
+    private Phase phase = Phase.WITHDRAW;
+    private int withdrawalIndex;
+    private ContainerTask withdrawal;
     private int stepIndex;
     private long repetitions;
     private int delay;
@@ -95,8 +97,9 @@ final class CraftExecutor {
         // Recipe placement uses the player's main inventory, not equipped armor or offhand.
         bot.getInventory().items.forEach(stack -> inventory.add(stack.copy()));
         plan = new CraftingCalculation(bot.serverLevel(), PlannerCatalogs.get(bot.serverLevel()))
-            .plan(target, count, inventory, stations.keySet());
+            .plan(target, count, inventory, stations.keySet(), bot.containerMemory().sources(bot));
         stepIndex = 0;
+        withdrawalIndex = 0;
     }
 
     String describe() {
@@ -104,6 +107,11 @@ final class CraftExecutor {
     }
 
     void tick() {
+        observeFurnace();
+        if (withdrawal != null) {
+            withdrawal.tick();
+            return;
+        }
         if (finished || delay-- > 0) {
             return;
         }
@@ -121,9 +129,11 @@ final class CraftExecutor {
             clicks.removeFirst().run();
             delay = CLICK_DELAY - 1;
             bot.containerMenu.broadcastChanges();
+            observeFurnace();
             return;
         }
         switch (phase) {
+            case WITHDRAW -> withdraw();
             case STEP -> beginStep();
             case STATION -> station();
             case OPEN -> open();
@@ -136,6 +146,51 @@ final class CraftExecutor {
             case CLEANUP -> cleanup();
             case COLLECT -> {}
         }
+    }
+
+    boolean isWithdrawing() {
+        return phase == Phase.WITHDRAW;
+    }
+
+    private void observeFurnace() {
+        if (!isWithdrawing() && stationPos != null && bot.containerMenu instanceof AbstractFurnaceMenu) {
+            bot.containerMemory().observe(bot, stationPos);
+        }
+    }
+
+    private void withdraw() {
+        if (withdrawalIndex == plan.withdrawals().size()) {
+            next(Phase.STEP);
+            return;
+        }
+        var step = plan.withdrawals().get(withdrawalIndex);
+        if (!step.source().dimension().equals(bot.level().dimension().location().toString())) {
+            fail("container is in another dimension");
+            return;
+        }
+        withdrawal = new ContainerTask(bot, controller, BlockPos.of(step.source().position()),
+            ContainerTask.Action.WITHDRAW, stack -> !stack.isEmpty() && new ItemKey(stack).equals(step.item()),
+            step.count(), report -> {
+                withdrawal = null;
+                if (finished) {
+                    return;
+                }
+                if (report.startsWith("failed:")) {
+                    if (replanned) {
+                        fail("withdrawal: " + report);
+                        return;
+                    }
+                    replanned = true;
+                    replan();
+                    if (plan.status() != CraftPlan.Status.OK) {
+                        complete("failed: remembered contents changed; " + plan.text());
+                        return;
+                    }
+                } else {
+                    withdrawalIndex++;
+                }
+                next(Phase.WITHDRAW);
+            });
     }
 
     private void next(Phase next) {
@@ -167,7 +222,7 @@ final class CraftExecutor {
                     + (plan.status() == CraftPlan.Status.MISSING ? "missing " + plan.missing() : "search limit"));
                 return;
             }
-            next(Phase.STEP);
+            next(Phase.WITHDRAW);
             return;
         }
         recipe = bot.serverLevel().getRecipeManager().byKey(step().recipeId()).orElse(null);
@@ -458,6 +513,7 @@ final class CraftExecutor {
     private void closeAndWait(long ticks) {
         clicks.add(() -> {
             expectedMenu = null;
+            observeFurnace();
             bot.closeContainer();
             cookWait = ticks;
         });
@@ -537,6 +593,7 @@ final class CraftExecutor {
     }
 
     private void finishStep() {
+        observeFurnace();
         expectedMenu = null;
         bot.closeContainer();
         // A placed station is reserved outside inventory, exactly as in the planner.
@@ -609,12 +666,21 @@ final class CraftExecutor {
     }
 
     void cancel() {
-        fail("cancelled");
+        complete(failureMessage("cancelled"));
     }
 
     void fail(String reason) {
-        String recipeId = plan == null || stepIndex >= plan.steps().size() ? "cleanup" : step().recipeId().toString();
-        complete("failed: step " + (stepIndex + 1) + " " + recipeId + ": " + reason);
+        if (withdrawal != null) {
+            withdrawal.fail(reason);
+            return;
+        }
+        complete(failureMessage(reason));
+    }
+
+    private String failureMessage(String reason) {
+        String recipeId = phase == Phase.WITHDRAW ? "withdraw" : plan == null || stepIndex >= plan.steps().size()
+            ? "cleanup" : step().recipeId().toString();
+        return "failed: step " + (stepIndex + 1) + " " + recipeId + ": " + reason;
     }
 
     private void complete(String message) {
@@ -622,6 +688,11 @@ final class CraftExecutor {
             return;
         }
         finished = true;
+        if (withdrawal != null) {
+            withdrawal.fail("cancelled");
+            withdrawal = null;
+        }
+        observeFurnace();
         clicks.clear();
         expectedMenu = null;
         bot.closeContainer();

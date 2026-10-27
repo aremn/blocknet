@@ -13,8 +13,10 @@ import net.minecraft.resources.ResourceLocation;
 
 /** Value-only plan. Missing plans are hypothetical; limit plans must never be executed. */
 public record CraftPlan(Status status, ItemKey target, long count, List<Step> steps, Map<ItemKey, Long> taken,
-    Map<String, Long> missing, Map<ItemKey, Long> leftovers, Set<String> neededStations, List<String> hints) {
+    Map<String, Long> missing, Map<ItemKey, Long> leftovers, Set<String> neededStations, List<String> hints, List<Withdrawal> withdrawals) {
     public enum Status { OK, MISSING, LIMIT }
+
+    public record Withdrawal(RememberedSource source, ItemKey item, long count) {}
 
     public record Step(ResourceLocation recipeId, String station, long times, Map<ItemKey, Long> inputs,
         Map<ItemKey, Long> outputs) {
@@ -25,6 +27,7 @@ public record CraftPlan(Status status, ItemKey target, long count, List<Step> st
     }
 
     public CraftPlan {
+        withdrawals = List.copyOf(withdrawals);
         steps = List.copyOf(steps);
         taken = immutable(taken);
         missing = immutable(missing);
@@ -51,6 +54,10 @@ public record CraftPlan(Status status, ItemKey target, long count, List<Step> st
             text.append("\nuse: ").append(items(taken));
         }
         int stepNumber = 0;
+        for (Withdrawal withdrawal : withdrawals) {
+            text.append("\n").append(++stepNumber).append(". withdraw ").append(withdrawal.count())
+                .append(" ").append(withdrawal.item()).append(" from ").append(withdrawal.source().description());
+        }
         for (Step step : steps) {
             text.append("\n").append(++stepNumber).append(". ").append(items(step.outputs))
                 .append(" <- ").append(items(step.inputs)).append(" [").append(step.station).append("]")

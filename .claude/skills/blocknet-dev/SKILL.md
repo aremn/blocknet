@@ -52,7 +52,8 @@ grep -a -E "GAME TESTS COMPLETE|required tests (passed|failed)|failed at" build/
 | Package | What |
 |---|---|
 | `body/` | `BotPlayer` (ServerPlayer, runs its own physics in `tick()`), `BotConnection`, `BotPacketListener`, `BotManager` (spawn/despawn/nearest) |
-| `control/` | `BotController`: one task at a time (goto, mine, use, craft), head turning, aiming, tool choice; `CraftExecutor`: delayed menu/grid/cooking/cleanup phases; `CraftStations`: bounded eye-ray station query |
+| `control/` | `BotController`: one task at a time (goto, mine, use, craft, look-in, deposit, withdraw); `ContainerTask`: generic delayed menu transfers; `ContainerFilter`: shared item/tag/junk policy; head turning, aiming, tool choice; `CraftExecutor`: delayed menu/grid/cooking/cleanup phases; `CraftStations`: bounded eye-ray station query |
+| `memory/` | `ContainerMemory`: component-aware menu snapshots per dimension/position, double-chest normalization, per-UUID SavedData persistence, compact memory/whereIs queries and nearest planner sources |
 | `state/` | `ItemDescriber`/`ToolFacts`: generic item facts and vanilla tool probes; `BodyState`/`BodyStateTracker`: on-demand compact sections, independent revisions, bounded inventory diff history (ADR-0006); no transport |
 | `command/` | `/blocknet` debug commands; the bot name is optional (nearest bot) |
 | `client/` | Optional client side: radial menu on the mouse wheel; only sends `/blocknet` commands |
@@ -68,7 +69,9 @@ packages and the game refuses to start.
 The LGPL `crafting/` module adapts AE2's crafting calculation (ADR-0007): `RecipeCatalog` /
 `Process` read server recipes, `ItemKey` includes components, `CraftingSimulationState` copies
 inventory and commits successful branches, `CraftingCalculation` searches with bounds,
-`CraftPlan` returns immutable steps/material balances and text. `PlannerCatalogs` caches the
+`CraftPlan` returns immutable steps/material balances and text. Optional caller-sorted
+`RememberedSource` snapshots supply inventory-first withdrawals; `CraftPlan.withdrawals()` executes
+through `ContainerTask` before recipes, sharing the one-replan rule. `PlannerCatalogs` caches the
 recipe index across requests and detects reloads. `/blocknet plan [name] <item> [count]` is
 planning only, server-thread synchronous, no brain or item movement. `/blocknet craft [name] <item> [count]`
 executes an OK plan with `CraftExecutor`: vanilla recipe-book placement, menu clicks (3 ticks apart),
@@ -80,6 +83,11 @@ is outside the 50ms search budget; search also caps depth/variants/operations. S
 from inventory and the caller's visible stations (`CraftStations`, eye rays within 6 blocks/FOV).
 `CraftPlanGameTests` covers planning and budgets; `CraftExecuteGameTests` covers real menus, station
 recovery, cooking time, modded recipe fixtures, cancellation/replanning and command reports.
+`ContainerGameTests` covers menu-only observation, reach, junk/count/tag transfers, double chests,
+full storage, stale snapshots/replanning, persistence/component serialization, cancellation,
+locked/removed containers, source preference, command parsing, furnace memory and runtime-discovered
+modded storage. `/blocknet look-in [name] <pos>`, `/blocknet deposit|withdraw [name] <pos> <filter> [count]`
+and `/blocknet memory [name] [filter]` expose it.
 Vanilla wooden pickaxe + table needs 9 planks, so 3 logs; with an owned table, 2 logs suffice.
 
 ## Rules that came from real bugs

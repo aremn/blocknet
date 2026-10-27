@@ -89,6 +89,8 @@ public final class CraftingCalculation {
     private long deadline;
     private int operations;
     private Set<ItemKey> supplied;
+    private Map<ItemKey, Long> carried;
+    private List<RememberedSource> sources;
     private Set<ItemKey> reachable;
     private boolean truncated;
     private Set<String> availableStations = Set.of();
@@ -109,6 +111,12 @@ public final class CraftingCalculation {
 
     /** Stations observed by the caller from the player's eyes; never discovers world blocks. */
     public CraftPlan plan(ItemStack output, long count, Iterable<ItemStack> inventory, Set<String> availableStations) {
+        return plan(output, count, inventory, availableStations, List.of());
+    }
+
+    public CraftPlan plan(ItemStack output, long count, Iterable<ItemStack> inventory,
+        Set<String> availableStations, List<RememberedSource> sources) {
+        this.sources = List.copyOf(sources);
         this.availableStations = Set.copyOf(availableStations);
         if (!level.getServer().isSameThread()) {
             throw new IllegalStateException("planner requires server thread");
@@ -118,6 +126,10 @@ public final class CraftingCalculation {
         }
         ItemKey target = new ItemKey(output);
         var initial = new CraftingSimulationState(inventory);
+        carried = Map.copyOf(initial.original);
+        for (RememberedSource source : sources) {
+            source.contents().forEach((key, amount) -> initial.original.merge(key, amount, Long::sum));
+        }
         supplied = initial.keys();
         costs.clear();
         failed.clear();
@@ -149,8 +161,27 @@ public final class CraftingCalculation {
             state = new CraftingSimulationState(initial);
         }
         List<CraftPlan.Step> steps = compact(state.steps, initial);
-        return new CraftPlan(status, target, count, steps, state.taken, state.missing, state.generated,
-            state.stations, List.copyOf(state.hints));
+        var remaining = new TreeMap<>(state.taken);
+        var inventoryTaken = new TreeMap<ItemKey, Long>();
+        carried.forEach((key, amount) -> {
+            long used = Math.min(amount, remaining.getOrDefault(key, 0L));
+            if (used > 0) {
+                inventoryTaken.put(key, used);
+                remaining.merge(key, -used, Long::sum);
+            }
+        });
+        var withdrawals = new ArrayList<CraftPlan.Withdrawal>();
+        for (RememberedSource source : sources) {
+            source.contents().forEach((key, amount) -> {
+                long used = Math.min(amount, remaining.getOrDefault(key, 0L));
+                if (used > 0) {
+                    withdrawals.add(new CraftPlan.Withdrawal(source, key, used));
+                    remaining.merge(key, -used, Long::sum);
+                }
+            });
+        }
+        return new CraftPlan(status, target, count, steps, inventoryTaken, state.missing, state.generated,
+            state.stations, List.copyOf(state.hints), withdrawals);
     }
 
     private void check(int depth) {
@@ -282,6 +313,14 @@ public final class CraftingCalculation {
             return;
         }
         var ordered = candidates(input, state);
+        Map<ItemKey, Long> reserved = new TreeMap<>();
+        for (ItemStack stack : selected) {
+            if (!stack.isEmpty()) {
+                reserved.merge(new ItemKey(stack), times, Long::sum);
+            }
+        }
+        ordered.sort(Comparator.comparingInt((ItemKey candidate) -> stockPreference(candidate, state,
+            reserved.getOrDefault(candidate, 0L))));
         int tested = 0;
         for (ItemKey candidate : ordered) {
             if (state.available(candidate) == 0 && !reachable.contains(candidate)) {
@@ -383,9 +422,33 @@ public final class CraftingCalculation {
             }
         }
         var ordered = new ArrayList<>(candidates);
-        ordered.sort(Comparator.comparingInt(
-            (ItemKey key) -> state.available(key) > 0 ? -1 : cost(key, new HashSet<>(), 0)));
+        ordered.sort(Comparator.comparingInt((ItemKey key) -> stockPreference(key, state))
+            .thenComparingInt(key -> state.available(key) > 0 ? 0 : cost(key, new HashSet<>(), 0)));
         return ordered;
+    }
+
+    private int stockPreference(ItemKey key, CraftingSimulationState state) {
+        return stockPreference(key, state, 0);
+    }
+
+    private int stockPreference(ItemKey key, CraftingSimulationState state, long reserved) {
+        long generated = state.generated.getOrDefault(key, 0L);
+        long inventory = Math.max(0, carried.getOrDefault(key, 0L) - state.taken.getOrDefault(key, 0L));
+        if (generated + inventory > reserved) {
+            return 0;
+        }
+        if (state.available(key) > reserved) {
+            long consumed = Math.max(0, state.taken.getOrDefault(key, 0L) - carried.getOrDefault(key, 0L))
+                + Math.max(0, reserved - generated - inventory);
+            for (int i = 0; i < sources.size(); i++) {
+                long amount = sources.get(i).contents().getOrDefault(key, 0L);
+                if (amount > consumed) {
+                    return i + 1;
+                }
+                consumed -= amount;
+            }
+        }
+        return sources.size() + 1;
     }
 
     private void execute(Process process, List<ItemStack> selected, long times, CraftingSimulationState state,
