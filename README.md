@@ -41,9 +41,12 @@ More in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 ## License
 
-Not chosen yet; until then all rights are reserved. Third-party notices are in [licenses/](licenses).
+Blocknet's own code is under the [MIT License](LICENSE). The planned `pathing/` module is derived
+from Automatone and Baritone and stays under LGPL-3.0, with its own license files. Third-party
+notices are in [licenses/](licenses).
 
 ---
 
 **По-русски:** Blocknet — ИИ-напарник для модового Minecraft, который играет как настоящий игрок на
 сервере. Тело — мод NeoForge, мозг — отдельный процесс с LLM. Архитектура и решения описаны в `docs/`.
+Лицензия: MIT, кроме модуля `pathing/` (LGPL-3.0).
