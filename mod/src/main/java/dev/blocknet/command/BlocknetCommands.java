@@ -2,6 +2,8 @@ package dev.blocknet.command;
 
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.StringArgumentType;
+import com.mojang.brigadier.builder.LiteralArgumentBuilder;
+import com.mojang.brigadier.builder.RequiredArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import com.mojang.brigadier.exceptions.SimpleCommandExceptionType;
@@ -24,17 +26,21 @@ import net.neoforged.neoforge.event.RegisterCommandsEvent;
  * /blocknet spawn &lt;name&gt;
  * /blocknet despawn &lt;name&gt;
  * /blocknet list
- * /blocknet goto &lt;name&gt; &lt;pos&gt;
- * /blocknet come &lt;name&gt;
- * /blocknet mine &lt;name&gt; &lt;pos&gt;
- * /blocknet use &lt;name&gt; &lt;pos&gt;
- * /blocknet close &lt;name&gt;
- * /blocknet stop &lt;name&gt;
+ * /blocknet goto [name] &lt;pos&gt;
+ * /blocknet come [name]
+ * /blocknet mine [name] &lt;pos&gt;
+ * /blocknet use [name] &lt;pos&gt;
+ * /blocknet close [name]
+ * /blocknet stop [name]
  * </pre>
+ *
+ * <p>Without a name, a command goes to the bot nearest to whoever runs it.
  */
 public final class BlocknetCommands {
     private static final SimpleCommandExceptionType NO_SUCH_BOT =
         new SimpleCommandExceptionType(Component.literal("No bot with that name"));
+    private static final SimpleCommandExceptionType NO_BOT_NEARBY =
+        new SimpleCommandExceptionType(Component.literal("No bot in this dimension"));
 
     private static final SuggestionProvider<CommandSourceStack> BOT_NAMES = (context, builder) ->
         SharedSuggestionProvider.suggest(BotManager.all().stream().map(bot -> bot.getGameProfile().getName()), builder);
@@ -56,53 +62,55 @@ public final class BlocknetCommands {
                     .executes(BlocknetCommands::despawn)))
             .then(Commands.literal("list")
                 .executes(BlocknetCommands::list))
-            .then(Commands.literal("goto")
-                .then(Commands.argument("name", StringArgumentType.word()).suggests(BOT_NAMES)
-                    .then(Commands.argument("pos", BlockPosArgument.blockPos())
-                        .executes(context -> {
-                            BotPlayer bot = bot(context);
-                            BlockPos pos = BlockPosArgument.getLoadedBlockPos(context, "pos");
-                            bot.controller().goTo(pos, reporter(context.getSource(), bot));
-                            return 1;
-                        }))))
-            .then(Commands.literal("come")
-                .then(Commands.argument("name", StringArgumentType.word()).suggests(BOT_NAMES)
-                    .executes(context -> {
-                        BotPlayer bot = bot(context);
-                        BlockPos pos = BlockPos.containing(context.getSource().getPosition());
-                        bot.controller().goTo(pos, reporter(context.getSource(), bot));
-                        return 1;
-                    })))
-            .then(Commands.literal("mine")
-                .then(Commands.argument("name", StringArgumentType.word()).suggests(BOT_NAMES)
-                    .then(Commands.argument("pos", BlockPosArgument.blockPos())
-                        .executes(context -> {
-                            BotPlayer bot = bot(context);
-                            BlockPos pos = BlockPosArgument.getLoadedBlockPos(context, "pos");
-                            bot.controller().mine(pos, reporter(context.getSource(), bot));
-                            return 1;
-                        }))))
-            .then(Commands.literal("use")
-                .then(Commands.argument("name", StringArgumentType.word()).suggests(BOT_NAMES)
-                    .then(Commands.argument("pos", BlockPosArgument.blockPos())
-                        .executes(context -> {
-                            BotPlayer bot = bot(context);
-                            BlockPos pos = BlockPosArgument.getLoadedBlockPos(context, "pos");
-                            bot.controller().use(pos, reporter(context.getSource(), bot));
-                            return 1;
-                        }))))
-            .then(Commands.literal("close")
-                .then(Commands.argument("name", StringArgumentType.word()).suggests(BOT_NAMES)
-                    .executes(context -> {
-                        bot(context).closeContainer();
-                        return 1;
-                    })))
-            .then(Commands.literal("stop")
-                .then(Commands.argument("name", StringArgumentType.word()).suggests(BOT_NAMES)
-                    .executes(context -> {
-                        bot(context).controller().stop();
-                        return 1;
-                    }))));
+            .then(withBot("goto", true, (context, bot) -> {
+                bot.controller().goTo(BlockPosArgument.getLoadedBlockPos(context, "pos"), reporter(context.getSource(), bot));
+                return 1;
+            }))
+            .then(withBot("come", false, (context, bot) -> {
+                bot.controller().goTo(BlockPos.containing(context.getSource().getPosition()), reporter(context.getSource(), bot));
+                return 1;
+            }))
+            .then(withBot("mine", true, (context, bot) -> {
+                bot.controller().mine(BlockPosArgument.getLoadedBlockPos(context, "pos"), reporter(context.getSource(), bot));
+                return 1;
+            }))
+            .then(withBot("use", true, (context, bot) -> {
+                bot.controller().use(BlockPosArgument.getLoadedBlockPos(context, "pos"), reporter(context.getSource(), bot));
+                return 1;
+            }))
+            .then(withBot("close", false, (context, bot) -> {
+                bot.closeContainer();
+                return 1;
+            }))
+            .then(withBot("stop", false, (context, bot) -> {
+                bot.controller().stop();
+                return 1;
+            })));
+    }
+
+    /** A command aimed at one bot, run on behalf of a command source. */
+    @FunctionalInterface
+    private interface BotCommand {
+        int run(CommandContext<CommandSourceStack> context, BotPlayer bot) throws CommandSyntaxException;
+    }
+
+    /**
+     * {@code /blocknet <literal> [name] [pos]}: without a name the command goes to the bot nearest to
+     * whoever runs it, so a single bot (or the client's radial menu) needs no name.
+     */
+    private static LiteralArgumentBuilder<CommandSourceStack> withBot(String literal, boolean takesPos, BotCommand command) {
+        LiteralArgumentBuilder<CommandSourceStack> node = Commands.literal(literal);
+        RequiredArgumentBuilder<CommandSourceStack, String> named = Commands.argument("name", StringArgumentType.word()).suggests(BOT_NAMES);
+        if (takesPos) {
+            node.then(Commands.argument("pos", BlockPosArgument.blockPos())
+                .executes(context -> command.run(context, nearestBot(context.getSource()))));
+            named.then(Commands.argument("pos", BlockPosArgument.blockPos())
+                .executes(context -> command.run(context, bot(context))));
+        } else {
+            node.executes(context -> command.run(context, nearestBot(context.getSource())));
+            named.executes(context -> command.run(context, bot(context)));
+        }
+        return node.then(named);
     }
 
     private static int spawn(CommandContext<CommandSourceStack> context) {
@@ -138,6 +146,10 @@ public final class BlocknetCommands {
             source.sendSuccess(() -> Component.literal(line), false);
         }
         return BotManager.all().size();
+    }
+
+    private static BotPlayer nearestBot(CommandSourceStack source) throws CommandSyntaxException {
+        return BotManager.nearest(source.getLevel(), source.getPosition()).orElseThrow(NO_BOT_NEARBY::create);
     }
 
     private static BotPlayer bot(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {

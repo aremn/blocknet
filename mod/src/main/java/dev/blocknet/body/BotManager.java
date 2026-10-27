@@ -5,10 +5,12 @@ import dev.blocknet.Blocknet;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.regex.Pattern;
 import javax.annotation.Nullable;
 import net.minecraft.core.UUIDUtil;
@@ -73,6 +75,13 @@ public final class BotManager {
     @Nullable
     public static BotPlayer get(String name) {
         return BOTS.get(key(name));
+    }
+
+    /** The bot in {@code level} closest to {@code pos}, if there is any. */
+    public static Optional<BotPlayer> nearest(ServerLevel level, Vec3 pos) {
+        return BOTS.values().stream()
+            .filter(bot -> bot.serverLevel() == level)
+            .min(Comparator.comparingDouble(bot -> bot.position().distanceToSqr(pos)));
     }
 
     public static Collection<BotPlayer> all() {
