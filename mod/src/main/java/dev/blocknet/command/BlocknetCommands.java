@@ -15,7 +15,6 @@ import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.commands.SharedSuggestionProvider;
 import net.minecraft.commands.arguments.coordinates.BlockPosArgument;
-import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.neoforged.neoforge.event.RegisterCommandsEvent;
 
@@ -67,7 +66,7 @@ public final class BlocknetCommands {
                 return 1;
             }))
             .then(withBot("come", false, (context, bot) -> {
-                bot.controller().goTo(BlockPos.containing(context.getSource().getPosition()), reporter(context.getSource(), bot));
+                bot.controller().come(context.getSource().getPosition(), reporter(context.getSource(), bot));
                 return 1;
             }))
             .then(withBot("mine", true, (context, bot) -> {

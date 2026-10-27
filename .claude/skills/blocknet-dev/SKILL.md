@@ -116,6 +116,9 @@ These are why the code looks the way it does; keep them unless an ADR changes th
 
 ## Pathfinding
 
+`come` targets ground up to 16 blocks below the source, within 2 horizontal blocks; `goto` stays exact.
+Navigation retries normal, tagged inventory-block building, healthy (>60%) falls up to 5, then nearby intermediate goals; attempt settings are restored.
+
 Done in the basics (ADR-0004): walking around walls, ledges, digging through. `references/pathing.md`
 has the history, what was kept and dropped, and the remaining ideas (gaps, pillars with blocks,
 lava, doors, protecting player builds).

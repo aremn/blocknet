@@ -2,9 +2,13 @@ package dev.blocknet.control;
 
 import dev.blocknet.body.BotPlayer;
 import dev.blocknet.pathing.api.IBaritone;
+import dev.blocknet.pathing.api.Settings;
+import dev.blocknet.pathing.behavior.InventoryBehavior;
 import dev.blocknet.pathing.api.pathing.goals.Goal;
 import dev.blocknet.pathing.api.pathing.goals.GoalBlock;
 import dev.blocknet.pathing.api.pathing.goals.GoalGetToBlock;
+import dev.blocknet.pathing.api.pathing.goals.GoalComposite;
+import dev.blocknet.pathing.api.pathing.goals.GoalNear;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -66,6 +70,26 @@ public final class BotController {
     @Nullable
     private Goal pathGoal;
     private int pathTicks;
+    @Nullable
+    private Goal navigationGoal;
+    private enum Strategy { NORMAL, BUILD, FALL, CLOSEST }
+    private Strategy strategy = Strategy.NORMAL;
+    private int closestRange;
+    private int navigationTicks;
+    @Nullable
+    private AttemptSettings attemptSettings;
+
+    /** Only settings changed by an attempt; other per-bot preferences stay intact. */
+    private record AttemptSettings(boolean allowPlace, int fallHeight) {
+        static AttemptSettings capture(Settings settings) {
+            return new AttemptSettings(settings.allowPlace.get(), settings.maxFallHeightNoWater.get());
+        }
+
+        void restore(Settings settings) {
+            settings.allowPlace.set(allowPlace);
+            settings.maxFallHeightNoWater.set(fallHeight);
+        }
+    }
 
     private double bestDistanceSq;
     private int ticksWithoutProgress;
@@ -79,9 +103,40 @@ public final class BotController {
         this.bot = bot;
     }
 
-    /** Walks to the block position in a straight line. */
+    /** Paths to the exact feet block, trying more costly routes before settling for the closest spot. */
     public void goTo(BlockPos pos, Consumer<String> reporter) {
         start(Task.GOTO, pos, reporter);
+        navigationGoal = new GoalBlock(pos);
+    }
+
+    /** Comes within two horizontal blocks of a standing spot below the command source. */
+    public void come(Vec3 source, Consumer<String> reporter) {
+        BlockPos feet = BlockPos.containing(source);
+        start(Task.GOTO, feet, reporter);
+        ServerLevel level = bot.serverLevel();
+        for (int down = 0; down <= 16; down++) {
+            BlockPos ground = feet.below(down);
+            if (ground.getY() < level.getMinBuildHeight()) {
+                break;
+            }
+            // Grass, flowers and snow layers at the player's feet still count as room to stand in.
+            if (level.getBlockState(ground).isFaceSturdy(level, ground, Direction.UP)
+                && level.getBlockState(ground.above()).getCollisionShape(level, ground.above()).isEmpty()
+                && level.getBlockState(ground.above(2)).getCollisionShape(level, ground.above(2)).isEmpty()) {
+                target = ground.above();
+                List<Goal> spots = new ArrayList<>();
+                for (int dx = -2; dx <= 2; dx++) {
+                    for (int dz = -2; dz <= 2; dz++) {
+                        if (dx * dx + dz * dz <= 4) {
+                            spots.add(new GoalBlock(target.offset(dx, 0, dz)));
+                        }
+                    }
+                }
+                navigationGoal = new GoalComposite(spots.toArray(Goal[]::new));
+                return;
+            }
+        }
+        fail("no ground within 16 blocks below " + feet.toShortString());
     }
 
     /** Walks into reach of the block, breaks it and picks up the drops. */
@@ -101,6 +156,7 @@ public final class BotController {
         target = null;
         resumeTarget = null;
         resumeTask = null;
+        navigationGoal = null;
     }
 
     public String describe() {
@@ -158,6 +214,9 @@ public final class BotController {
         ticksWithoutProgress = 0;
         breakTicks = 0;
         clearedObstacles = 0;
+        strategy = Strategy.NORMAL;
+        closestRange = 1;
+        navigationTicks = 0;
     }
 
     private IBaritone pathing() {
@@ -175,6 +234,13 @@ public final class BotController {
         }
         IBaritone pathing = pathing();
         if (pathGoal == null) {
+            // A cancelled background calculation must finish before starting the next attempt.
+            if (pathing.getPathingBehavior().getInProgress().isPresent()) {
+                return PathState.MOVING;
+            }
+            if (task == Task.GOTO) {
+                configureAttempt();
+            }
             pathGoal = goal;
             pathTicks = 0;
             pathing.getCustomGoalProcess().setGoalAndPath(goal);
@@ -186,7 +252,7 @@ public final class BotController {
         }
         // The process goes idle when it reaches the goal or when no path can be found.
         if (!pathing.getCustomGoalProcess().isActive()) {
-            pathGoal = null;
+            stopPathing();
             return goal.isInGoal(bot.blockPosition()) ? PathState.ARRIVED : PathState.FAILED;
         }
         return PathState.MOVING;
@@ -201,15 +267,71 @@ public final class BotController {
             }
             pathGoal = null;
         }
+        if (attemptSettings != null) {
+            attemptSettings.restore(pathing().settings());
+            attemptSettings = null;
+        }
     }
 
     private enum PathState { MOVING, ARRIVED, FAILED }
 
     private void tickGoTo(BlockPos pos) {
-        switch (pathTo(new GoalBlock(pos))) {
-            case ARRIVED -> finish("arrived at " + pos.toShortString());
-            case FAILED -> fail("no way to " + pos.toShortString());
-            case MOVING -> {}
+        if (++navigationTicks > MAX_PATH_TICKS) {
+            finishNavigation(pos);
+            return;
+        }
+        Goal goal = strategy == Strategy.CLOSEST ? new GoalNear(pos, closestRange) : navigationGoal;
+        PathState state = pathTo(goal);
+        if (state == PathState.MOVING) {
+            return;
+        }
+        if (state == PathState.ARRIVED) {
+            finishNavigation(pos);
+        } else if (strategy == Strategy.NORMAL && hasBuildingBlocks()) {
+            strategy = Strategy.BUILD;
+        } else if (strategy != Strategy.FALL && strategy != Strategy.CLOSEST && healthyForFall()) {
+            strategy = Strategy.FALL;
+        } else {
+            // Automatone executes its long partial segments already. For short rejected segments,
+            // expand a nearby intermediate goal a block at a time until a reachable one is found.
+            if (strategy != Strategy.CLOSEST) {
+                strategy = Strategy.CLOSEST;
+            } else if (closestRange >= Math.ceil(Math.sqrt(bot.blockPosition().distSqr(pos)))) {
+                finishNavigation(pos);
+            } else {
+                closestRange++;
+            }
+        }
+    }
+
+    private boolean hasBuildingBlocks() {
+        Settings settings = pathing().settings();
+        return bot.getInventory().items.stream().anyMatch(stack -> InventoryBehavior.isAcceptableThrowaway(stack, settings))
+            || InventoryBehavior.isAcceptableThrowaway(bot.getOffhandItem(), settings);
+    }
+
+    private boolean healthyForFall() {
+        return bot.getHealth() > bot.getMaxHealth() * 0.6F;
+    }
+
+    private void configureAttempt() {
+        Settings settings = pathing().settings();
+        attemptSettings = AttemptSettings.capture(settings);
+        if (strategy != Strategy.NORMAL && hasBuildingBlocks()) {
+            settings.allowPlace.set(true);
+        }
+        if ((strategy == Strategy.FALL || strategy == Strategy.CLOSEST) && healthyForFall()) {
+            settings.maxFallHeightNoWater.set(5);
+        }
+    }
+
+    private void finishNavigation(BlockPos pos) {
+        if (navigationGoal.isInGoal(bot.blockPosition())
+            || navigationGoal instanceof GoalBlock && bot.blockPosition().distSqr(pos) <= 1) {
+            finish("arrived at " + pos.toShortString());
+        } else {
+            fail(String.format(Locale.ROOT, "got as close as I could, %.1f blocks from %s",
+                Math.sqrt(bot.blockPosition().distSqr(pos)), pos.toShortString()));
         }
     }
 
@@ -472,6 +594,7 @@ public final class BotController {
     }
 
     private void finish(String message) {
+        stopPathing();
         task = Task.IDLE;
         target = null;
         resumeTarget = null;
@@ -480,6 +603,7 @@ public final class BotController {
     }
 
     private void fail(String message) {
+        stopPathing();
         task = Task.IDLE;
         target = null;
         resumeTarget = null;

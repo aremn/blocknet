@@ -10,6 +10,9 @@ public final class PathingDefaults {
     private PathingDefaults() {}
 
     public static void apply(Settings settings) {
+        // Spend blocks and take damaging drops only after the ordinary route fails.
+        settings.allowPlace.set(false);
+        settings.maxFallHeightNoWater.set(3);
         // Jump gaps (sprint jumps up to 4 blocks) instead of walking around them.
         settings.allowParkour.set(true);
         settings.allowParkourAscend.set(true);
