@@ -63,8 +63,14 @@ public final class BotController {
     /** Give up on a path that has not reached its goal after this long (5 minutes). */
     private static final int MAX_PATH_TICKS = 20 * 60 * 5;
 
-    private enum Task { IDLE, GOTO, FOLLOW, MINE_APPROACH, MINE_BREAK, COLLECT, USE, EAT, PLACE, CRAFT, GATHER, CONTAINER, LOOK, EXPLORE }
+    private enum Task { IDLE, GOTO, FOLLOW, MINE_APPROACH, MINE_BREAK, COLLECT, USE, EAT, PLACE, CRAFT, GATHER, CONTAINER, LOOK, EXPLORE, EXCAVATE }
 
+    private MiningTask excavating;
+    private long lastPanorama = Long.MIN_VALUE;
+    private Vec3 panoramaPosition;
+    private String panoramaDimension;
+    private boolean quickLook;
+    private int lookFrame;
     private int lookTicks;
     private float lookStartYaw;
     private long lookStartTick;
@@ -255,6 +261,18 @@ public final class BotController {
         navigationGoal = new GoalGetToBlock(object.get().nearest());
     }
 
+    public void tunnel(Direction direction, int length, Consumer<String> reporter) {
+        start(Task.EXCAVATE, bot.blockPosition(), reporter);
+        excavating = new MiningTask(bot, this, direction, length, false);
+    }
+
+    public void descend(int y, Direction direction, Consumer<String> reporter) {
+        start(Task.EXCAVATE, bot.blockPosition(), reporter);
+        excavating = new MiningTask(bot, this, direction, y, true);
+    }
+
+    void miningFinished(String message) { excavating = null; finish(message); }
+
     public void explore(String direction, int distance, Consumer<String> reporter) {
         start(Task.EXPLORE, bot.blockPosition(), reporter);
         exploring = new ExploreTask(bot, this, direction, Math.min(64, Math.max(1, distance)));
@@ -415,23 +433,47 @@ public final class BotController {
 
     public void look(String focus, Consumer<String> reporter) {
         start(Task.LOOK, bot.blockPosition(), reporter);
-        beginLook(focus);
+        beginLook(focus, false);
     }
 
-    private void beginLook(String focus) {
+    public void look(String focus, boolean fresh, Consumer<String> reporter) {
+        start(Task.LOOK, bot.blockPosition(), reporter);
+        beginLook(focus, fresh);
+    }
+
+    private void beginLook(String focus) { beginLook(focus, true); }
+
+    private void beginLook(String focus, boolean fresh) {
         lookFocus = focus;
-        bot.vision().startPanorama();
+        long now = bot.serverLevel().getGameTime();
+        quickLook = !fresh && panoramaPosition != null && now - lastPanorama < 600
+            && panoramaDimension.equals(bot.level().dimension().location().toString())
+            && bot.position().distanceToSqr(panoramaPosition) < 36;
+        lookFrame = bot.vision().completedFrames();
+        if (quickLook) bot.vision().startFrame(); else bot.vision().startPanorama();
         lookTicks = 0;
         lookStartYaw = bot.getYRot();
         lookStartTick = bot.getServer().overworld().getGameTime();
     }
 
     private void tickLook() {
+        if (quickLook) {
+            bot.vision().tick();
+            if (bot.vision().completedFrames() > lookFrame) {
+                String report = scene.looked(lookFocus) + " (looked " + ((bot.serverLevel().getGameTime() - lastPanorama) / 20) + "s ago)";
+                bot.vision().endPanorama();
+                finish(report);
+            }
+            return;
+        }
         float yaw = lookStartYaw + ++lookTicks * 18;
         float pitch = Mth.clamp(36.80378F * (float) Math.sin(lookTicks * Math.PI / 5), -35, 35);
         turnTowards(yaw, pitch);
         bot.vision().tick();
         if (lookTicks == 20) {
+            lastPanorama = bot.serverLevel().getGameTime();
+            panoramaPosition = bot.position();
+            panoramaDimension = bot.level().dimension().location().toString();
             String report = exploreBefore == null ? scene.looked(lookFocus) : scene.discoveries(exploreBefore);
             exploreBefore = null;
             bot.vision().endPanorama();
@@ -521,6 +563,7 @@ public final class BotController {
     }
 
     public void stop() {
+        if (excavating != null) { excavating = null; reporter.accept("failed: cancelled"); }
         exploring = null;
         exploreBefore = null;
         if (task == Task.LOOK) bot.vision().endPanorama();
@@ -582,6 +625,7 @@ public final class BotController {
             case CONTAINER -> "using container at " + where;
             case LOOK -> "looking around";
             case EXPLORE -> "exploring observed frontier";
+            case EXCAVATE -> "excavating";
             case IDLE -> "idle";
         };
     }
@@ -618,6 +662,7 @@ public final class BotController {
             return;
         }
         if (gathering != null && !gathering.checkTimeout()) return;
+        if (excavating != null && !excavating.checkTimeout()) return;
         if (target == null) {
             return;
         }
@@ -635,6 +680,7 @@ public final class BotController {
             case CONTAINER -> containerTask.tick();
             case LOOK -> tickLook();
             case EXPLORE -> exploring.tick();
+            case EXCAVATE -> excavating.tick();
             case IDLE -> {}
         }
     }
@@ -846,6 +892,7 @@ public final class BotController {
         BlockState state = level.getBlockState(pos);
         if (state.isAir()) {
             bot.worldMemory().forgetOwn(bot, pos);
+            bot.vision().afterBreak(pos);
             bot.containerMemory().forget(bot, pos);
             if (resumeTarget != null) {
                 resume();
@@ -873,13 +920,31 @@ public final class BotController {
     }
 
     private void tickCollect(BlockPos pos) {
+        if (excavating != null && !excavating.collectionSafe(pos)) return;
         // Drops can bounce away from the mined block. Follow the visible item rather than
         // declaring success at the old block center while its drop remains just out of range.
         var drops = bot.level().getEntitiesOfClass(ItemEntity.class, new AABB(pos).inflate(3),
             item -> item.isAlive() && bot.hasLineOfSight(item));
         var nearest = drops.stream().min(java.util.Comparator.comparingDouble(bot::distanceToSqr));
         Vec3 goal = nearest.map(ItemEntity::position).orElseGet(() -> Vec3.atBottomCenterOf(pos));
-        if (!hasArrived(goal)) {
+        if (!hasArrived(goal) && (excavating == null || excavating.collectionWalk(pos))) {
+            // Open a walkable entry into an ore pocket when its drops are beyond pickup reach.
+            if (gathering != null && gathering.followsOre() && bot.horizontalCollision && resumeTarget == null) {
+                var clearance = bot.level().clip(new ClipContext(bot.getEyePosition(), new Vec3(goal.x, bot.getY() + .5, goal.z),
+                    ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, bot));
+                if (clearance.getType() == HitResult.Type.BLOCK && clearance.getBlockPos().getY() >= bot.getBlockY()
+                    && bot.canInteractWithBlock(clearance.getBlockPos(), -.5)) {
+                    BlockState state = bot.level().getBlockState(clearance.getBlockPos());
+                    if (!state.getFluidState().isEmpty()) { fail("water or lava blocks ore pickup"); return; }
+                    String hint = toolHint(state);
+                    if (!hint.isEmpty()) { finish(hint); return; }
+                    if (state.getDestroySpeed(bot.level(), clearance.getBlockPos()) >= 0) {
+                        resumeTarget = pos; resumeTask = Task.COLLECT;
+                        target = clearance.getBlockPos(); task = Task.MINE_APPROACH;
+                        return;
+                    }
+                }
+            }
             walkTowards(goal);
         }
         if (--collectTicks <= 0 || (drops.isEmpty() && hasArrived(goal) && collectTicks < COLLECT_TICKS - 10)) {
@@ -888,6 +953,7 @@ public final class BotController {
                 crafting.collected();
                 return;
             }
+            if (excavating != null) { task = Task.EXCAVATE; return; }
             if (gathering != null) {
                 task = Task.GATHER;
                 gathering.collected();
@@ -1141,6 +1207,7 @@ public final class BotController {
 
     private void finish(String message) {
         gathering = null;
+        excavating = null;
         if (miningToolAlmostBroken) message += " (tool almost broken)";
         miningToolAlmostBroken = false;
         if (task == Task.FOLLOW) {

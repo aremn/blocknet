@@ -43,7 +43,7 @@ The danger scenario uses an observed safe path ref (`goto f1`) or a visible bloc
 the real registry currently has no attack/flee tool. Rule checks are deliberately small heuristics:
 inventory/greeting word matching is not a human evaluation of language quality.
 
-`tools.json` is a one-time copy of the 23 `BridgeTools.java` registry entries, including descriptions,
+`tools.json` is generated from the `BridgeTools.java` registry by `node brain/bench/sync-tools.js` (rerun after changing tools), including descriptions,
 task flags and parameter schemas. Update it when the body registry changes; a test checks names,
 descriptions and task flags against the source. The TCP bridge implements authenticated hello,
 immediate results, task acknowledgments and `task.finished` events. `mcp.js` imports the production

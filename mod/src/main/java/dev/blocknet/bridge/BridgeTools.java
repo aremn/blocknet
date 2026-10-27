@@ -23,7 +23,7 @@ public final class BridgeTools {
         add("inv", "Read inventory and tool, food and space hints.", false);
         add("changes", "Read state changes since this connection's last changes call.", false);
         add("memory", "Read remembered container contents; optionally filter items.", false, "filter?");
-        add("look", "Turn 360 degrees and return the scene; optional focus: trees, ores, water, danger, built, stations.", true, "focus?");
+        add("look", "Return the scene; recent nearby looks use one frontal frame, fresh forces a 360 degree turn; optional focus: trees, ores, water, danger, built, stations.", true, "focus?", "fresh?");
         add("scene", "Read the remembered scene instantly, without turning; delta gives one line of changes.", false, "delta?", "goal?");
         add("explore", "Walk through observed safe space toward a frontier, then look and report new objects.", true, "direction?", "distance?");
         add("plan", "Plan recipes without acting; mode craft makes new items, get counts owned items.", false,
@@ -38,8 +38,10 @@ public final class BridgeTools {
             choice.add("required", required); choices.add(choice);
         }
         TOOLS.get("goto").params().add("oneOf", choices);
+        add("descend", "Dig a safe 1-wide, 2-high staircase down to y; optional cardinal direction, otherwise facing. Requires a pickaxe for stone.", true, "y", "direction?");
+        add("tunnel", "Dig a safe 1x2 tunnel at this level and report uncovered ores with refs. Requires a pickaxe for stone.", true, "direction", "length");
         add("mine", "Walk to and mine one block, then collect its drops; needs a suitable tool.", true, "x", "y", "z");
-        add("gather", "Gather MORE items from an observed ref or logs/wood, stone/cobblestone, coal, iron, dirt, sand or exact item id; requires the right tool.", true, "item", "count?");
+        add("gather", "Gather MORE items from an observed ref or logs/wood, stone/cobblestone, coal, iron, dirt, sand or exact item id; requires the right tool.", true, "item?", "ref?", "target?", "count?");
         add("use", "Walk to and right-click one block; sneak bypasses block interactions.", true, "x", "y", "z", "sneak?");
         add("eat", "Eat one inventory food through player use; omitted item selects safe nutritious food.", true, "item?");
         add("place", "Place an inventory block at x y z; optional clicked face: up/down/north/south/east/west. Sneaks automatically.", true, "item", "x", "y", "z", "face?");
@@ -65,8 +67,8 @@ public final class BridgeTools {
             boolean optional = field.endsWith("?");
             String key = optional ? field.substring(0, field.length() - 1) : field;
             JsonObject property = new JsonObject();
-            boolean number = List.of("x", "y", "z", "count", "distance").contains(key);
-            property.addProperty("type", number ? "integer" : List.of("sneak", "delta").contains(key) ? "boolean" : "string");
+            boolean number = List.of("x", "y", "z", "count", "distance", "length").contains(key);
+            property.addProperty("type", number ? "integer" : List.of("sneak", "delta", "fresh").contains(key) ? "boolean" : "string");
             if (key.equals("count")) {
                 property.addProperty("minimum", 1);
                 property.addProperty("maximum", 1000000);
@@ -127,7 +129,7 @@ public final class BridgeTools {
                         || key.equals("count") && (number < 1 || number > 1000000)) {
                     throw new IllegalArgumentException(key + " is out of range");
                 }
-            } else if (List.of("sneak", "delta").contains(key)) {
+            } else if (List.of("sneak", "delta", "fresh").contains(key)) {
                 if (!primitive.isBoolean()) throw new IllegalArgumentException("sneak must be boolean");
             } else if (!primitive.isString()) {
                 throw new IllegalArgumentException(key + " must be a string");
@@ -167,16 +169,30 @@ public final class BridgeTools {
             source = source.withEntity(player).withPosition(player.position());
         }
         if (tool.name().equals("place")) words.add(word(args, "item", null));
+        if (tool.name().equals("gather")) {
+            String target = null;
+            for (var entry : args.entrySet()) {
+                if (entry.getValue().getAsString().matches("[a-z][0-9]+")) target = entry.getValue().getAsString();
+            }
+            if (target == null) {
+                for (String key : List.of("item", "target", "ref")) if (args.has(key)) { target = word(args, key, null); break; }
+            }
+            if (target == null || target.isEmpty()) throw new IllegalArgumentException("Missing item or ref");
+            words.add(target);
+            if (args.has("count")) words.add(word(args, "count", null));
+        }
+        if (tool.name().equals("descend")) words.add(word(args, "y", null));
         if (args.has("x")) {
             for (String axis : List.of("x", "y", "z")) words.add(word(args, axis, null));
         }
         for (String key : List.of("item", "filter", "count")) {
-            if (args.has(key) && !(key.equals("item") && tool.name().equals("place"))) words.add(word(args, key, null));
+            if (!tool.name().equals("gather") && args.has(key) && !(key.equals("item") && tool.name().equals("place"))) words.add(word(args, key, null));
         }
-        for (String key : List.of("ref", "focus", "direction", "distance")) {
-            if (args.has(key)) words.add(word(args, key, null));
+        for (String key : List.of("ref", "focus", "direction", "distance", "length")) {
+            if (args.has(key) && !tool.name().equals("gather")) words.add(word(args, key, null));
         }
         if (tool.name().equals("explore") && args.has("distance") && !args.has("direction")) words.add(words.size() - 1, "auto");
+        if (args.has("fresh") && args.get("fresh").getAsBoolean()) words.add("fresh");
         if (args.has("delta") && args.get("delta").getAsBoolean()) words.add("delta");
         if (args.has("face")) words.add(word(args, "face", null));
         if (args.has("sneak") && args.get("sneak").getAsBoolean()) words.add("sneak");

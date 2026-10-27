@@ -158,3 +158,21 @@ test('report timeline includes merged damage and death with preceding actions an
   assert.match(report, /\| gather \| 1 \| 1 \|/u); assert.match(report, /unseen:/u);
   assert.equal(JSON.stringify(perception(entries)).includes('behind wall'), false);
 });
+
+
+test('prompt build keeps the latest player language rule in autoplay', async () => {
+  const body = new FakeBody(), prompts = [];
+  const session = new BrainSession({ body, backend: fakeBackend(async text => { prompts.push(text); return { text: '<silent>' }; }), bot: 'Kirill', goal: 'find iron', pauseMs: 5, maxTurns: 2 });
+  try {
+    await session.start();
+    body.emit('event', { type: 'chat', from: 'Alex', text: '\u041d\u0430\u0439\u0434\u0438 \u0436\u0435\u043b\u0435\u0437\u043e, \u043f\u043e\u0436\u0430\u043b\u0443\u0439\u0441\u0442\u0430' });
+    await until(() => session.ended && !session.busy);
+    assert.ok(prompts.some(text => text.includes('Continue toward the goal')));
+    for (const text of prompts) {
+      assert.match(text, /Answer in the language the player last used, including autoplay chat/);
+      assert.match(text, /\u041d\u0430\u0439\u0434\u0438 \u0436\u0435\u043b\u0435\u0437\u043e/);
+    }
+    const systemPrompt = await readFile(new URL('../prompt.md', import.meta.url), 'utf8');
+    assert.match(systemPrompt, /language the player last used, including autoplay chat/);
+  } finally { session.close(); }
+});

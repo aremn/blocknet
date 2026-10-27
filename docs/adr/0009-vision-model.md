@@ -186,3 +186,10 @@ Windows, JDK 21.0.12.1+1, NeoForge 21.1.219; семь `VisionGameTests`, пол�
 
 Step 3 complete (2026-10-28): ranked `Scene`, focused `look`, instant `scene`, frontier `explore`, observed refs/categories in `goto`/`gather`, survival-tool/material hints, scene deltas and an eight-call MCP turn cap.
 Support in the self line is body sense without map writes; exploration validates each walking cell with eye evidence before entering it.
+
+
+## Live-run refinements (2026-10-28)
+
+- After every own block break, eye rays sample eye-facing faces of its six neighbours; the first occluder still stops each ray. Newly exposed evidence updates the map and object graph, allowing gather to follow a vein.
+- A panorama younger than 30 seconds and less than 6 blocks away lets `look` take one frontal 128x72 frame, reuse the scene memory and append `(looked Ns ago)`. `look fresh` / `fresh: true` always turns 360 degrees; focus and scene semantics are unchanged.
+- Background frames retain the 64x36 ray budget over about 160 degrees horizontally and 90 vertically (peripheral vision and small head motion), with the same occlusion and light rules.

@@ -147,6 +147,7 @@ export class BrainSession {
     }
     const order = this.router.route(event.text, event.from, this.body.hello?.bots ?? [this.bot]);
     if (!order) return;
+    this.lastPlayerMessage = { from: event.from, text: event.text };
     clearTimeout(this.nextTimer);
     const rule = routeRule(order, event.from);
     if (rule?.tool === 'stop') {
@@ -197,10 +198,11 @@ export class BrainSession {
           }
           if (generation !== this.generation || this.closed) continue;
           const events = this.events.splice(0);
-          const prompt = message.reflection
+          const content = message.reflection
             ? `Session goal: ${this.goal || 'help the player'}. Give 3-5 short concrete lessons: what worked, what went wrong, which tool you missed. No tools, no game actions; reflect only. Recent events: ${JSON.stringify(events)}.`
             : message.autoplay ? `Continue toward the goal: ${this.goal}; current state: ${state || JSON.stringify(this.compact.facts)}. Scene: ${scene || 'unknown; try look'}. Events: ${JSON.stringify(events)}. Pick the next action.`
               : `You are ${this.bot}. ${message.from}: ${message.text}${state}${scene ? `\nScene: ${scene}` : ''}${events.length ? `\nEvents: ${JSON.stringify(events)}` : ''}`;
+          const prompt = `Answer in the language the player last used, including autoplay chat. Latest player message: ${JSON.stringify(this.lastPlayerMessage ?? null)}.\n${content}`;
           this.log?.write('model_message', { role: 'user', text: prompt.slice(0, 300) });
           if (this.auditFile) await writeFile(this.auditFile, '');
           if (generation !== this.generation) continue;
@@ -215,7 +217,11 @@ export class BrainSession {
             this.log?.write('reflection', { text: lessons });
           }
           const reply = shortReply(result.text);
-          if (reply && (!message.reflection || message.from !== 'Session')) await this.say(reply, message.autoplay ? undefined : message.from);
+          if (reply && (!message.reflection || message.from !== 'Session')
+              && (!message.autoplay || this.turns - (this.lastAutoplaySpeech ?? -3) >= 3)) {
+            await this.say(reply, message.autoplay ? undefined : message.from);
+            if (message.autoplay) this.lastAutoplaySpeech = this.turns;
+          }
         } catch (error) {
           failure = error.message; this.compact.reset();
           if (generation === this.generation) this.diagnostic(error);

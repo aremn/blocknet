@@ -113,7 +113,7 @@ test('tool fixture matches all real registry names/descriptions/task flags; CLI 
   const source = await readFile(resolve('mod/src/main/java/dev/blocknet/bridge/BridgeTools.java'), 'utf8');
   const real = [...source.matchAll(/add\("([^"]+)", "([^"]+)", (true|false)/g)].map(([,name,description,task]) => ({name,description,task: task === 'true'}));
   assert.deepEqual(tools.map(({name, description, task}) => ({name,description,task})), real);
-  assert.equal(tools.length, 23);
+  assert.equal(tools.length, real.length);
   assert.equal(parseArgs(['--fake', '--repeat', '2']).fake, true);
   for (const argv of [['--repeat','0'], ['--models','oops'], ['--tiers','flex'], ['--repeat'], ['--unknown']]) assert.throws(() => parseArgs(argv));
 });

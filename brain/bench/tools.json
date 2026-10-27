@@ -49,12 +49,15 @@
   },
   {
     "name": "look",
-    "description": "Turn 360 degrees and return the scene; optional focus: trees, ores, water, danger, built, stations.",
+    "description": "Return the scene; recent nearby looks use one frontal frame, fresh forces a 360 degree turn; optional focus: trees, ores, water, danger, built, stations.",
     "task": true,
     "params": {
       "type": "object",
       "properties": {
         "focus": {
+          "type": "string"
+        },
+        "fresh": {
           "type": "string"
         }
       },
@@ -70,7 +73,7 @@
       "type": "object",
       "properties": {
         "delta": {
-          "type": "boolean"
+          "type": "string"
         },
         "goal": {
           "type": "string"
@@ -104,26 +107,8 @@
     "task": false,
     "params": {
       "type": "object",
-      "properties": {
-        "item": {
-          "type": "string"
-        },
-        "count": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 1000000
-        },
-        "mode": {
-          "type": "string",
-          "enum": [
-            "craft",
-            "get"
-          ]
-        }
-      },
-      "required": [
-        "item"
-      ],
+      "properties": {},
+      "required": [],
       "additionalProperties": false
     }
   },
@@ -182,21 +167,48 @@
         }
       },
       "required": [],
-      "additionalProperties": false,
-      "oneOf": [
-        {
-          "required": [
-            "ref"
-          ]
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "descend",
+    "description": "Dig a safe 1-wide, 2-high staircase down to y; optional cardinal direction, otherwise facing. Requires a pickaxe for stone.",
+    "task": true,
+    "params": {
+      "type": "object",
+      "properties": {
+        "y": {
+          "type": "integer"
         },
-        {
-          "required": [
-            "x",
-            "y",
-            "z"
-          ]
+        "direction": {
+          "type": "string"
         }
-      ]
+      },
+      "required": [
+        "y"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "tunnel",
+    "description": "Dig a safe 1x2 tunnel at this level and report uncovered ores with refs. Requires a pickaxe for stone.",
+    "task": true,
+    "params": {
+      "type": "object",
+      "properties": {
+        "direction": {
+          "type": "string"
+        },
+        "length": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "direction",
+        "length"
+      ],
+      "additionalProperties": false
     }
   },
   {
@@ -234,15 +246,17 @@
         "item": {
           "type": "string"
         },
+        "ref": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        },
         "count": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 1000000
+          "type": "integer"
         }
       },
-      "required": [
-        "item"
-      ],
+      "required": [],
       "additionalProperties": false
     }
   },
@@ -263,7 +277,7 @@
           "type": "integer"
         },
         "sneak": {
-          "type": "boolean"
+          "type": "string"
         }
       },
       "required": [
@@ -332,9 +346,7 @@
           "type": "string"
         },
         "count": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 1000000
+          "type": "integer"
         }
       },
       "required": [
@@ -354,9 +366,7 @@
           "type": "string"
         },
         "count": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 1000000
+          "type": "integer"
         }
       },
       "required": [
@@ -396,31 +406,8 @@
     "task": true,
     "params": {
       "type": "object",
-      "properties": {
-        "x": {
-          "type": "integer"
-        },
-        "y": {
-          "type": "integer"
-        },
-        "z": {
-          "type": "integer"
-        },
-        "filter": {
-          "type": "string"
-        },
-        "count": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 1000000
-        }
-      },
-      "required": [
-        "x",
-        "y",
-        "z",
-        "filter"
-      ],
+      "properties": {},
+      "required": [],
       "additionalProperties": false
     }
   },
@@ -430,31 +417,8 @@
     "task": true,
     "params": {
       "type": "object",
-      "properties": {
-        "x": {
-          "type": "integer"
-        },
-        "y": {
-          "type": "integer"
-        },
-        "z": {
-          "type": "integer"
-        },
-        "filter": {
-          "type": "string"
-        },
-        "count": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 1000000
-        }
-      },
-      "required": [
-        "x",
-        "y",
-        "z",
-        "filter"
-      ],
+      "properties": {},
+      "required": [],
       "additionalProperties": false
     }
   },

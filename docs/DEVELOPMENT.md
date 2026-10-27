@@ -282,3 +282,14 @@ Claude и число вызовов MCP. Логи, state и сгенериров
 
 ADR-0009 step 3: `look [focus]` returns a ranked scene with refs; `scene` reads memory instantly, `explore [direction|auto] [distance=32]` observes safe steps then looks. `goto <ref>` and `gather <ref|category|item> [count]` use observed targets and report the next useful tool.
 The brain receives scene deltas; MCP allows eight tool calls per model turn. Self support is body sense, never visual map evidence.
+
+
+### Mining and recent looks (2026-10-28)
+
+`/blocknet descend [name] <y> [N|E|S|W]` digs a straight, one-wide, two-high 45-degree staircase; omitted direction uses the bot's facing. `/blocknet tunnel [name] <N|E|S|W> <length>` digs a 1x2 tunnel at the current level (1..64 blocks). Both use survival tool selection, real block breaking and pickup, require a pickaxe for stone, and stop before observed water/lava, unsupported drops or void. Reports include newly uncovered ores and object refs. Torch placement is not automatic.
+
+Every own break queues occlusion-honest eye rays to the six exposed neighbours. `gather coal 3` follows newly seen connected ore; bridge gather accepts refs in `item`, `ref` or `target`. Nearby `look` reuses a panorama for 30 seconds within 6 blocks, takes one frontal 128x72 frame and appends `(looked Ns ago)`; `look fresh` (bridge `fresh: true`) forces the full turn. Background coverage is about 160 x 90 degrees at the existing 64x36 ray budget.
+
+The brain keeps the latest player's message in prompts, answers in that language even during autoplay, and limits autonomous speech to meaningful events at most once every three turns. Prefer descend/tunnel for underground ores and gather for veins.
+
+When Prism is running, preserve its deployed jar: `./gradlew build --offline -x deployJar -x removeOldDeployedJars`. Set `JAVA_HOME` to JDK 21 and, if the shell selects another user home, `GRADLE_USER_HOME=C:/Users/ncpaa/.gradle`. A busy default bridge port is logged and does not stop GameTests; bridge tests bind a separate free port.

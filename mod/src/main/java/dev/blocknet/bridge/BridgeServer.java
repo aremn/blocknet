@@ -59,6 +59,8 @@ public final class BridgeServer implements AutoCloseable {
             BridgeConfig config = BridgeConfig.load(FMLPaths.CONFIGDIR.get().resolve("blocknet_ai-bridge.json"));
             active = new BridgeServer(event.getServer(), config.port(), config.token());
             Blocknet.LOGGER.info("Blocknet bridge listening on 127.0.0.1:{}", active.port());
+        } catch (java.net.BindException exception) {
+            Blocknet.LOGGER.warn("Blocknet bridge port is already in use; continuing with local commands (tests use a separate free port)");
         } catch (IOException | RuntimeException exception) {
             Blocknet.LOGGER.error("Cannot start Blocknet bridge; local commands remain available", exception);
         }

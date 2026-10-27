@@ -25,6 +25,7 @@ import net.minecraft.commands.SharedSuggestionProvider;
 import net.minecraft.commands.arguments.ResourceOrTagKeyArgument;
 import net.minecraft.commands.arguments.coordinates.BlockPosArgument;
 import net.minecraft.commands.arguments.coordinates.Coordinates;
+import net.minecraft.core.Direction;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.commands.arguments.item.ItemArgument;
 import net.minecraft.network.chat.Component;
@@ -89,6 +90,8 @@ public final class BlocknetCommands {
             .then(craftCommand(buildContext, CraftPlan.Mode.CRAFT))
             .then(craftCommand(buildContext, CraftPlan.Mode.OBTAIN))
             .then(gatherCommand(buildContext))
+            .then(miningCommand("tunnel"))
+            .then(miningCommand("descend"))
             .then(eatCommand(buildContext))
             .then(placeCommand(buildContext))
             .then(containerCommand("deposit"))
@@ -209,9 +212,11 @@ public final class BlocknetCommands {
         var report = reporter(c.getSource(), bot);
         try {
             if (action.equals("look")) {
+                boolean fresh = words.remove("fresh");
+                argument = words.isEmpty() ? "" : words.getFirst();
                 if (!java.util.List.of("", "trees", "ores", "water", "danger", "built", "stations").contains(argument) || words.size() > 1)
                     throw new IllegalArgumentException("use look [trees|ores|water|danger|built|stations]");
-                bot.controller().look(argument, report);
+                bot.controller().look(argument, fresh, report);
             } else if (action.equals("scene")) {
                 if (words.size() > 1 || !argument.isEmpty() && !argument.equals("delta")) throw new IllegalArgumentException("use scene [delta]");
                 report.accept(argument.equals("delta") ? bot.controller().scene().delta() : bot.controller().scene().text(""));
@@ -225,6 +230,37 @@ public final class BlocknetCommands {
             }
         } catch (IllegalArgumentException error) { report.accept("blocked: " + error.getMessage()); }
         return 1;
+    }
+
+    private static LiteralArgumentBuilder<CommandSourceStack> miningCommand(String action) {
+        return Commands.literal(action).then(Commands.argument("query", StringArgumentType.greedyString()).executes(c -> {
+            var words = new java.util.ArrayList<>(java.util.Arrays.asList(StringArgumentType.getString(c, "query").trim().split("\\s+")));
+            BotPlayer bot = BotManager.get(words.getFirst());
+            if (bot != null) words.removeFirst(); else bot = nearestBot(c.getSource());
+            var report = reporter(c.getSource(), bot);
+            try {
+                boolean down = action.equals("descend");
+                if (words.size() < 1 || words.size() > 2 || !down && words.size() != 2)
+                    throw new IllegalArgumentException("use descend <y> [N|E|S|W] or tunnel <N|E|S|W> <length>");
+                String dir = down ? words.size() == 2 ? words.get(1) : bot.getDirection().getName() : words.getFirst();
+                Direction direction = switch (dir.toUpperCase(java.util.Locale.ROOT)) {
+                    case "N", "NORTH" -> Direction.NORTH;
+                    case "E", "EAST" -> Direction.EAST;
+                    case "S", "SOUTH" -> Direction.SOUTH;
+                    case "W", "WEST" -> Direction.WEST;
+                    default -> throw new IllegalArgumentException("direction must be N, E, S or W");
+                };
+                int value = Integer.parseInt(words.get(down ? 0 : 1));
+                if (down) {
+                    if (value < bot.level().getMinBuildHeight() || value >= bot.getBlockY()) throw new IllegalArgumentException("y must be below your feet and inside the world");
+                    bot.controller().descend(value, direction, report);
+                } else {
+                    if (value < 1 || value > 64) throw new IllegalArgumentException("length must be 1..64");
+                    bot.controller().tunnel(direction, value, report);
+                }
+            } catch (IllegalArgumentException error) { report.accept("blocked: " + error.getMessage()); }
+            return 1;
+        }));
     }
 
     private static LiteralArgumentBuilder<CommandSourceStack> gatherCommand(net.minecraft.commands.CommandBuildContext buildContext) {

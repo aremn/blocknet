@@ -31,6 +31,8 @@ final class GatherTask {
     private final Set<Long> columns = new HashSet<>();
     private final boolean logs;
     private boolean checked;
+    private final Set<BlockPos> vein = new HashSet<>();
+    private String oreKind;
     private final int count;
     private final int initial;
     private final Direction forward;
@@ -101,6 +103,8 @@ final class GatherTask {
         return total;
     }
 
+    boolean followsOre() { return oreKind != null; }
+
     void collected() {
         int now = held();
         emptyMines = now > lastCount ? 0 : emptyMines + 1;
@@ -115,9 +119,10 @@ final class GatherTask {
 
     private boolean matches(BlockPos pos, BlockState state) {
         if (object != null) {
-            if (!object.bounds().contains(Vec3.atCenterOf(pos))) return false;
+            if (logs && !object.bounds().contains(Vec3.atCenterOf(pos))) return false;
             if (logs && !columns.contains(BlockPos.asLong(pos.getX(), 0, pos.getZ()))) return false;
-            if (!logs && !Semantics.state(state).kind().equals(object.kind())) return false;
+            if (!logs && (!Semantics.state(state).kind().equals(object.kind())
+                || vein.isEmpty() && !object.bounds().contains(Vec3.atCenterOf(pos)))) return false;
         }
         if (logs) return state.is(BlockTags.LOGS);
         if (target.equals("coal") || target.equals("iron")) {
@@ -140,6 +145,11 @@ final class GatherTask {
         if (cell != null && cell.stateId() >= 0) {
             String hint = controller.toolHint(Block.stateById(cell.stateId()));
             if (!hint.isEmpty()) { controller.gatherFinished(hint); return false; }
+        }
+        var semantic = cell == null ? null : cell.semantic();
+        if (semantic != null && semantic.category().equals("ore")) {
+            oreKind = semantic.kind();
+            vein.add(pos.immutable());
         }
         controller.gatherMine(pos);
         return true;
@@ -205,6 +215,16 @@ final class GatherTask {
         }
         bot.worldMemory().glance(bot, 4);
         BlockPos feet = bot.blockPosition();
+        // Newly seen connected ore wins over other remembered deposits, even below our feet.
+        if (oreKind != null) {
+            var connected = bot.worldMemory().nearby(bot, 64).stream().map(e -> e.pos())
+                .filter(this::matches).filter(this::visible)
+                .filter(pos -> bot.worldMemory().observed().cell(bot.level().dimension().location().toString(), pos).semantic().kind().equals(oreKind))
+                .filter(pos -> vein.stream().anyMatch(old -> Math.abs(pos.getX()-old.getX()) <= 1
+                    && Math.abs(pos.getY()-old.getY()) <= 1 && Math.abs(pos.getZ()-old.getZ()) <= 1))
+                .min(Comparator.comparingDouble(pos -> bot.position().distanceToSqr(Vec3.atCenterOf(pos))));
+            if (connected.isPresent()) { mine(connected.get()); return; }
+        }
         // Prefer exposed resources above the floor before opening a staircase.
         var candidate = bot.worldMemory().nearby(bot, 64).stream()
             .map(entry -> entry.pos()).filter(pos -> pos.getY() >= feet.getY())
@@ -229,6 +249,6 @@ final class GatherTask {
     }
 
     private void noSight() {
-        controller.gatherFinished("none seen for " + target + "; " + controller.scene().unexplored() + "; try explore");
+        controller.gatherFinished("none seen for " + target + (held() > initial ? "; gathered " + (held() - initial) + "/" + count : "") + "; " + controller.scene().unexplored() + "; try explore");
     }
 }

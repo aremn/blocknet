@@ -3,6 +3,9 @@ package dev.blocknet.vision;
 
 import dev.blocknet.body.BotPlayer;
 import java.util.HashSet;
+import java.util.ArrayDeque;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -27,20 +30,49 @@ public final class VisionSensor {
     private final Map<UUID, EntitySeen> entities = new LinkedHashMap<>();
     private int cursor, frameWidth = 64, frameHeight = 36, frameNumber;
     private long frameNanos, lastTick = Long.MIN_VALUE, workTick = Long.MIN_VALUE, tickNanos;
-    private boolean panorama;
+    private boolean panorama, frontal;
+    private final ArrayDeque<Vec3> exposed = new ArrayDeque<>();
+    private int completedFrames;
     private long lookSince;
     private int entityCursor;
 
     public VisionSensor(BotPlayer bot) { this.bot = bot; ray = new VoxelRay(bot); }
     public VisionTiming timing() { return timing; }
     public double range() { return Math.min(64, bot.getServer().getPlayerList().getViewDistance() * 16.0); }
+    public int completedFrames() { return completedFrames; }
+    public void startFrame() {
+        frontal = true;
+        cursor = 0; frameNanos = 0; frameWidth = 128; frameHeight = 72;
+    }
+
+    /** Sample only eye-facing faces of the six newly exposed cells, with ordinary occluding rays. */
+    public void afterBreak(BlockPos removed) {
+        Vec3 eye = bot.getEyePosition();
+        for (Direction neighbour : Direction.values()) {
+            BlockPos cell = removed.relative(neighbour);
+            for (Direction face : Direction.values()) {
+                Vec3 normal = Vec3.atLowerCornerOf(face.getNormal());
+                Vec3 center = Vec3.atCenterOf(cell).add(normal.scale(.5));
+                if (eye.subtract(center).dot(normal) <= 0) continue;
+                for (double a : new double[] {-.3, 0, .3}) for (double b : new double[] {-.3, 0, .3}) {
+                    Vec3 offset = switch (face.getAxis()) {
+                        case X -> new Vec3(0, a, b);
+                        case Y -> new Vec3(a, 0, b);
+                        case Z -> new Vec3(a, b, 0);
+                    };
+                    exposed.add(center.add(offset).subtract(normal.scale(.001)));
+                }
+            }
+        }
+    }
+
     public void startPanorama() {
-        panorama = true;
+        panorama = true; frontal = false;
         lookSince = bot.serverLevel().getGameTime();
         cursor = 0; frameNanos = 0; frameWidth = 128; frameHeight = 72;
     }
     public void endPanorama() {
-        panorama = false;
+        panorama = false; frontal = false;
         // Complete a partially sampled high-resolution frame before returning to background resolution.
         if (cursor == 0) { frameWidth = 64; frameHeight = 36; }
     }
@@ -79,7 +111,8 @@ public final class VisionSensor {
         if (lastTick == tick || !bot.isAlive()) return;
         lastTick = tick;
         beginTick();
-        if (!panorama && cursor == 0 && tick % 4 != 0) return;
+        while (!exposed.isEmpty() && canObserve()) observe(exposed.removeFirst());
+        if (!panorama && !frontal && cursor == 0 && tick % 4 != 0) return;
         if (!canObserve()) return;
         long start = System.nanoTime(), deadline = start + BUDGET_NANOS - tickNanos;
         ObservedMap map = prepare();
@@ -95,8 +128,8 @@ public final class VisionSensor {
         while (System.nanoTime() < deadline - 100_000) {
             int pixel = Math.floorMod(cursor * 1543, total);
             double jitterX = jitter(pixel, frameNumber, 0), jitterY = jitter(pixel, frameNumber, 1);
-            double u = ((pixel % frameWidth + jitterX) / frameWidth * 2 - 1) * Math.tan(Math.toRadians(45));
-            double v = ((pixel / frameWidth + jitterY) / frameHeight * 2 - 1) * Math.tan(Math.toRadians(29.5));
+            double u = ((pixel % frameWidth + jitterX) / frameWidth * 2 - 1) * Math.tan(Math.toRadians(panorama || frontal ? 45 : 80));
+            double v = ((pixel / frameWidth + jitterY) / frameHeight * 2 - 1) * Math.tan(Math.toRadians(panorama || frontal ? 29.5 : 45));
             Vec3 direction = forward.add(right.scale(u)).add(up.scale(-v)).normalize();
             ray.cast(eye, direction, range(), map);
             cursor++;
@@ -104,7 +137,7 @@ public final class VisionSensor {
                 long now = System.nanoTime();
                 frameNanos += now - start;
                 timing.frame(frameNanos, frameWidth == 128);
-                cursor = 0; frameNanos = 0; frameNumber++;
+                cursor = 0; frameNanos = 0; frameNumber++; completedFrames++; frontal = false;
                 if (!panorama) { frameWidth = 64; frameHeight = 36; }
                 tickNanos += now - start;
                 return;
@@ -142,12 +175,12 @@ public final class VisionSensor {
         entities.values().removeIf(entity -> bot.serverLevel().getGameTime() - entity.lastSeen() > 100);
     }
 
-    private static boolean inView(Vec3 delta, float yaw, float pitch, double range) {
+    private boolean inView(Vec3 delta, float yaw, float pitch, double range) {
         if (delta.lengthSqr() > range * range) return false;
         Vec3 forward = Vec3.directionFromRotation(pitch, yaw), right = Vec3.directionFromRotation(0, yaw + 90);
         Vec3 up = right.cross(forward);
         double depth = delta.dot(forward);
-        return depth > 0 && Math.abs(delta.dot(right)) <= depth && Math.abs(delta.dot(up)) <= depth * Math.tan(Math.toRadians(29.5));
+        return depth > 0 && Math.abs(delta.dot(right)) <= depth * Math.tan(Math.toRadians(panorama || frontal ? 45 : 80)) && Math.abs(delta.dot(up)) <= depth * Math.tan(Math.toRadians(panorama || frontal ? 29.5 : 45));
     }
 
     public List<ObjectGraph.ObjectView> objects() {
