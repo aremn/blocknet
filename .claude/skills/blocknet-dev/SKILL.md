@@ -21,7 +21,7 @@ If a change contradicts an ADR, write a new ADR that supersedes it instead of si
 - The repo has two Gradle layers: the root (settings, wrapper, `gradle.properties`) and the `mod/`
   subproject. Future modules (`pathing/`, `brain/`, `protocol/`) sit next to `mod/`.
 - Minecraft and NeoForge sources (Mojang names + Parchment) are in
-  `mod/build/moddev/artifacts/neoforge-21.1.264-sources.jar`. Read real signatures there
+  `mod/build/moddev/artifacts/neoforge-21.1.219-sources.jar`. Read real signatures there
   (`unzip -p <jar> net/minecraft/...java`) instead of guessing; extract files you need to `_src/`
   (git-ignored). Clones of other repos also go to `_src/`, with `git -c core.longpaths=true` because
   Windows path limits bite deep Java trees.
