@@ -1,8 +1,11 @@
 package dev.blocknet;
 
 import com.mojang.logging.LogUtils;
+import dev.blocknet.body.BotManager;
+import dev.blocknet.command.BlocknetCommands;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.common.Mod;
+import net.neoforged.neoforge.common.NeoForge;
 import org.slf4j.Logger;
 
 /**
@@ -17,6 +20,9 @@ public final class Blocknet {
     public static final Logger LOGGER = LogUtils.getLogger();
 
     public Blocknet(IEventBus modEventBus) {
+        NeoForge.EVENT_BUS.addListener(BlocknetCommands::onRegisterCommands);
+        NeoForge.EVENT_BUS.addListener(BotManager::onPlayerLoggedOut);
+        NeoForge.EVENT_BUS.addListener(BotManager::onServerStopping);
         LOGGER.info("Blocknet body loaded");
     }
 }

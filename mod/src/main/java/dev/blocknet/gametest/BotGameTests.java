@@ -1,0 +1,113 @@
+package dev.blocknet.gametest;
+
+import dev.blocknet.Blocknet;
+import dev.blocknet.body.BotManager;
+import dev.blocknet.body.BotPacketListener;
+import dev.blocknet.body.BotPlayer;
+import net.minecraft.core.BlockPos;
+import net.minecraft.gametest.framework.GameTest;
+import net.minecraft.gametest.framework.GameTestHelper;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.phys.Vec3;
+import net.neoforged.neoforge.gametest.GameTestHolder;
+import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
+
+/**
+ * In-game tests of the bot body: run with {@code ./gradlew :mod:runGameTestServer}.
+ *
+ * <p>The arena template is empty air; each test lays a stone floor at y = 0 and stands the bot on it.
+ */
+@GameTestHolder(Blocknet.MOD_ID)
+@PrefixGameTestTemplate(false)
+public final class BotGameTests {
+    private BotGameTests() {}
+
+    @GameTest(template = "arena", timeoutTicks = 200)
+    public static void joinsAsRealPlayer(GameTestHelper helper) {
+        floor(helper);
+        BotPlayer bot = spawn(helper, "BnJoiner", new Vec3(4.5, 1, 4.5));
+        helper.succeedWhen(() -> {
+            helper.assertTrue(helper.getLevel().getServer().getPlayerList().getPlayer(bot.getUUID()) == bot, "bot is in the player list");
+            helper.assertTrue(bot.connection instanceof BotPacketListener, "bot uses its own packet listener");
+            helper.assertTrue(bot.onGround(), "bot stands on the floor");
+            BotManager.despawn("BnJoiner");
+        });
+    }
+
+    @GameTest(template = "arena", timeoutTicks = 200)
+    public static void walksToTarget(GameTestHelper helper) {
+        floor(helper);
+        BotPlayer bot = spawn(helper, "BnWalker", new Vec3(1.5, 1, 1.5));
+        BlockPos goal = helper.absolutePos(new BlockPos(7, 1, 7));
+        bot.controller().goTo(goal, message -> {});
+        helper.succeedWhen(() -> {
+            helper.assertTrue(bot.blockPosition().closerThan(goal, 1.5), "bot reached " + goal.toShortString() + ", is at " + bot.blockPosition().toShortString());
+            BotManager.despawn("BnWalker");
+        });
+    }
+
+    @GameTest(template = "arena", timeoutTicks = 200)
+    public static void minesDirtByHandAndPicksItUp(GameTestHelper helper) {
+        floor(helper);
+        BlockPos dirt = new BlockPos(4, 1, 4);
+        helper.setBlock(dirt, Blocks.DIRT);
+        BotPlayer bot = spawn(helper, "BnDigger", new Vec3(1.5, 1, 4.5));
+        bot.controller().mine(helper.absolutePos(dirt), message -> {});
+        helper.succeedWhen(() -> {
+            helper.assertBlockPresent(Blocks.AIR, dirt);
+            helper.assertTrue(bot.getInventory().countItem(Items.DIRT) >= 1, "bot picked up the dirt");
+            // Dirt by hand: hardness 0.5 -> 15 ticks of digging.
+            helper.assertTrue(helper.getTick() >= 15, "dirt broke too fast: tick " + helper.getTick());
+            BotManager.despawn("BnDigger");
+        });
+    }
+
+    @GameTest(template = "arena", timeoutTicks = 200)
+    public static void picksPickaxeForStone(GameTestHelper helper) {
+        floor(helper);
+        BlockPos stone = new BlockPos(4, 1, 4);
+        helper.setBlock(stone, Blocks.STONE);
+        BotPlayer bot = spawn(helper, "BnMiner", new Vec3(1.5, 1, 4.5));
+        bot.getInventory().setItem(5, new ItemStack(Items.WOODEN_PICKAXE));
+        bot.controller().mine(helper.absolutePos(stone), message -> {});
+        helper.succeedWhen(() -> {
+            helper.assertBlockPresent(Blocks.AIR, stone);
+            helper.assertTrue(bot.getInventory().countItem(Items.COBBLESTONE) >= 1, "bot got cobblestone");
+            // Stone with a wooden pickaxe: 23 ticks of digging.
+            helper.assertTrue(helper.getTick() >= 23, "stone broke too fast: tick " + helper.getTick());
+            BotManager.despawn("BnMiner");
+        });
+    }
+
+    /** Honest rules: stone by hand takes ~7.5 s and drops nothing. */
+    @GameTest(template = "arena", timeoutTicks = 400)
+    public static void stoneByHandIsSlowAndDropsNothing(GameTestHelper helper) {
+        floor(helper);
+        BlockPos stone = new BlockPos(4, 1, 4);
+        helper.setBlock(stone, Blocks.STONE);
+        BotPlayer bot = spawn(helper, "BnPuncher", new Vec3(1.5, 1, 4.5));
+        bot.controller().mine(helper.absolutePos(stone), message -> {});
+        helper.runAfterDelay(100, () -> helper.assertBlockPresent(Blocks.STONE, stone));
+        helper.succeedWhen(() -> {
+            helper.assertBlockPresent(Blocks.AIR, stone);
+            helper.assertTrue(bot.getInventory().countItem(Items.COBBLESTONE) == 0, "no cobblestone without a pickaxe");
+            // Stone by hand: 150 ticks of digging.
+            helper.assertTrue(helper.getTick() >= 150, "stone broke too fast: tick " + helper.getTick());
+            BotManager.despawn("BnPuncher");
+        });
+    }
+
+    private static void floor(GameTestHelper helper) {
+        for (int x = 0; x < 9; x++) {
+            for (int z = 0; z < 9; z++) {
+                helper.setBlock(new BlockPos(x, 0, z), Blocks.STONE);
+            }
+        }
+    }
+
+    private static BotPlayer spawn(GameTestHelper helper, String name, Vec3 relativePos) {
+        return BotManager.spawn(helper.getLevel().getServer(), name, helper.getLevel(), helper.absoluteVec(relativePos), 0.0F);
+    }
+}

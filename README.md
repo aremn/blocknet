@@ -2,7 +2,9 @@
 
 An AI companion that plays modded Minecraft with you, as a real player.
 
-> **Status:** early prototype. Nothing playable yet.
+> **Status:** early prototype. A bot joins as a real player, walks in a straight line and mines
+> blocks with survival speed and drops, driven by `/blocknet` debug commands. No pathfinding,
+> perception or brain yet.
 > Target: Minecraft **1.21.1**, **NeoForge 21.1** (All the Mods 10).
 
 ## Idea
