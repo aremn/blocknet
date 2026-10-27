@@ -27,3 +27,20 @@ export function routeRule(text, player) {
   }
   return null;
 }
+
+/** All brains see the same bridge chat/spoke events, keeping player routing consistent. */
+export class ChatRouter {
+  constructor(bot, aliases = [], listen = 'all') {
+    if (!['all', 'name'].includes(listen)) throw new Error('--listen must be all or name');
+    this.bot = bot; this.aliases = aliases; this.listen = listen; this.last = new Map();
+  }
+  spoke(bot, player) { if (player) this.last.set(player, bot); }
+  route(text, player, bots = [this.bot]) {
+    const explicit = addressed(text, this.bot, this.aliases);
+    if (explicit !== null) return explicit;
+    if (this.listen === 'name') return null;
+    for (const bot of bots) if (addressed(text, bot) !== null) return null;
+    return bots.length === 1 && bots[0].toLowerCase() === this.bot.toLowerCase()
+      || this.last.get(player)?.toLowerCase() === this.bot.toLowerCase() ? text.trim() : null;
+  }
+}

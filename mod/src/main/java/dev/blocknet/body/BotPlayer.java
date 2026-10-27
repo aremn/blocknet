@@ -23,6 +23,9 @@ import net.minecraft.world.food.FoodData;
  * bot has no client, so it runs physics itself every tick, after the controller has set its inputs.
  */
 public final class BotPlayer extends ServerPlayer {
+    private final dev.blocknet.state.Moments moments = new dev.blocknet.state.Moments(this);
+    public dev.blocknet.state.Moments moments() { return moments; }
+
     private final BotController controller = new BotController(this);
     private final BodyStateTracker bodyState = new BodyStateTracker(this);
 
@@ -70,6 +73,26 @@ public final class BotPlayer extends ServerPlayer {
         }
         super.tick();
         doTick();
+        if (isAlive()) moments.tick();
+    }
+
+    @Override
+    protected void actuallyHurt(DamageSource source, float amount) {
+        float before = getHealth();
+        super.actuallyHurt(source, amount);
+        moments.damage(source, before, getHealth());
+    }
+
+    @Override
+    public boolean causeFallDamage(float distance, float multiplier, DamageSource source) {
+        if (distance > 4) moments.emit("fall", "fell " + distance + " blocks");
+        return super.causeFallDamage(distance, multiplier, source);
+    }
+
+    @Override
+    public void onEquippedItemBroken(net.minecraft.world.item.Item item, net.minecraft.world.entity.EquipmentSlot slot) {
+        super.onEquippedItemBroken(item, slot);
+        moments.emit("item_broke", net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(item).toString());
     }
 
     /**
@@ -79,6 +102,7 @@ public final class BotPlayer extends ServerPlayer {
      */
     @Override
     public void die(DamageSource source) {
+        moments.death(source);
         controller.stop();
         super.die(source);
         BridgeServer.botDied(this);

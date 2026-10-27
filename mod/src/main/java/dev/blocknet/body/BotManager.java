@@ -64,6 +64,7 @@ public final class BotManager {
         bot.setYHeadRot(yaw);
         PathingDefaults.apply(IBaritone.KEY.get(bot).settings());
         BOTS.put(key(name), bot);
+        dev.blocknet.bridge.BridgeServer.botsChanged();
         Blocknet.LOGGER.info("Spawned bot {} at {}", name, pos);
         return bot;
     }
@@ -74,6 +75,8 @@ public final class BotManager {
         if (bot == null) {
             return false;
         }
+        dev.blocknet.bridge.BridgeServer.botsChanged();
+        bot.moments().flushDamage();
         bot.controller().stop();
         if (bot.connection instanceof BotPacketListener listener) {
             listener.removeNow(new DisconnectionDetails(Component.literal("Despawned")));
@@ -100,12 +103,14 @@ public final class BotManager {
     /** Stops tracking a bot that is leaving (for example after dying), so no command reaches it. */
     static void forget(BotPlayer bot) {
         BOTS.values().remove(bot);
+        dev.blocknet.bridge.BridgeServer.botsChanged();
     }
 
     public static void onPlayerLoggedOut(PlayerEvent.PlayerLoggedOutEvent event) {
         if (event.getEntity() instanceof BotPlayer bot) {
             bot.controller().stop();
             BOTS.values().remove(bot);
+        dev.blocknet.bridge.BridgeServer.botsChanged();
             // The pathfinder keeps per-entity state by UUID; a bot spawned again starts fresh.
             IBaritone.KEY.remove(bot);
             IInteractionController.KEY.remove(bot);

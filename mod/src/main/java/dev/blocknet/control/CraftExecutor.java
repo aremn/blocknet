@@ -367,14 +367,7 @@ final class CraftExecutor {
             if (!controller.craftAim(point)) {
                 return;
             }
-            boolean sneaking = bot.isShiftKeyDown();
-            bot.setShiftKeyDown(true); // Place even when the support itself opens a menu.
-            try {
-                bot.gameMode.useItemOn(bot, bot.serverLevel(), bot.getMainHandItem(), InteractionHand.MAIN_HAND,
-                    new BlockHitResult(point, Direction.UP, ground, false));
-            } finally {
-                bot.setShiftKeyDown(sneaking);
-            }
+            BlockPlacement.click(bot, new BlockHitResult(point, Direction.UP, ground, false));
             if (bot.level().getBlockState(spot).is(net.minecraft.world.level.block.Block.byItem(CraftStations.item(step().station())))) {
                 stationPos = spot.immutable();
                 bot.worldMemory().remember(bot, stationPos);
@@ -419,20 +412,7 @@ final class CraftExecutor {
         if (!level.getBlockState(ground).isFaceSturdy(level, ground, Direction.UP)) {
             return "no sturdy support";
         }
-        // All supported stations fill their block. Include the bot and non-building entities too.
-        if (bot.getBoundingBox().intersects(new AABB(spot))
-            || !level.getEntities(bot, new AABB(spot), entity -> !entity.isSpectator()).isEmpty()) {
-            return "intersects entity bounding box";
-        }
-        if (!bot.canInteractWithBlock(ground, -0.5)) {
-            return "out of reach";
-        }
-        Vec3 point = Vec3.atCenterOf(ground).add(0, 0.4999, 0);
-        var hit = WorldMemory.clip(bot, point, ClipContext.Block.OUTLINE);
-        if (hit.getType() != HitResult.Type.BLOCK || !hit.getBlockPos().equals(ground)
-            || hit.getDirection() != Direction.UP) {
-            return "support face not visible";
-        }
+        if (BlockPlacement.face(bot, spot, Direction.UP) == null) return "support face not visible, occupied or out of reach";
         return null;
     }
 

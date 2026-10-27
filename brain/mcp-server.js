@@ -1,6 +1,9 @@
 import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
-import { appendFile } from 'node:fs/promises';
+import { appendFile, mkdir } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { appendSession, ResultSummary, failed } from './session-log.js';
 import { Body, option } from './body.js';
 
 export const PROTOCOL_VERSION = '2026-07-28';
@@ -8,8 +11,16 @@ const LEGACY_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05']
 const serverInfo = { name: 'blocknet', version: '1.0.0' };
 
 /** JSON lines only on stdout; concurrent requests let stop interrupt a waiting action. */
-export function serveMcp(body, bot, input = process.stdin, output = process.stdout) {
+export const feedbackTool = { name: 'tool_feedback', description: 'Report a missing, confusing, redundant or buggy tool in one concrete sentence. Brain-only; does not act in the game.',
+  inputSchema: { type: 'object', properties: { kind: { type: 'string', enum: ['missing', 'confusing', 'redundant', 'bug'] },
+    tool: { type: 'string' }, note: { type: 'string', maxLength: 500 } }, required: ['kind', 'note'], additionalProperties: false } };
+
+export function serveMcp(body, bot, input = process.stdin, output = process.stdout, options = {}) {
   const lines = createInterface({ input });
+  lines.on('error', error => { process.stderr.write(`MCP input: ${error.message}\n`); lines.close(); });
+  const summary = new ResultSummary();
+  const log = entry => appendSession(options.sessionFile ?? process.env.BLOCKNET_SESSION, { bot, ...entry });
+  const feedbackFile = options.feedbackFile ?? resolve(dirname(fileURLToPath(import.meta.url)), 'logs/tool-feedback.jsonl');
   let initialized = false;
   const send = message => output.write(`${JSON.stringify(message)}\n`);
   lines.on('line', async line => {
@@ -51,20 +62,37 @@ export function serveMcp(body, bot, input = process.stdin, output = process.stdo
         case 'tools/list': {
           if (!initialized && !version) throw new Error('Initialize first');
           const hello = await body.ready();
-          reply({ tools: hello.tools.map(tool => ({ name: tool.name, description: tool.description, inputSchema: tool.params })) });
+          reply({ tools: hello.tools.map(tool => ({ name: tool.name, description: tool.description, inputSchema: tool.params })).concat(feedbackTool) });
           break;
         }
         case 'tools/call': {
           if (!initialized && !version) throw new Error('Initialize first');
           const { name, arguments: args = {} } = request.params ?? {};
           if (typeof name !== 'string') { error(-32602, 'Tool name required'); break; }
+          const started = Date.now();
+          const id = `${process.pid}-${started}-${request.id}`;
+          log({ type: 'tool_call', id, tool: name, args });
           try {
             if (process.env.BLOCKNET_AUDIT) {
-              await appendFile(process.env.BLOCKNET_AUDIT, `${JSON.stringify({ time: Date.now(), tool: name })}\n`);
+              await appendFile(process.env.BLOCKNET_AUDIT, `${JSON.stringify({ time: started, tool: name, args })}\n`);
             }
-            const text = await body.action(bot, name, args);
-            reply({ content: [{ type: 'text', text }], isError: /^(?:\[[^\]]+\] )?(failed|blocked|cancelled)\b/i.test(text) });
+            let text;
+            if (name === 'tool_feedback') {
+              if (!['missing', 'confusing', 'redundant', 'bug'].includes(args.kind) || typeof args.note !== 'string'
+                || !args.note.trim() || args.note.length > 500 || args.tool != null && typeof args.tool !== 'string'
+                || Object.keys(args).some(k => !['kind', 'tool', 'note'].includes(k))) throw new Error('Invalid tool_feedback: kind and a concrete note (<=500 chars) required');
+              const feedback = { type: 'tool_feedback', bot, session: process.env.BLOCKNET_SESSION_ID ?? options.sessionId,
+                kind: args.kind, ...(args.tool && { tool: args.tool }), note: args.note.trim() };
+              await mkdir(dirname(feedbackFile), { recursive: true });
+              await appendFile(feedbackFile, `${JSON.stringify({ time: new Date().toISOString(), ...feedback })}\n`);
+              log(feedback);
+              text = 'Feedback recorded';
+            } else text = await body.action(bot, name, args);
+            const isError = failed(text);
+            log({ type: 'tool_result', id, tool: name, result: summary.summarize(name, text), failed: isError, ms: Date.now()-started });
+            reply({ content: [{ type: 'text', text }], isError });
           } catch (failure) {
+            log({ type: 'tool_result', id, tool: name, result: failure.message, failed: true, ms: Date.now()-started });
             reply({ content: [{ type: 'text', text: failure.message }], isError: true });
           }
           break;

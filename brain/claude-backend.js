@@ -57,6 +57,7 @@ export class ClaudeBackend {
       for (const block of event.message?.content ?? []) {
         if (block.type === 'tool_use') turn.toolCalls++;
         if (block.type === 'text') {
+          this.options.onMessage?.(block.text);
           turn.ttftMs ??= Date.now() - turn.started;
           turn.text = block.text;
         }

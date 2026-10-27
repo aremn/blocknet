@@ -4,7 +4,7 @@ import { PassThrough } from 'node:stream';
 import { createInterface } from 'node:readline';
 import { addressed, routeRule } from '../rules.js';
 import { buildClaudeArgs } from '../brain.js';
-import { PROTOCOL_VERSION, serveMcp } from '../mcp-server.js';
+import { PROTOCOL_VERSION, serveMcp, feedbackTool } from '../mcp-server.js';
 
 test('rules route Russian and English short orders without the model', () => {
   for (const [tool, orders] of Object.entries({ stop: ['stop', 'СТОП!'],
@@ -67,7 +67,7 @@ test('MCP JSON-lines initialize and tools/list use the body registry; calls awai
   input.write(`${hello.slice(15)}\n${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`);
   assert.equal((await next()).result.protocolVersion, PROTOCOL_VERSION);
   send({ id: 2, method: 'tools/list' });
-  assert.deepEqual((await next()).result.tools, [{ name: 'goto', description: 'Walk', inputSchema: { type: 'object' } }]);
+  assert.deepEqual((await next()).result.tools, [{ name: 'goto', description: 'Walk', inputSchema: { type: 'object' } }, feedbackTool]);
   send({ id: 3, method: 'tools/call', params: { name: 'goto', arguments: { x: 1, y: 2, z: 3 } } });
   await new Promise(resolve => setImmediate(resolve));
   send({ id: 4, method: 'ping' });

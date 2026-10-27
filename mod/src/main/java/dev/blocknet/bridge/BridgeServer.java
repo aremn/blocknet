@@ -75,6 +75,23 @@ public final class BridgeServer implements AutoCloseable {
             "text", event.getRawText()));
     }
 
+    public static void botsChanged() {
+        if (active == null) return;
+        JsonObject event = object("type", "bots.changed");
+        var bots = new com.google.gson.JsonArray();
+        BotManager.all().forEach(bot -> bots.add(bot.getGameProfile().getName()));
+        event.add("bots", bots);
+        active.broadcast(event);
+    }
+
+    public static void botSpoke(BotPlayer bot, String player) {
+        if (active != null) active.broadcast(object("type", "bot.spoke", "bot", bot.getGameProfile().getName(), "player", player));
+    }
+
+    public static void moment(JsonObject event) {
+        if (active != null) active.broadcast(event);
+    }
+
     public static void botDied(BotPlayer bot) {
         if (active != null) active.broadcast(object("type", "bot.died", "bot", bot.getGameProfile().getName()));
     }

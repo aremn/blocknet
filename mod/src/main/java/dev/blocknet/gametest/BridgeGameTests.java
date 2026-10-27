@@ -5,6 +5,7 @@ import com.google.gson.JsonParser;
 import dev.blocknet.Blocknet;
 import dev.blocknet.body.BotManager;
 import dev.blocknet.bridge.BridgeServer;
+import dev.blocknet.bridge.BridgeTools;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.io.PrintWriter;
@@ -41,7 +42,7 @@ public final class BridgeGameTests {
                 check(read(input).has("error"), "wrong token rejected");
                 output.println("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"hello\",\"params\":{\"protocol\":1,\"token\":\"test-secret\"}}");
                 var hello = read(input).getAsJsonObject("result");
-                check(hello.get("protocol").getAsInt() == 1 && hello.getAsJsonArray("tools").size() == 19, "hello lists all tools");
+                check(hello.get("protocol").getAsInt() == 1 && hello.getAsJsonArray("tools").size() == BridgeTools.list().size(), "hello lists all tools");
                 check(hello.getAsJsonArray("tools").asList().stream()
                     .anyMatch(tool -> tool.getAsJsonObject().get("name").getAsString().equals("gather")), "hello lists gather");
                 check(hello.getAsJsonArray("bots").toString().contains("BnBridge"), "hello lists bot");

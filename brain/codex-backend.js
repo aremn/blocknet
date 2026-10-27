@@ -98,6 +98,8 @@ export class CodexBackend {
       turn.deltas += p.delta;
     }
     if (event.method === 'item/completed') {
+      if (p.item?.type === 'agentMessage') this.options.onMessage?.(p.item.text);
+
       if (p.item.type === 'agentMessage' && p.item.phase !== 'commentary') turn.text = p.item.text;
       if (p.item.type === 'mcpToolCall') turn.toolIds.add(p.item.id);
     }

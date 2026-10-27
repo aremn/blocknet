@@ -89,6 +89,8 @@ public final class BlocknetCommands {
             .then(craftCommand(buildContext, CraftPlan.Mode.CRAFT))
             .then(craftCommand(buildContext, CraftPlan.Mode.OBTAIN))
             .then(gatherCommand(buildContext))
+            .then(eatCommand(buildContext))
+            .then(placeCommand(buildContext))
             .then(containerCommand("deposit"))
             .then(containerCommand("withdraw"))
             .then(memoryCommand())
@@ -149,6 +151,44 @@ public final class BlocknetCommands {
                 bot.controller().stop();
                 return 1;
             })));
+    }
+
+    private static LiteralArgumentBuilder<CommandSourceStack> eatCommand(net.minecraft.commands.CommandBuildContext buildContext) {
+        var root = Commands.literal("eat").executes(c -> eat(c, false, false));
+        root.then(Commands.argument("item", ItemArgument.item(buildContext)).executes(c -> eat(c, false, true)));
+        root.then(Commands.argument("name", StringArgumentType.word()).suggests(BOT_NAMES)
+            .executes(c -> eat(c, true, false))
+            .then(Commands.argument("item", ItemArgument.item(buildContext)).executes(c -> eat(c, true, true))));
+        return root;
+    }
+
+    private static int eat(CommandContext<CommandSourceStack> c, boolean named, boolean item) throws CommandSyntaxException {
+        BotPlayer bot = named ? bot(c) : nearestBot(c.getSource());
+        bot.controller().eat(item ? ItemArgument.getItem(c, "item").createItemStack(1, false) : ItemStack.EMPTY,
+            reporter(c.getSource(), bot));
+        return 1;
+    }
+
+    private static LiteralArgumentBuilder<CommandSourceStack> placeCommand(net.minecraft.commands.CommandBuildContext buildContext) {
+        return Commands.literal("place").then(placeItem(buildContext, false))
+            .then(Commands.argument("name", StringArgumentType.word()).suggests(BOT_NAMES).then(placeItem(buildContext, true)));
+    }
+
+    private static RequiredArgumentBuilder<CommandSourceStack, net.minecraft.commands.arguments.item.ItemInput> placeItem(
+            net.minecraft.commands.CommandBuildContext buildContext, boolean named) {
+        var pos = Commands.argument("pos", BlockPosArgument.blockPos()).executes(c -> place(c, named, null));
+        for (var face : net.minecraft.core.Direction.values()) {
+            pos.then(Commands.literal(face.getName()).executes(c -> place(c, named, face)));
+        }
+        return Commands.argument("item", ItemArgument.item(buildContext)).then(pos);
+    }
+
+    private static int place(CommandContext<CommandSourceStack> c, boolean named, net.minecraft.core.Direction face)
+            throws CommandSyntaxException {
+        BotPlayer bot = named ? bot(c) : nearestBot(c.getSource());
+        bot.controller().place(ItemArgument.getItem(c, "item").createItemStack(1, false),
+            BlockPosArgument.getLoadedBlockPos(c, "pos"), face, reporter(c.getSource(), bot));
+        return 1;
     }
 
     private static LiteralArgumentBuilder<CommandSourceStack> gatherCommand(net.minecraft.commands.CommandBuildContext buildContext) {
@@ -327,15 +367,26 @@ public final class BlocknetCommands {
         LiteralArgumentBuilder<CommandSourceStack> node = Commands.literal(literal);
         RequiredArgumentBuilder<CommandSourceStack, String> named = Commands.argument("name", StringArgumentType.word()).suggests(BOT_NAMES);
         if (takesPos) {
-            node.then(Commands.argument("pos", BlockPosArgument.blockPos())
-                .executes(context -> command.run(context, nearestBot(context.getSource()))));
-            named.then(Commands.argument("pos", BlockPosArgument.blockPos())
-                .executes(context -> command.run(context, bot(context))));
+            var nearPos = Commands.argument("pos", BlockPosArgument.blockPos())
+                .executes(context -> command.run(context, nearestBot(context.getSource())));
+            var namedPos = Commands.argument("pos", BlockPosArgument.blockPos())
+                .executes(context -> command.run(context, bot(context)));
+            if (literal.equals("use")) {
+                nearPos.then(Commands.literal("sneak").executes(c -> sneakUse(c, nearestBot(c.getSource()))));
+                namedPos.then(Commands.literal("sneak").executes(c -> sneakUse(c, bot(c))));
+            }
+            node.then(nearPos);
+            named.then(namedPos);
         } else {
             node.executes(context -> command.run(context, nearestBot(context.getSource())));
             named.executes(context -> command.run(context, bot(context)));
         }
         return node.then(named);
+    }
+
+    private static int sneakUse(CommandContext<CommandSourceStack> c, BotPlayer bot) throws CommandSyntaxException {
+        bot.controller().use(BlockPosArgument.getLoadedBlockPos(c, "pos"), true, reporter(c.getSource(), bot));
+        return 1;
     }
 
     private static int spawn(CommandContext<CommandSourceStack> context) {

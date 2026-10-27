@@ -26,8 +26,7 @@ node brain/brain.js --bot Kirill --config "/path/to/minecraft/config/blocknet_ai
 ```
 
 `BLOCKNET_CONFIG`, `BLOCKNET_BOT`, and `BLOCKNET_ALIASES` supply the same defaults as `--config`,
-`--bot`, and `--alias`; `BLOCKNET_BACKEND` supplies the backend default. `--max-turns N` rotates
-the model process after N successful turns (default 30). Config contains `port` (25599 by default) and a generated `token`; restart
+`--bot`, and `--alias`; `BLOCKNET_BACKEND` supplies the backend default. `--max-turns N` caps autoplay model turns (default 200); backend processes rotate every 30 turns. Config contains `port` (25599 by default) and a generated `token`; restart
 the Minecraft server after editing it. TCP binds only to `127.0.0.1`. The client reconnects every
 second; interrupted actions are never replayed automatically. Spawn the bot again after death.
 
@@ -87,8 +86,8 @@ authenticated; `CODEX_BIN` and optional `CODEX_SCRIPT` provide the equivalent ov
 Short stop/come/follow/look orders in English and Russian and clean Russian gather orders bypass
 the model. Messages queue during a call. `стоп`/`stop` acts immediately, closes the model process
 and clears queued requests; death also resets the session. A dead process restarts on the next
-request; an interrupted request is never replayed. Processes also rotate after `--max-turns` turns.
-A brief “Щас.” / “Ок.” / “Делаю.” / “On it.” is sent if the answer takes more than 700 ms.
+request; an interrupted request is never replayed. Processes also rotate every 30 turns.
+Model replies are sent after completion, allowing empty answers and `<silent>` to stay silent.
 Each user message includes a compact inventory, held item and low-health line only when changed;
 a fresh session gets the current line again. The English prompt asks for one casual sentence in
 the player's language; delivery caps replies at 12 words / 200 characters.
@@ -112,3 +111,54 @@ node --test brain/test/
 Tests cover rules, MCP framing/task outcomes, persistent Claude stream-json and Codex JSON-RPC
 with fake children, usage, restarts, and slow/fast acknowledgements. No tests call a model.
 Real authentication, end-to-end latency and model behavior require a connected live test.
+
+## Autoplay, chat and learning logs
+
+```sh
+node brain/brain.js --bot Kirill --autoplay "survive and progress: get wood, tools, shelter, iron" --max-turns 200 --max-minutes 60
+node brain/brain.js --bot Kirill --listen name --lessons 3
+node brain/report.js
+node brain/report.js brain/logs/session-<date>-Kirill.jsonl 10
+```
+
+Autoplay continues toward the goal after each answer, including changed state and recent task,
+damage and chat events, with a 1.2 second pause. Player chat takes priority. Bare `стоп`/`stop`
+pauses and cancels the current action; `продолжай`/`continue` resumes. The defaults are hard limits
+of 200 model turns (including chat while autoplay is active) and 60 wall-clock minutes, including
+paused/disconnected time. Reaching either limit ends autoplay; one final reflection asks for
+3-5 lessons and then the brain remains idle, available for player chat. A time limit cancels the
+model and sends stop to the body. No interrupted action is replayed after reconnecting.
+
+`--listen all` is the default: with one bot, ordinary player chat needs no name. With several
+bots, use a name at the start, or speak to the bot that last replied to that player. `--listen name`
+requires a name/alias. Kirill also recognizes Кирилл/Кир by default; `--alias` overrides aliases.
+Rules such as `ко мне`, `за мной`, `накопай 10 булыжника` and `стоп` work on bare messages.
+The model may answer `<silent>` or an empty string when a message is for another player; nothing
+is sent to game chat. The brain survives a closed game and reconnects when its bridge returns.
+
+Body tools now include `eat {item?}`, `use {x,y,z,sneak?}` and `place {item,x,y,z,face?}`.
+Commands: `/blocknet eat [name] [item]`, `/blocknet use [name] <pos> [sneak]`,
+`/blocknet place [name] <item> <pos> [face]`. The optional face is the clicked support face
+(`up`, `down`, `north`, `south`, `east`, `west`); place sneaks automatically. Eating holds normal
+player use until consumption, chooses safe food by default, and refuses ordinary food at full hunger.
+
+- `brain/logs/session-<date>-<bot>.jsonl`: chronological model messages (up to 300 characters),
+  tool arguments/results/timings, changed state as line diffs, chat, and key body moments with
+  snapshots. Each segment is at most 5 MB; continuation files use `.jsonl.1`, `.jsonl.2`, etc.
+  The last 20 sessions are retained, including their segments.
+- `brain/logs/tool-feedback.jsonl`: the brain-only `tool_feedback {kind,tool?,note}` MCP tool
+  records missing/confusing/redundant/bug feedback in one concrete sentence. Never sent to the body.
+- `brain/logs/report-<session>.md`: `report.js` prints and writes a compact Markdown report with
+  goal, duration, turns, tokens, calls/failures per tool, key moments, deaths and their preceding
+  30 seconds, grouped feedback, last failures (optional final number, default 10), and longest
+  gaps between progress. Without a path it uses the latest session and follows rotated segments.
+- `brain/logs/lessons.md`: one reflection at autoplay end, or on chat `Кирилл, итоги` (bare `итоги`
+  works in all mode). `--lessons N` adds the last N reflection entries to the next system prompt,
+  capped at 2400 characters; the default is 0.
+
+Moments include damage bursts merged over 2 seconds, death, low health/hunger, broken equipment,
+failed tasks, falls over 4 blocks, entering water/lava/fire, dimension/night transitions, first
+hostile sightings and full inventory. Snapshots include task/report, last three bridge calls,
+nearby entities (cap 8), light, biome, held item, ground/front blocks and nearby hazards.
+Human-only facts that were outside the bot's sight are labeled `unseen`; these fields are removed
+before an event reaches the model. Routine state/tool results stay compact; no raw backend dumps.

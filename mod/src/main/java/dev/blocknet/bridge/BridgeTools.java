@@ -31,7 +31,9 @@ public final class BridgeTools {
         add("goto", "Walk to exact block coordinates.", true, "x", "y", "z");
         add("mine", "Walk to and mine one block, then collect its drops; needs a suitable tool.", true, "x", "y", "z");
         add("gather", "Mine visible blocks for count MORE items and collect drops; matching ground permits a simple staircase.", true, "item", "count");
-        add("use", "Walk to and right-click one block through player interaction.", true, "x", "y", "z");
+        add("use", "Walk to and right-click one block; sneak bypasses block interactions.", true, "x", "y", "z", "sneak?");
+        add("eat", "Eat one inventory food through player use; omitted item selects safe nutritious food.", true, "item?");
+        add("place", "Place an inventory block at x y z; optional clicked face: up/down/north/south/east/west. Sneaks automatically.", true, "item", "x", "y", "z", "face?");
         add("craft", "Craft a count of NEW items; look for stations first and read missing-material hints.", true, "item", "count?");
         add("get", "Obtain at least count items, counting inventory and remembered sources.", true, "item", "count?");
         add("look-in", "Open a container, remember its visible menu slots and close it.", true, "x", "y", "z");
@@ -40,7 +42,7 @@ public final class BridgeTools {
         add("withdraw", "Take items from a container through menu clicks; omitted count means all matching items.", true,
             "x", "y", "z", "filter", "count?");
         add("stop", "Cancel the current action immediately.", false);
-        add("say", "Say one short message to all players as this bot.", false, "text");
+        add("say", "Say one short message to all players as this bot.", false, "text", "player?");
     }
 
     private BridgeTools() {}
@@ -55,7 +57,7 @@ public final class BridgeTools {
             String key = optional ? field.substring(0, field.length() - 1) : field;
             JsonObject property = new JsonObject();
             boolean number = List.of("x", "y", "z", "count").contains(key);
-            property.addProperty("type", number ? "integer" : "string");
+            property.addProperty("type", number ? "integer" : key.equals("sneak") ? "boolean" : "string");
             if (key.equals("count")) {
                 property.addProperty("minimum", 1);
                 property.addProperty("maximum", 1000000);
@@ -116,6 +118,8 @@ public final class BridgeTools {
                         || key.equals("count") && (number < 1 || number > 1000000)) {
                     throw new IllegalArgumentException(key + " is out of range");
                 }
+            } else if (key.equals("sneak")) {
+                if (!primitive.isBoolean()) throw new IllegalArgumentException("sneak must be boolean");
             } else if (!primitive.isString()) {
                 throw new IllegalArgumentException(key + " must be a string");
             }
@@ -127,6 +131,7 @@ public final class BridgeTools {
         if (tool.name().equals("say")) {
             String text = args.get("text").getAsString().replaceAll("[\\r\\n]+", " ");
             bot.getServer().getPlayerList().broadcastSystemMessage(Component.literal("<" + name + "> " + text), false);
+            BridgeServer.botSpoke(bot, args.has("player") ? word(args, "player", null) : "");
             report.accept("said");
             return;
         }
@@ -147,12 +152,16 @@ public final class BridgeTools {
             if (player.serverLevel() != bot.serverLevel()) throw new IllegalArgumentException("Player is in another dimension");
             source = source.withEntity(player).withPosition(player.position());
         }
+        if (tool.name().equals("place")) words.add(word(args, "item", null));
         if (args.has("x")) {
             for (String axis : List.of("x", "y", "z")) words.add(word(args, axis, null));
         }
         for (String key : List.of("item", "filter", "count")) {
-            if (args.has(key)) words.add(word(args, key, null));
+            if (args.has(key) && !(key.equals("item") && tool.name().equals("place"))) words.add(word(args, key, null));
         }
+        if (args.has("face")) words.add(word(args, "face", null));
+        if (args.has("sneak") && args.get("sneak").getAsBoolean()) words.add("sneak");
+        bot.moments().tool(tool.name(), args);
         CommandSource output = new CommandSource() {
             @Override public void sendSystemMessage(Component message) { report.accept(message.getString()); }
             @Override public boolean acceptsSuccess() { return true; }

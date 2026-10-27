@@ -63,7 +63,7 @@ public final class BotController {
     /** Give up on a path that has not reached its goal after this long (5 minutes). */
     private static final int MAX_PATH_TICKS = 20 * 60 * 5;
 
-    private enum Task { IDLE, GOTO, FOLLOW, MINE_APPROACH, MINE_BREAK, COLLECT, USE, CRAFT, GATHER, CONTAINER, LOOK }
+    private enum Task { IDLE, GOTO, FOLLOW, MINE_APPROACH, MINE_BREAK, COLLECT, USE, EAT, PLACE, CRAFT, GATHER, CONTAINER, LOOK }
 
     private int lookTicks;
     private float lookStartYaw;
@@ -266,8 +266,94 @@ public final class BotController {
     }
 
     /** Walks into reach of the block and right-clicks it with the held item. */
-    public void use(BlockPos pos, Consumer<String> reporter) {
+    private boolean sneakUse;
+    private ItemStack actionItem = ItemStack.EMPTY;
+    private int foodBefore, itemBefore, actionTicks;
+    private Direction placeFace;
+
+    public void use(BlockPos pos, Consumer<String> reporter) { use(pos, false, reporter); }
+
+    public void use(BlockPos pos, boolean sneak, Consumer<String> reporter) {
         start(Task.USE, pos, reporter);
+        sneakUse = sneak;
+    }
+
+    /** Select through the same inventory menu swap a player uses. */
+    private void hold(int slot) {
+        bot.closeContainer();
+        if (slot != bot.getInventory().selected) {
+            bot.inventoryMenu.clicked(slot < 9 ? slot + 36 : slot, bot.getInventory().selected,
+                net.minecraft.world.inventory.ClickType.SWAP, bot);
+        }
+    }
+
+    public void eat(ItemStack requested, Consumer<String> reporter) {
+        start(Task.EAT, bot.blockPosition(), reporter);
+        int best = -1;
+        double score = -Double.MAX_VALUE;
+        int missing = 20 - bot.getFoodData().getFoodLevel();
+        boolean foundFood = false;
+        for (int i = 0; i < 36; i++) {
+            ItemStack stack = bot.getInventory().getItem(i);
+            if (stack.isEmpty() || !requested.isEmpty() && stack.getItem() != requested.getItem()) continue;
+            var food = stack.getFoodProperties(bot);
+            if (food == null) continue;
+            foundFood = true;
+            if (missing == 0 && !food.canAlwaysEat()) continue;
+            boolean harmful = food.effects().stream().anyMatch(e -> !e.effect().getEffect().value().isBeneficial());
+            double value = Math.min(missing, food.nutrition()) * 10 - Math.max(0, food.nutrition() - missing) * 4
+                + food.saturation() - (harmful ? 10000 : 0);
+            if (value > score) { best = i; score = value; }
+        }
+        if (best < 0) { finish(foundFood ? "not hungry" : "failed: no food in inventory"); return; }
+        hold(best);
+        actionItem = bot.getMainHandItem().copy();
+        itemBefore = actionItem.getCount();
+        foodBefore = bot.getFoodData().getFoodLevel();
+        actionTicks = 0;
+        bot.gameMode.useItem(bot, bot.serverLevel(), bot.getMainHandItem(), InteractionHand.MAIN_HAND);
+        if (!bot.isUsingItem()) fail("cannot eat " + BuiltInRegistries.ITEM.getKey(actionItem.getItem()).getPath());
+    }
+
+    private void tickEat() {
+        if (++actionTicks > 1200) { fail("eating timed out"); return; }
+        if (bot.isUsingItem()) return;
+        if (bot.getMainHandItem().getItem() != actionItem.getItem() || bot.getMainHandItem().getCount() < itemBefore) {
+            finish("ate " + BuiltInRegistries.ITEM.getKey(actionItem.getItem()).getPath() + " (food " + foodBefore
+                + " -> " + bot.getFoodData().getFoodLevel() + ")");
+        } else fail("eating interrupted");
+    }
+
+    public void place(ItemStack item, BlockPos pos, Direction face, Consumer<String> reporter) {
+        start(Task.PLACE, pos, reporter);
+        int slot = -1;
+        for (int i = 0; i < 36; i++) if (bot.getInventory().getItem(i).is(item.getItem())) { slot = i; break; }
+        if (slot < 0) { fail("item missing from inventory"); return; }
+        if (!(item.getItem() instanceof net.minecraft.world.item.BlockItem)) { fail("not a block item"); return; }
+        hold(slot);
+        actionItem = item.copy();
+        placeFace = face;
+        actionTicks = 0;
+    }
+
+    private void tickPlace(BlockPos pos) {
+        if (++actionTicks > 400) { fail("no visible free placement face at " + pos.toShortString()); return; }
+        if (!bot.level().getBlockState(pos).canBeReplaced()) { fail("position occupied"); return; }
+        for (Direction face : Direction.values()) {
+            if (placeFace != null && face != placeFace) continue;
+            BlockHitResult hit = BlockPlacement.face(bot, pos, face);
+            if (hit == null) continue;
+            stopPathing();
+            if (!craftAim(hit.getLocation())) return;
+            BlockPlacement.click(bot, hit);
+            if (bot.level().getBlockState(pos).is(((net.minecraft.world.item.BlockItem) actionItem.getItem()).getBlock())) {
+                bot.worldMemory().remember(bot, pos);
+                finish("placed " + BuiltInRegistries.ITEM.getKey(actionItem.getItem()).getPath() + " at "
+                    + pos.getX() + " " + pos.getY() + " " + pos.getZ());
+                return;
+            }
+        }
+        if (pathTo(new GoalGetToBlock(pos)) == PathState.FAILED) fail("cannot reach placement at " + pos.toShortString());
     }
 
     public void lookIn(BlockPos pos, Consumer<String> reporter) {
@@ -372,6 +458,7 @@ public final class BotController {
     }
 
     public void stop() {
+        bot.releaseUsingItem();
         stopPathing();
         abortBreaking();
         if (gathering != null) {
@@ -389,6 +476,7 @@ public final class BotController {
             cancelled.cancel();
         }
         boolean wasFollowing = task == Task.FOLLOW;
+        if (task == Task.EAT || task == Task.PLACE) reporter.accept("failed: cancelled");
         task = Task.IDLE;
         target = null;
         resumeTarget = null;
@@ -421,6 +509,8 @@ public final class BotController {
             case MINE_BREAK -> String.format(Locale.ROOT, "mining block at %s (%.0f%%)", where, breakProgress * 100.0F);
             case COLLECT -> "collecting drops at " + where;
             case USE -> "going to use block at " + where;
+            case EAT -> "eating";
+            case PLACE -> "placing block at " + where;
             case CRAFT -> "crafting";
             case GATHER -> "gathering";
             case CONTAINER -> "using container at " + where;
@@ -471,6 +561,8 @@ public final class BotController {
             case MINE_BREAK -> tickMineBreak(target);
             case COLLECT -> tickCollect(target);
             case USE -> tickUse(target);
+            case EAT -> tickEat();
+            case PLACE -> tickPlace(target);
             case CRAFT -> crafting.tick();
             case GATHER -> gathering.tick();
             case CONTAINER -> containerTask.tick();
@@ -483,7 +575,7 @@ public final class BotController {
         stop();
         task = newTask;
         target = pos.immutable();
-        reporter = newReporter;
+        reporter = message -> { bot.moments().report(message); newReporter.accept(message); };
         bestDistanceSq = Double.MAX_VALUE;
         ticksWithoutProgress = 0;
         breakTicks = 0;
@@ -744,7 +836,11 @@ public final class BotController {
         ServerLevel level = bot.serverLevel();
         String block = level.getBlockState(pos).getBlock().getName().getString();
         // Same call the server makes for a client's right-click packet: the block (or mod) decides what happens.
-        InteractionResult result = bot.gameMode.useItemOn(bot, level, bot.getMainHandItem(), InteractionHand.MAIN_HAND, hit);
+        boolean sneaking = bot.isShiftKeyDown();
+        bot.setShiftKeyDown(sneakUse);
+        InteractionResult result;
+        try { result = bot.gameMode.useItemOn(bot, level, bot.getMainHandItem(), InteractionHand.MAIN_HAND, hit); }
+        finally { bot.setShiftKeyDown(sneaking); }
         if (result.shouldSwing()) {
             bot.swing(InteractionHand.MAIN_HAND);
         }
@@ -981,6 +1077,7 @@ public final class BotController {
         if (task == Task.FOLLOW) {
             pathing().settings().allowSprint.set(followAllowSprint);
         }
+        bot.moments().report(message);
         // Clear FOLLOW before stop so it cannot emit a second terminal report.
         task = Task.IDLE;
         stop();

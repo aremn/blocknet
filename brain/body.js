@@ -42,6 +42,7 @@ export class Body extends EventEmitter {
     this.socket = socket;
     socket.setNoDelay(true);
     const lines = createInterface({ input: socket });
+    lines.on('error', error => { this.emit('diagnostic', error.message); socket.destroy(); });
     lines.on('line', line => {
       try { this.receive(JSON.parse(line)); }
       catch (error) { this.emit('diagnostic', `Invalid bridge message: ${error.message}`); }
@@ -108,6 +109,7 @@ export class Body extends EventEmitter {
   receive(message) {
     if (message.method === 'event') {
       const event = message.params;
+      if (event.type === 'bots.changed' && this.hello) this.hello.bots = event.bots;
       if (event.type === 'task.finished') {
         const entry = this.tasks.get(event.task_id);
         if (entry) {
