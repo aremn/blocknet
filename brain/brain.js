@@ -348,7 +348,7 @@ export async function main() {
   const promptFile = resolve(logDir, `prompt.${bot}.md`);
   await writeFile(promptFile, prompt);
   const legacyBackend = option('backend', process.env.BLOCKNET_BACKEND);
-  const actorSpec = parseRole(option('actor', legacyBackend === 'claude' ? 'claude:haiku' : 'codex:gpt-6-luna:priority'));
+  const actorSpec = parseRole(option('actor', legacyBackend === 'claude' ? 'claude:haiku' : 'codex:gpt-6.1-terra:priority'));
   const plannerSpec = parseRole(option('planner', 'claude:sonnet'));
   const backend = createBackend(actorSpec.backend, {
     cwd: rootDir, mcpConfig, mcpServer, prompt, promptFile, maxTurns: 10,

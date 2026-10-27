@@ -134,7 +134,8 @@ export async function runBench({ models = defaultModels.split(','), tiers = ['de
     return { records, rawFile, reportFile };
   } finally {
     await body.close();
-    await rm(workspace, { recursive: true, force: true });
+    // Windows keeps the folder busy for a moment after child processes exit; cleanup is best effort.
+    await rm(workspace, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }).catch(() => {});
   }
 }
 
