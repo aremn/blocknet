@@ -6,11 +6,14 @@ import java.util.function.Consumer;
 import javax.annotation.Nullable;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.protocol.game.ServerboundPlayerActionPacket;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.util.Mth;
 import net.minecraft.world.InteractionHand;
+import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.player.Inventory;
+import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.block.state.BlockState;
@@ -21,9 +24,10 @@ import net.minecraft.world.phys.Vec3;
 /**
  * Drives the bot's head, legs and hands each tick for one simple task at a time.
  *
- * <p>Prototype: walking goes in a straight line with jumps (no pathfinding yet), mining goes through
- * {@code ServerPlayerGameMode} exactly like a client's dig packets, so break speed, reach and drops
- * follow the normal survival rules.
+ * <p>Prototype: walking goes in a straight line with jumps (no pathfinding yet). Mining and
+ * right-clicking go through {@code ServerPlayerGameMode} exactly like a client's packets, so break
+ * speed, reach, drops and modded block behaviour (including opening their menus) follow the normal
+ * survival rules.
  */
 public final class BotController {
     private static final float MAX_TURN_PER_TICK = 30.0F;
@@ -33,7 +37,7 @@ public final class BotController {
     private static final int COLLECT_TICKS = 40;
     private static final int MAX_BREAK_TICKS = 20 * 60;
 
-    private enum Task { IDLE, GOTO, MINE_APPROACH, MINE_BREAK, COLLECT }
+    private enum Task { IDLE, GOTO, MINE_APPROACH, MINE_BREAK, COLLECT, USE }
 
     private final BotPlayer bot;
     private Task task = Task.IDLE;
@@ -63,6 +67,11 @@ public final class BotController {
         start(Task.MINE_APPROACH, pos, reporter);
     }
 
+    /** Walks into reach of the block and right-clicks it with the held item. */
+    public void use(BlockPos pos, Consumer<String> reporter) {
+        start(Task.USE, pos, reporter);
+    }
+
     public void stop() {
         abortBreaking();
         task = Task.IDLE;
@@ -71,7 +80,7 @@ public final class BotController {
 
     public String describe() {
         if (task == Task.IDLE || target == null) {
-            return "idle";
+            return "idle, open menu: " + openMenuDescription();
         }
         String where = target.getX() + " " + target.getY() + " " + target.getZ();
         return switch (task) {
@@ -79,8 +88,18 @@ public final class BotController {
             case MINE_APPROACH -> "approaching block at " + where;
             case MINE_BREAK -> String.format(Locale.ROOT, "mining block at %s (%.0f%%)", where, breakProgress * 100.0F);
             case COLLECT -> "collecting drops at " + where;
+            case USE -> "going to use block at " + where;
             case IDLE -> "idle";
         };
+    }
+
+    /** Registry id and size of the menu the bot has open, or "none". */
+    public String openMenuDescription() {
+        AbstractContainerMenu menu = bot.containerMenu;
+        if (menu == bot.inventoryMenu) {
+            return "none";
+        }
+        return BuiltInRegistries.MENU.getKey(menu.getType()) + " (" + menu.slots.size() + " slots)";
     }
 
     /** Called from {@link BotPlayer#tick()} before physics: sets this tick's inputs. */
@@ -96,6 +115,7 @@ public final class BotController {
             case MINE_APPROACH -> tickMineApproach(target);
             case MINE_BREAK -> tickMineBreak(target);
             case COLLECT -> tickCollect(target);
+            case USE -> tickUse(target);
             case IDLE -> {}
         }
     }
@@ -123,37 +143,13 @@ public final class BotController {
     }
 
     private void tickMineApproach(BlockPos pos) {
+        BlockHitResult hit = approachAndAim(pos);
+        if (hit == null) {
+            return;
+        }
         ServerLevel level = bot.serverLevel();
         BlockState state = level.getBlockState(pos);
-        if (state.isAir()) {
-            finish("nothing to mine at " + pos.toShortString());
-            return;
-        }
-        // Small margin so the server's own reach check in handleBlockBreakAction always passes.
-        if (!bot.canInteractWithBlock(pos, -0.5)) {
-            Vec3 goal = Vec3.atBottomCenterOf(pos);
-            walkTowards(goal);
-            if (isStuck(goal)) {
-                fail("cannot get within reach of " + pos.toShortString());
-            }
-            return;
-        }
-
-        Vec3 center = Vec3.atCenterOf(pos);
-        lookAt(center);
-        if (!isLookingAt(center)) {
-            return;
-        }
-        Vec3 eye = bot.getEyePosition();
-        BlockHitResult hit = level.clip(new ClipContext(eye, center, ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, bot));
-        if (hit.getType() == HitResult.Type.BLOCK && !hit.getBlockPos().equals(pos)) {
-            fail("view of " + pos.toShortString() + " is blocked by " + level.getBlockState(hit.getBlockPos()).getBlock().getName().getString());
-            return;
-        }
-        breakFace = hit.getType() == HitResult.Type.BLOCK
-            ? hit.getDirection()
-            : Direction.getNearest(eye.x - center.x, eye.y - center.y, eye.z - center.z);
-
+        breakFace = hit.getDirection();
         selectBestTool(state);
         bot.gameMode.handleBlockBreakAction(pos, ServerboundPlayerActionPacket.Action.START_DESTROY_BLOCK, breakFace, level.getMaxBuildHeight(), sequence++);
         bot.swing(InteractionHand.MAIN_HAND);
@@ -195,6 +191,61 @@ public final class BotController {
         if (--collectTicks <= 0 || (hasArrived(goal) && collectTicks < COLLECT_TICKS - 10)) {
             finish("mined block at " + pos.toShortString());
         }
+    }
+
+    private void tickUse(BlockPos pos) {
+        BlockHitResult hit = approachAndAim(pos);
+        if (hit == null) {
+            return;
+        }
+        ServerLevel level = bot.serverLevel();
+        String block = level.getBlockState(pos).getBlock().getName().getString();
+        // Same call the server makes for a client's right-click packet: the block (or mod) decides what happens.
+        InteractionResult result = bot.gameMode.useItemOn(bot, level, bot.getMainHandItem(), InteractionHand.MAIN_HAND, hit);
+        if (result.shouldSwing()) {
+            bot.swing(InteractionHand.MAIN_HAND);
+        }
+        finish("used " + block + " at " + pos.toShortString() + ": " + result + ", open menu: " + openMenuDescription());
+    }
+
+    /**
+     * Walks into reach of the block and turns to face it. Returns the hit on the face the bot sees
+     * once it is ready to act; returns null while still approaching or turning, or after failing.
+     */
+    @Nullable
+    private BlockHitResult approachAndAim(BlockPos pos) {
+        ServerLevel level = bot.serverLevel();
+        if (level.getBlockState(pos).isAir()) {
+            finish("nothing at " + pos.toShortString());
+            return null;
+        }
+        // Small margin so the server's own reach checks always pass.
+        if (!bot.canInteractWithBlock(pos, -0.5)) {
+            Vec3 goal = Vec3.atBottomCenterOf(pos);
+            walkTowards(goal);
+            if (isStuck(goal)) {
+                fail("cannot get within reach of " + pos.toShortString());
+            }
+            return null;
+        }
+
+        Vec3 center = Vec3.atCenterOf(pos);
+        lookAt(center);
+        if (!isLookingAt(center)) {
+            return null;
+        }
+        Vec3 eye = bot.getEyePosition();
+        BlockHitResult hit = level.clip(new ClipContext(eye, center, ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, bot));
+        if (hit.getType() == HitResult.Type.BLOCK && !hit.getBlockPos().equals(pos)) {
+            fail("view of " + pos.toShortString() + " is blocked by " + level.getBlockState(hit.getBlockPos()).getBlock().getName().getString());
+            return null;
+        }
+        if (hit.getType() != HitResult.Type.BLOCK) {
+            // The ray reached the center without touching the outline (a thin block): aim at the nearest face.
+            Direction face = Direction.getNearest(eye.x - center.x, eye.y - center.y, eye.z - center.z);
+            return new BlockHitResult(center, face, pos, false);
+        }
+        return hit;
     }
 
     private void walkTowards(Vec3 goal) {

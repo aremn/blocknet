@@ -27,6 +27,8 @@ import net.neoforged.neoforge.event.RegisterCommandsEvent;
  * /blocknet goto &lt;name&gt; &lt;pos&gt;
  * /blocknet come &lt;name&gt;
  * /blocknet mine &lt;name&gt; &lt;pos&gt;
+ * /blocknet use &lt;name&gt; &lt;pos&gt;
+ * /blocknet close &lt;name&gt;
  * /blocknet stop &lt;name&gt;
  * </pre>
  */
@@ -80,6 +82,21 @@ public final class BlocknetCommands {
                             bot.controller().mine(pos, reporter(context.getSource(), bot));
                             return 1;
                         }))))
+            .then(Commands.literal("use")
+                .then(Commands.argument("name", StringArgumentType.word()).suggests(BOT_NAMES)
+                    .then(Commands.argument("pos", BlockPosArgument.blockPos())
+                        .executes(context -> {
+                            BotPlayer bot = bot(context);
+                            BlockPos pos = BlockPosArgument.getLoadedBlockPos(context, "pos");
+                            bot.controller().use(pos, reporter(context.getSource(), bot));
+                            return 1;
+                        }))))
+            .then(Commands.literal("close")
+                .then(Commands.argument("name", StringArgumentType.word()).suggests(BOT_NAMES)
+                    .executes(context -> {
+                        bot(context).closeContainer();
+                        return 1;
+                    })))
             .then(Commands.literal("stop")
                 .then(Commands.argument("name", StringArgumentType.word()).suggests(BOT_NAMES)
                     .executes(context -> {
