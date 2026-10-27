@@ -2,6 +2,7 @@ package dev.blocknet.body;
 
 import com.mojang.authlib.GameProfile;
 import dev.blocknet.Blocknet;
+import dev.blocknet.control.PathingDefaults;
 import dev.blocknet.pathing.api.IBaritone;
 import dev.blocknet.pathing.api.utils.IInteractionController;
 import java.util.ArrayList;
@@ -60,6 +61,7 @@ public final class BotManager {
             bot.setHealth(bot.getMaxHealth());
         }
         bot.teleportTo(level, pos.x, pos.y, pos.z, yaw, 0.0F);
+        PathingDefaults.apply(IBaritone.KEY.get(bot).settings());
         BOTS.put(key(name), bot);
         Blocknet.LOGGER.info("Spawned bot {} at {}", name, pos);
         return bot;
