@@ -190,3 +190,30 @@ English to code, commands and commit messages.
   Socket GameTests use port zero; an occupied live bridge port warns without failing the server.
   Run the full GameTest suite once at the end; inspect required tests, failed at and exceptions in
   build/gametest.log. Node: `node --test brain/test/`. Leave changes uncommitted when requested.
+
+
+## Knowledge and acquisition skills (ADR-0010 step 1)
+
+- `knowledge/Knowledge` rebuilds at server start and global datapack sync. Walk the dimension's
+  biome generation settings (not the flat generator's decoration overrides), placed features and
+  OreConfiguration. Decode placement codecs for anchored uniform/trapezoid heights and count/rarity;
+  other height providers report `unknown range`. Loot tables and shared ToolFacts probes provide
+  drop/tool facts. Group variants by non-silk drop; never search world blocks to build this index.
+- `/blocknet knowledge|mine_ore|obtain [name] <item> [count]` share the bridge registry. `mine_ore`
+  gathers additional drops; `obtain` counts inventory. `get` retains its existing planner scope.
+- `SkillTask` owns the final report while launching ordinary controller actions. Preserve ownership
+  during internal starts/finishes; external stop/replacement cancels the owner exactly once. Progress
+  is `task.progress` every 200 ticks, with depth/count and bridge task_id; budget 12000 ticks.
+- `MineOreTask`: most frequent known peak at/below feet in this dimension, descend, main 1x2 tunnel,
+  side branches every 3 blocks, length 12. Only observed ore interrupts this fixed schedule. Observed
+  fluids stop a leg; the main leg can try a parallel lane. Stop before a tool has ≤5 uses left.
+- `ObtainTask`: inventory → remembered withdrawals → planner deficits → observed logs/ground/ore.
+  Bound depth (16), operations (256), and cycles. A forecast may add observed source items to a COPY
+  for recipe selection (e.g. birch wood); it must never grant real items. Unsupported mob drops are
+  explained from entity loot tables. Prepare wooden then stone pickaxes through the same goals.
+- Observed side ore may expose only a face: gather visibility checks eye-facing faces as aiming does.
+  For staircase support, aim at its top face; a center ray can hit the current stair's lip. Headroom
+  pickup does not walk and must not mistake an empty head cell for missing floor support.
+- `KnowledgeSkillGameTests` contains the six step-1 checks (including paired hidden-ore scenes).
+  Wait for light for the tree. Run only requested targeted tests while iterating; the full suite once
+  at the end. Regenerate tools.json with `node brain/bench/sync-tools.js` after registry edits.

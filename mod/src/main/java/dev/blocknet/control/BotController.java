@@ -65,6 +65,33 @@ public final class BotController {
 
     private enum Task { IDLE, GOTO, FOLLOW, MINE_APPROACH, MINE_BREAK, COLLECT, USE, EAT, PLACE, CRAFT, GATHER, CONTAINER, LOOK, EXPLORE, EXCAVATE }
 
+    private SkillTask skill;
+
+    public void mineOre(net.minecraft.world.item.Item item, int count, Consumer<String> report) {
+        stop();
+        skill = new MineOreTask(bot, item, count, 20*60*10, report);
+    }
+
+    public void obtain(net.minecraft.world.item.Item item, int count, Consumer<String> report) {
+        stop();
+        skill = new ObtainTask(bot, item, count, report);
+    }
+
+    void skillAction(Runnable action) {
+        SkillTask owner = skill;
+        skill = null;
+        try { action.run(); } finally { skill = owner != null && !owner.done ? owner : null; }
+    }
+
+    void skillFinished(SkillTask owner, String message, Consumer<String> report) {
+        if (skill == owner) {
+            skill = null;
+            stop();
+            bot.moments().report(message);
+        }
+        report.accept(message);
+    }
+
     private MiningTask excavating;
     private long lastPanorama = Long.MIN_VALUE;
     private Vec3 panoramaPosition;
@@ -420,6 +447,13 @@ public final class BotController {
             finish(toolHint(state));
             return;
         }
+        int tool = bestCorrectTool(state);
+        if (skill != null && tool >= 0) {
+            ItemStack stack = bot.getInventory().getItem(tool);
+            if (stack.isDamageableItem() && stack.getMaxDamage() - stack.getDamageValue() <= 5) {
+                finish("stopped: pickaxe almost broken"); return;
+            }
+        }
         craftMine(pos);
         bestDistanceSq = Double.MAX_VALUE;
         ticksWithoutProgress = 0;
@@ -691,6 +725,11 @@ public final class BotController {
     }
 
     public void stop() {
+        if (skill != null) {
+            SkillTask cancelled = skill;
+            skill = null;
+            cancelled.complete("failed: cancelled");
+        }
         danger = null; explicitAttack = false;
         if (excavating != null) { excavating = null; reporter.accept("failed: cancelled"); }
         exploring = null;
@@ -731,6 +770,7 @@ public final class BotController {
     }
 
     public String describe() {
+        if (skill != null) return skill.describe();
         if (gathering != null) return gathering.describe();
         if (crafting != null) {
             return crafting.describe();
@@ -793,6 +833,9 @@ public final class BotController {
         }
         if (gathering != null && !gathering.checkTimeout()) return;
         if (excavating != null && !excavating.checkTimeout()) return;
+        if (skill != null) {
+            skill.tick();
+        }
         if (target == null) {
             return;
         }
@@ -819,7 +862,7 @@ public final class BotController {
         stop();
         task = newTask;
         target = pos.immutable();
-        reporter = message -> { bot.moments().report(message); newReporter.accept(message); };
+        reporter = message -> { if (skill == null) bot.moments().report(message); newReporter.accept(message); };
         bestDistanceSq = Double.MAX_VALUE;
         ticksWithoutProgress = 0;
         breakTicks = 0;
@@ -1343,10 +1386,13 @@ public final class BotController {
         if (task == Task.FOLLOW) {
             pathing().settings().allowSprint.set(followAllowSprint);
         }
-        bot.moments().report(message);
+        if (skill == null) bot.moments().report(message);
         // Clear FOLLOW before stop so it cannot emit a second terminal report.
         task = Task.IDLE;
+        SkillTask owner = skill;
+        skill = null;
         stop();
+        skill = owner;
         reporter.accept(message);
     }
 

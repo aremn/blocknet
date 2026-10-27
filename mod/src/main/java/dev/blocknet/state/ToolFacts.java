@@ -55,13 +55,25 @@ public final class ToolFacts {
         };
     }
 
-    public static String requirement(BlockState state) {
+    private static Item[][] probes() {
         Item[][] probes = {
             {Items.WOODEN_PICKAXE, Items.STONE_PICKAXE, Items.IRON_PICKAXE, Items.DIAMOND_PICKAXE},
             {Items.WOODEN_AXE, Items.STONE_AXE, Items.IRON_AXE, Items.DIAMOND_AXE},
             {Items.WOODEN_SHOVEL, Items.STONE_SHOVEL, Items.IRON_SHOVEL, Items.DIAMOND_SHOVEL},
             {Items.WOODEN_HOE, Items.STONE_HOE, Items.IRON_HOE, Items.DIAMOND_HOE}
         };
+        return probes;
+    }
+
+    public static java.util.Optional<Item> minimumTool(BlockState state) {
+        if (!state.requiresCorrectToolForDrops()) return java.util.Optional.empty();
+        for (Item[] kind : probes()) for (Item tool : kind)
+            if (new ItemStack(tool).isCorrectToolForDrops(state)) return java.util.Optional.of(tool);
+        return java.util.Optional.empty();
+    }
+
+    public static String requirement(BlockState state) {
+        Item[][] probes = probes();
         String[] tiers = {"wooden tier", "stone tier", "iron tier", "diamond tier"};
         for (int kind = 0; kind < probes.length; kind++) {
             Item[] tools = probes[kind];

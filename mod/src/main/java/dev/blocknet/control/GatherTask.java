@@ -156,9 +156,18 @@ final class GatherTask {
     }
 
     private boolean visible(BlockPos pos) {
-        var hit = bot.level().clip(new ClipContext(bot.getEyePosition(), Vec3.atCenterOf(pos),
-            ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, bot));
-        return hit.getType() == HitResult.Type.BLOCK && hit.getBlockPos().equals(pos);
+        Vec3 eye = bot.getEyePosition(), center = Vec3.atCenterOf(pos);
+        var points = new java.util.ArrayList<Vec3>();
+        points.add(center);
+        for (Direction face : Direction.values()) {
+            Vec3 normal = Vec3.atLowerCornerOf(face.getNormal());
+            if (normal.dot(eye.subtract(center)) > 0) points.add(center.add(normal.scale(.45)));
+        }
+        for (Vec3 point : points) {
+            var hit = bot.level().clip(new ClipContext(eye, point, ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, bot));
+            if (hit.getType() == HitResult.Type.BLOCK && hit.getBlockPos().equals(pos)) return true;
+        }
+        return false;
     }
 
     void tick() {

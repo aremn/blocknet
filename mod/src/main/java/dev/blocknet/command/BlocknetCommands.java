@@ -98,6 +98,9 @@ public final class BlocknetCommands {
                 return 1;
             })))
             .then(miningCommand("tunnel"))
+            .then(skillCommand("knowledge"))
+            .then(skillCommand("mine_ore"))
+            .then(skillCommand("obtain"))
             .then(miningCommand("descend"))
             .then(eatCommand(buildContext))
             .then(placeCommand(buildContext))
@@ -237,6 +240,33 @@ public final class BlocknetCommands {
             }
         } catch (IllegalArgumentException error) { report.accept("blocked: " + error.getMessage()); }
         return 1;
+    }
+
+    private static LiteralArgumentBuilder<CommandSourceStack> skillCommand(String action) {
+        return Commands.literal(action).then(Commands.argument("query", StringArgumentType.greedyString()).executes(c -> {
+            var words = new java.util.ArrayList<>(java.util.Arrays.asList(StringArgumentType.getString(c, "query").trim().split("\\s+")));
+            BotPlayer bot = BotManager.get(words.getFirst());
+            if (bot != null) words.removeFirst(); else bot = nearestBot(c.getSource());
+            var report = reporter(c.getSource(), bot);
+            try {
+                if (words.isEmpty() || words.size() > (action.equals("knowledge") ? 1 : 2))
+                    throw new IllegalArgumentException("use " + action + " <item|block> [count]");
+                var id = net.minecraft.resources.ResourceLocation.tryParse(words.getFirst());
+                if (id != null && action.equals("knowledge") && net.minecraft.core.registries.BuiltInRegistries.BLOCK.containsKey(id)) {
+                    report.accept(dev.blocknet.knowledge.Knowledge.get(bot.serverLevel()).text(net.minecraft.core.registries.BuiltInRegistries.BLOCK.get(id)));
+                    return 1;
+                }
+                if (id == null || !net.minecraft.core.registries.BuiltInRegistries.ITEM.containsKey(id))
+                    throw new IllegalArgumentException("unknown item: " + words.getFirst());
+                var item = net.minecraft.core.registries.BuiltInRegistries.ITEM.get(id);
+                int count = words.size() == 2 ? Integer.parseInt(words.get(1)) : 1;
+                if (count < 1 || count > 1000000) throw new IllegalArgumentException("count must be 1..1000000");
+                if (action.equals("knowledge")) report.accept(dev.blocknet.knowledge.Knowledge.get(bot.serverLevel()).text(item));
+                else if (action.equals("mine_ore")) bot.controller().mineOre(item, count, report);
+                else bot.controller().obtain(item, count, report);
+            } catch (IllegalArgumentException error) { report.accept("blocked: " + error.getMessage()); }
+            return 1;
+        }));
     }
 
     private static LiteralArgumentBuilder<CommandSourceStack> miningCommand(String action) {

@@ -39,6 +39,7 @@ public final class BridgeServer implements AutoCloseable {
     private final MinecraftServer server;
     private final String token;
     private final ServerSocket listener;
+    private final Map<UUID, String> runningTasks = new HashMap<>();
     private final Set<Client> clients = ConcurrentHashMap.newKeySet();
     private volatile boolean closed;
 
@@ -86,6 +87,16 @@ public final class BridgeServer implements AutoCloseable {
         BotManager.all().forEach(bot -> bots.add(bot.getGameProfile().getName()));
         event.add("bots", bots);
         active.broadcast(event);
+    }
+
+    public static void taskProgress(BotPlayer bot, String text) {
+        JsonObject event = object("type", "task.progress", "bot", bot.getGameProfile().getName(), "result", text);
+        SERVERS.forEach(bridge -> {
+            JsonObject progress = event.deepCopy();
+            String id = bridge.runningTasks.get(bot.getUUID());
+            if (id != null) progress.addProperty("task_id", id);
+            bridge.broadcast(progress);
+        });
     }
 
     public static void botSpoke(BotPlayer bot, String player) {
@@ -206,9 +217,11 @@ public final class BridgeServer implements AutoCloseable {
                 if (tool.task()) {
                     String taskId = UUID.randomUUID().toString();
                     reply(id, object("task_id", taskId));
+                    runningTasks.put(bot.getUUID(), taskId);
                     AtomicBoolean reported = new AtomicBoolean();
                     java.util.function.Consumer<String> finish = result -> {
                         if (reported.compareAndSet(false, true)) {
+                            runningTasks.remove(bot.getUUID(), taskId);
                             // All authenticated connections receive outcomes (main brain and MCP process).
                             JsonObject event = object("type", "task.finished", "bot", bot.getGameProfile().getName(),
                                 "task_id", taskId, "result", oneLine(result));

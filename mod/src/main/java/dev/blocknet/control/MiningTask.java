@@ -63,12 +63,16 @@ final class MiningTask {
     boolean collectionWalk(BlockPos broken) { return broken.getY() <= step.getY(); }
 
     boolean collectionSafe(BlockPos broken) {
+        if (!collectionWalk(broken)) return true;
         if (!bot.vision().canObserve()) return false;
         BlockPos support = broken.below();
-        var hit = bot.vision().observe(Vec3.atCenterOf(support));
+        var hit = bot.vision().observe(Vec3.atCenterOf(support).add(0, .499, 0));
         String danger = fluid(support);
         if (!danger.isEmpty()) { done("stopped before " + danger); return false; }
         if (hit.end() == VoxelRay.End.UNKNOWN) return false;
+        if (hit.end() == VoxelRay.End.HIT && !support.equals(hit.pos())) {
+            controller.exploreWalk(feet); return false;
+        }
         if (hit.end() != VoxelRay.End.HIT || !support.equals(hit.pos()) || hit.state() == null
             || !hit.state().isFaceSturdy(bot.level(), support, Direction.UP)) {
             done("stopped before large drop or void"); return false;
@@ -108,10 +112,13 @@ final class MiningTask {
         // Support must actually be seen before walking; never step into an unknown drop.
         if (!bot.vision().canObserve()) return;
         BlockPos support = step.below();
-        var hit = bot.vision().observe(Vec3.atCenterOf(support));
+        var hit = bot.vision().observe(Vec3.atCenterOf(support).add(0, .499, 0));
         String danger = fluid(support);
         if (!danger.isEmpty()) { done("stopped before " + danger); return; }
         if (hit.end() == VoxelRay.End.UNKNOWN) return;
+        if (hit.end() == VoxelRay.End.HIT && !support.equals(hit.pos())) {
+            controller.exploreWalk(feet); return;
+        }
         if (hit.end() != VoxelRay.End.HIT || !support.equals(hit.pos()) || hit.state() == null
             || !hit.state().isFaceSturdy(bot.level(), support, Direction.UP)) {
             done("stopped before large drop or void"); return;

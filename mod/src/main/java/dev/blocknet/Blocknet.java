@@ -24,6 +24,8 @@ public final class Blocknet {
         NeoForge.EVENT_BUS.addListener(BlocknetCommands::onRegisterCommands);
         NeoForge.EVENT_BUS.addListener(BotManager::onPlayerLoggedOut);
         NeoForge.EVENT_BUS.addListener(BotManager::onServerStopping);
+        NeoForge.EVENT_BUS.addListener(dev.blocknet.knowledge.Knowledge::started);
+        NeoForge.EVENT_BUS.addListener(dev.blocknet.knowledge.Knowledge::reload);
         NeoForge.EVENT_BUS.addListener(BridgeServer::onServerStarted);
         NeoForge.EVENT_BUS.addListener(BridgeServer::onServerStopping);
         NeoForge.EVENT_BUS.addListener(BridgeServer::onChat);

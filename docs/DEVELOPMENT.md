@@ -37,6 +37,9 @@ blocknet.deployModsDir=C:/Users/<ты>/AppData/Roaming/PrismLauncher/instances/<
 /blocknet plan [craft|get] [имя] <item> [count]  посмотреть план, по умолчанию craft; count по умолчанию 1
 /blocknet craft [имя] <item> [count] изготовить count НОВЫХ предметов через рецепты, count по умолчанию 1
 /blocknet get [имя] <item> [count]   получить в инвентаре хотя бы count предметов, count по умолчанию 1
+/blocknet knowledge [имя] <item|block> высоты руды, частота, инструмент и дроп из данных сервера
+/blocknet mine_ore [имя] <item|block> [count] добыть ещё count предметов руды; ветки, бюджет 10 минут
+/blocknet obtain [имя] <item> [count] получить хотя бы count: сундуки, крафт/плавка, добыча сырья
 /blocknet goto [имя] <x y z>   идти к точному блоку
 /blocknet come [имя]           подойти рядом на землю под вызвавшим (радиус 2 блока)
 /blocknet follow [имя]         следовать за вызвавшей сущностью до stop или новой задачи
@@ -318,3 +321,24 @@ When Prism is running, preserve its deployed jar: `./gradlew build --offline -x 
   Socket GameTests use port zero; an occupied live bridge port warns without failing the server.
   Run the full GameTest suite once at the end; inspect required tests, failed at and exceptions in
   build/gametest.log. Node: `node --test brain/test/`. Leave changes uncommitted when requested.
+
+
+### Навыки получения ресурсов (ADR-0010, шаг 1)
+
+`knowledge iron_ore` показывает справочные диапазоны, не местонахождение блоков; индекс
+обновляется при datapack reload. `mine_ore raw_iron 3` выбирает известный пик ниже бота и копает
+лестницу и ветки, собирая замеченные жилы. При жидкости пробует безопасный обход;
+при остатке инструмента ≤5 применений останавливается с причиной. Нужна подходящая кирка.
+
+`obtain wooden_pickaxe 1` начинает с видимого дерева; `obtain iron_ingot 3` получает инструменты,
+сырьё, топливо и станции через тот же планировщик и игровые меню. Сначала считается инвентарь,
+затем используются запомненные контейнеры. Ограничения: 10 минут, 16 уровней рекурсии и 256
+операций. Неизвестные способы (например, дроп мобов) дают `unsupported: ...`. В мост идут
+`task.progress` каждые ~10 игровых секунд и один `task.finished`.
+
+Шесть `KnowledgeSkillGameTests` проверяют справку о железе, вскрытую туннелем руду, одинаковые
+первые блоки двух туннелей со скрытой рудой и без неё, деревянную кирку с нуля от видимой
+берёзы, каменную кирку с добычей булыжника и быстрый отказ для дропа мобов. Тест дерева ждёт
+освещения. Полный набор запускать один раз в конце и проверять `required tests`, `failed at`,
+исключения в `build/gametest.log`. Занятый порт живого моста не мешает GameTests; socket-тесты
+используют порт 0.

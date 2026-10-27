@@ -26,6 +26,9 @@ public final class BridgeTools {
         add("look", "Return the scene; recent nearby looks use one frontal frame, fresh forces a 360 degree turn; optional focus: trees, ores, water, danger, built, stations, food.", true, "focus?", "fresh?");
         add("scene", "Read the remembered scene instantly, without turning; delta gives one line of changes.", false, "delta?", "goal?");
         add("explore", "Walk through observed safe space toward a frontier, then look and report new objects.", true, "direction?", "distance?");
+        add("knowledge", "Read ore heights, frequency, biome restrictions, harvest tool and loot from server data.", false, "item");
+        add("mine_ore", "Mine an ore item or block using known heights and honest branch mining until count or a ten minute budget.", true, "item", "count?");
+        add("obtain", "Obtain at least count items recursively from inventory, remembered containers, crafting and observed survival sources.", true, "item", "count?");
         add("plan", "Plan recipes without acting; mode craft makes new items, get counts owned items.", false,
             "item", "count?", "mode?");
         add("come", "Walk near an online player in the same dimension.", true, "player");
