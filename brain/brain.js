@@ -6,6 +6,7 @@ import { ChatRouter, routeRule } from './rules.js';
 import { SessionLog, ResultSummary, perception, failed, lastLessons } from './session-log.js';
 import { ClaudeBackend } from './claude-backend.js';
 import { CodexBackend } from './codex-backend.js';
+import { parseRole, parseTool, needsPlan, PlanRunner, PlanLibrary, plannerPrompt } from './plans.js';
 export { buildClaudeArgs } from './claude-backend.js';
 
 const brainDir = dirname(fileURLToPath(import.meta.url));
@@ -63,7 +64,7 @@ export function shortReply(text) {
 /** One queue owns the model; chat always precedes the next autonomous turn. */
 export class BrainSession {
   constructor({ body, backend, bot, aliases = [], listen = 'all', goal = '', maxTurns = 200,
-    maxMinutes = 60, pauseMs = 1200, log, auditFile, lessonsFile, usageFile }) {
+    maxMinutes = 60, pauseMs = 1200, log, auditFile, lessonsFile, usageFile, plannerBackend, plansFile }) {
     if (!Number.isInteger(maxTurns) || maxTurns < 1 || !Number.isFinite(maxMinutes) || maxMinutes <= 0)
       throw new Error('Limits must be positive (--max-turns integer, --max-minutes number)');
     Object.assign(this, { body, backend, bot, goal, maxTurns, maxMinutes, pauseMs, log, auditFile, lessonsFile, usageFile });
@@ -72,6 +73,17 @@ export class BrainSession {
     this.recentResults = []; this.sessionTurns = 0;
     this.queue = []; this.events = []; this.busy = false; this.generation = 0; this.turns = 0;
     this.paused = false; this.ended = false; this.closed = false;
+    this.plannerBackend = plannerBackend;
+    if (plannerBackend) this.plans = new PlanRunner({
+      call: (tool, args) => this.call(tool, args), tools: body.hello?.tools,
+      library: new PlanLibrary(plansFile ?? resolve(brainDir, 'logs/plans.jsonl')),
+      planner: text => this.sendRole('planner', plannerBackend, text),
+      actor: text => this.sendRole('actor', backend, text),
+      resetActor: () => { backend.close(); this.sessionTurns = 0; this.compact.reset(); },
+      actorPrefix: () => this.languageRule(), say: (text, player) => this.say(text, player),
+      log: (type, data) => this.log?.write(type, data),
+      isActive: () => !this.closed && !this.paused && !this.awaitingRespawn,
+    });
     this.onEvent = event => this.event(event);
     this.onReady = () => this.schedule();
     this.onDisconnect = () => { clearTimeout(this.nextTimer); this.log?.write('connection', { state: 'disconnected' }); };
@@ -80,11 +92,34 @@ export class BrainSession {
   async start() {
     this.started = Date.now();
     if (this.goal) this.deadline = setTimeout(() => this.endAutoplay('max minutes'), this.maxMinutes * 60_000);
-    try { await this.body.ready(); this.schedule(); }
+    try { await this.body.ready(); if (this.plans) this.plans.tools = this.body.hello.tools; this.schedule(); }
     catch (error) { this.diagnostic(error); } // Body continues reconnecting even after its initial ready timeout.
     return this;
   }
   diagnostic(error) { process.stderr.write(`${error.message ?? error}\n`); }
+  languageRule() {
+    return `Answer in the language the player last used, including autoplay chat. Latest player message: ${JSON.stringify(this.lastPlayerMessage ?? null)}.\n`;
+  }
+  async sendRole(role, backend, text) {
+    const started = Date.now(); let result, failure;
+    if (this.auditFile) await writeFile(this.auditFile, '');
+    this.log?.write('model_message', { role: 'user', model_role: role, text: text.slice(0, 300) });
+    try {
+      if (this.goal && !this.ended && this.turns >= this.maxTurns) throw new Error('max turns reached');
+      this.turns++;
+      result = await backend.send(text);
+      this.log?.write('model_message', { role: 'final', model_role: role, text: String(result.text ?? '').slice(0, 300) });
+      return result;
+    } catch (error) { failure = error.message; throw error; }
+    finally {
+      const audit = this.auditFile ? await readFile(this.auditFile, 'utf8').catch(() => '') : '';
+      const entry = { bot: this.bot, role, backend: backend.backend, model: backend.model,
+        ms: result?.ms ?? Date.now() - started, ttft_ms: result?.ttftMs ?? null, usage: result?.usage ?? null,
+        tool_calls: audit.trim() ? audit.trim().split('\n').length : result?.toolCalls ?? 0, error: failure ?? null };
+      this.log?.write('turn', entry);
+      if (this.usageFile) await appendFile(this.usageFile, `${JSON.stringify({ time: new Date(started).toISOString(), ...entry })}\n`);
+    }
+  }
   async call(tool, args = {}) {
     const started = Date.now(), id = `brain-${started}-${this.sequence = (this.sequence ?? 0) + 1}`;
     this.log?.write('tool_call', { id, tool, args });
@@ -116,6 +151,7 @@ export class BrainSession {
   }
   cancel(clear = true) {
     this.generation++; this.backend.close(); this.sessionTurns = 0; this.compact.reset();
+    this.plannerBackend?.close(); this.plans?.cancel();
     clearTimeout(this.nextTimer);
     if (clear) this.queue.length = 0;
   }
@@ -167,6 +203,13 @@ export class BrainSession {
     this.lastPlayerMessage = { from: event.from, text: event.text };
     clearTimeout(this.nextTimer);
     const rule = routeRule(order, event.from);
+    if (/^(?:план|plan)\?$/iu.test(order.trim())) {
+      const status = async () => {
+        if (this.plans?.step) await this.plans.snapshot();
+        await this.say(this.plans?.status() ?? 'план: нет', event.from);
+      };
+      status().catch(e => this.diagnostic(e)); return;
+    }
     if (rule?.tool === 'stop') {
       this.paused = true; this.cancel();
       this.runRule(rule, event.from).catch(e => this.diagnostic(e));
@@ -201,6 +244,19 @@ export class BrainSession {
           this.endAutoplay('max turns');
           if (message.autoplay) continue;
         }
+        if (this.plans && !message.reflection) {
+          this.plans.tools = this.body.hello?.tools ?? this.plans.tools;
+          let direct;
+          try { direct = !message.autoplay && parseTool(message.text, this.plans.tools); }
+          catch { /* A tool verb followed by natural language belongs to the planner. */ }
+          if (direct) { await this.runRule({ ...direct, ack: 'Готово.' }, message.from); continue; }
+          if (message.needsPlan || message.autoplay || needsPlan(message.text, this.plans.tools)) {
+            const completed = await this.plans.run(message.autoplay ? this.goal : message.text, message.autoplay ? undefined : message.from);
+            if (message.autoplay && completed !== null) this.endAutoplay('plan finished');
+            else if (this.goal && this.turns >= this.maxTurns) this.endAutoplay('max turns');
+            continue;
+          }
+        }
         const generation = this.generation, started = Date.now();
         let result, failure, called = false;
         try {
@@ -224,7 +280,7 @@ export class BrainSession {
             this.backend.close(); this.sessionTurns = 0;
             rotation = `Session summary: goal: ${this.goal || message.text}; inventory: ${this.compact.facts.inventory}; last 3 results: ${JSON.stringify(this.recentResults)}; current scene: ${String(scene).split('\n')[0] || 'unknown'}.\n`;
           }
-          const prompt = rotation + `Answer in the language the player last used, including autoplay chat. Latest player message: ${JSON.stringify(this.lastPlayerMessage ?? null)}.\n${content}`;
+          const prompt = rotation + this.languageRule() + `${content}\n${this.plans?.status() ?? 'план: нет'}`;
           this.log?.write('model_message', { role: 'user', text: prompt.slice(0, 300) });
           if (this.auditFile) await writeFile(this.auditFile, '');
           if (generation !== this.generation) continue;
@@ -233,6 +289,9 @@ export class BrainSession {
           result = await this.backend.send(prompt);
           this.sessionTurns++;
           if (generation !== this.generation || this.closed) continue;
+          if (this.plans && !message.reflection && /^needs_plan\b/iu.test(String(result.text).trim())) {
+            this.queue.unshift({ ...message, needsPlan: true }); continue;
+          }
           this.log?.write('model_message', { role: 'final', text: String(result.text ?? '').slice(0, 300) });
           if (message.reflection) {
             const lessons = String(result.text ?? '').trim().slice(0, 1800);
@@ -254,7 +313,7 @@ export class BrainSession {
             const entry = { bot: this.bot, backend: this.backend.backend, model: this.backend.model,
               ms: result?.ms ?? Date.now()-started, ttft_ms: result?.ttftMs ?? null, usage: result?.usage ?? null,
               tool_calls: audit.trim() ? audit.trim().split('\n').length : result?.toolCalls ?? 0, error: failure ?? null,
-              reflection: !!message.reflection };
+              reflection: !!message.reflection, role: 'actor' };
             this.log?.write('turn', entry);
             if (this.usageFile) await appendFile(this.usageFile, `${JSON.stringify({ time: new Date(started).toISOString(), ...entry })}\n`);
           }
@@ -288,16 +347,27 @@ export async function main() {
   const prompt = await readFile(resolve(brainDir, 'prompt.md'), 'utf8') + lastLessons(lessonsFile, Number(option('lessons', '0')));
   const promptFile = resolve(logDir, `prompt.${bot}.md`);
   await writeFile(promptFile, prompt);
-  const backend = createBackend(option('backend', process.env.BLOCKNET_BACKEND ?? 'codex'), {
+  const legacyBackend = option('backend', process.env.BLOCKNET_BACKEND);
+  const actorSpec = parseRole(option('actor', legacyBackend === 'claude' ? 'claude:haiku' : 'codex:gpt-6-luna:priority'));
+  const plannerSpec = parseRole(option('planner', 'claude:sonnet'));
+  const backend = createBackend(actorSpec.backend, {
     cwd: rootDir, mcpConfig, mcpServer, prompt, promptFile, maxTurns: 10,
+    ...actorSpec,
     onMessage: text => log.write('model_message', { role: 'assistant', text: String(text ?? '').slice(0, 300) }),
   });
-  const session = new BrainSession({ body, backend, bot, aliases, goal, log, auditFile, lessonsFile,
+  const plannerFile = resolve(logDir, `planner-prompt.${bot}.md`);
+  await writeFile(plannerFile, plannerPrompt);
+  const plannerMcp = { ...mcpServer, env: { ...mcpServer.env, BLOCKNET_ROLE: 'planner' } };
+  const plannerConfig = resolve(logDir, `mcp.planner.${bot}.json`);
+  await writeFile(plannerConfig, JSON.stringify({ mcpServers: { blocknet: { type: 'stdio', ...plannerMcp } } }));
+  const plannerBackend = createBackend(plannerSpec.backend, { ...plannerSpec, cwd: rootDir,
+    prompt: plannerPrompt, promptFile: plannerFile, mcpConfig: plannerConfig, mcpServer: plannerMcp, maxTurns: 10 });
+  const session = new BrainSession({ body, backend, plannerBackend, bot, aliases, goal, log, auditFile, lessonsFile,
     usageFile: resolve(logDir, 'usage.jsonl'), listen: option('listen', 'all'),
     maxTurns: Number(option('max-turns', '200')), maxMinutes: Number(option('max-minutes', '60')) });
   for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => session.close());
   await session.start();
-  process.stderr.write(`Brain ready for ${bot}: ${backend.backend}/${backend.model}. Log: ${log.file}\n`);
+  process.stderr.write(`Brain ready for ${bot}: planner ${plannerBackend.backend}/${plannerBackend.model}, actor ${backend.backend}/${backend.model}. Log: ${log.file}\n`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

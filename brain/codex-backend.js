@@ -2,9 +2,9 @@ import { spawn } from 'node:child_process';
 import { JsonProcess, processOptions } from './json-process.js';
 
 // Values are TOML, passed as separate argv entries (JSON strings also quote TOML strings).
-export function buildCodexArgs({ mcpServer, model = 'gpt-6-luna', serviceTier = 'priority' } = {}) {
+export function buildCodexArgs({ mcpServer, model = 'gpt-6-luna', serviceTier = 'priority', effort = 'low' } = {}) {
   const config = {
-    model: JSON.stringify(model), service_tier: JSON.stringify(serviceTier), model_reasoning_effort: '"low"',
+    model: JSON.stringify(model), service_tier: JSON.stringify(serviceTier), model_reasoning_effort: JSON.stringify(effort),
     approval_policy: '"never"', sandbox_mode: '"read-only"', project_doc_max_bytes: '0',
     'features.skip_host_skill_discovery': 'true', 'features.skill_search': 'false',
     'features.plugins': 'false', 'features.apps': 'false', 'features.memories': 'false',
@@ -63,7 +63,7 @@ export class CodexBackend {
       const launch = async () => {
         if (!this.process) await this.initialize();
         await this.process.request('turn/start', { threadId: this.threadId,
-          input: [{ type: 'text', text, text_elements: [] }], effort: 'low', serviceTier: this.options.serviceTier ?? 'priority',
+          input: [{ type: 'text', text, text_elements: [] }], effort: this.options.effort ?? 'low', serviceTier: this.options.serviceTier ?? 'priority',
           approvalPolicy: 'never' });
       };
       const turn = this.active;

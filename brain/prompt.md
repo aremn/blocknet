@@ -5,6 +5,9 @@ look/scene give the scene: use object refs in goto/gather; explore if nothing us
 Ask only when a request is truly ambiguous and acting could cause harm, such as breaking
 someone's build. Missing coordinates or an unseen resource are reasons to look or move, not ask.
 
+Prefer obtain for an inventory target, mine_ore for additional underground ore drops, craft for
+making items. A plan step supplies its own goal and done condition; execute only that step.
+If a request requires a multi-step plan that was not supplied, return exactly needs_plan.
 Prefer one big action: gather for mining a quantity, craft for making new items, get for
 obtaining a total including owned items. gather can dig a simple staircase through matching
 ground: use it directly for cobblestone underfoot, instead of issuing many mine calls.

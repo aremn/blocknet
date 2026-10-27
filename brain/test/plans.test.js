@@ -1,0 +1,145 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { resolve, join } from 'node:path';
+import { BrainSession } from '../brain.js';
+import { parseRole, parseTool, checkDone, inventoryCounts, PlanLibrary, toolCatalog, validatePlan } from '../plans.js';
+import { pickaxePlan } from '../bench/role-scenarios.js';
+import { buildCodexArgs } from '../codex-backend.js';
+import { buildClaudeArgs } from '../claude-backend.js';
+
+const goal = 'железная кирка с нуля';
+const backend = send => ({ backend: 'fake', model: 'fake', send, close() {} });
+class FakeBody extends EventEmitter {
+  hello = { bots: ['Kirill'], tools: toolCatalog };
+  inventory = {}; calls = []; tasks = new Map();
+  async ready() { return this.hello; }
+  async call(bot, tool, args = {}) {
+    this.calls.push({ tool, args });
+    if (tool === 'inv') return { result: `inventory r1: selected 0\nmain: stone_pickaxe\n${Object.entries(this.inventory).map(([item, n], i) => `${n === 1 ? '' : n + ' '}${item} slots [${i}]`).join('\n')}\nsummary: best pickaxe stone_pickaxe, free slots 30` };
+    if (tool === 'status') return { result: 'health 20/20, food 20, pos 0, 64, 0' };
+    if (tool === 'scene') return { result: 'forest, day; observed trees t1; stone underfoot' };
+    if (tool === 'changes') return { result: 'no changes' };
+    if (['obtain', 'craft', 'mine_ore'].includes(tool)) {
+      const task_id = `task-${this.calls.length}`;
+      this.tasks.set(task_id, Promise.resolve().then(() => {
+        if (this.fail && args.item === 'iron_ingot') return 'failed: lava blocks the tunnel';
+        if (this.noGain && args.item === 'iron_ingot') { this.noGain = false; return 'obtained iron'; }
+        this.inventory[args.item] = args.count ?? 1;
+        if (tool === 'craft' && args.item === 'iron_pickaxe') delete this.inventory.iron_ingot;
+        return `obtained ${args.item}`;
+      }));
+      return { task_id };
+    }
+    return { result: 'ok' };
+  }
+  waitTask(id) { return this.tasks.get(id); }
+  close() {}
+}
+async function fixture(run) {
+  await mkdir(resolve('build'), { recursive: true });
+  const dir = await mkdtemp(resolve('build/plan-test-'));
+  const sessions = [];
+  try { await run({ dir, sessions }); }
+  finally { for (const session of sessions) session.close(); await rm(dir, { recursive: true, force: true }); }
+}
+async function request({ body = new FakeBody(), planner, actor = backend(async () => { throw new Error('unexpected actor call'); }), dir, sessions, text = goal }) {
+  const events = [];
+  const session = new BrainSession({ body, backend: actor, plannerBackend: planner, bot: 'Kirill',
+    plansFile: join(dir, 'plans.jsonl'), log: { write: (type, data) => events.push({ type, ...data }) } });
+  sessions.push(session); await session.start();
+  body.emit('event', { type: 'chat', from: 'Alex', text });
+  // event() starts processing synchronously, so joining the pending queue needs no polling timer.
+  while (session.busy) await new Promise(resolve => setImmediate(resolve));
+  return { session, body, events };
+}
+
+test('goal chat calls planner, retries invalid JSON once, executes through fake body and critic verifies inventory', async t => fixture(async f => {
+  const prompts = [];
+  const planner = backend(async text => { prompts.push(text); return { text: prompts.length === 1 ? '{invalid' : JSON.stringify(pickaxePlan) }; });
+  const { session, body, events } = await request({ ...f, planner });
+  assert.equal(prompts.length, 2);
+  assert.match(prompts[1], /Invalid output:/u);
+  assert.match(prompts[0], /knowledge.*ore heights/iu);
+  assert.equal(events.filter(e => e.type === 'plan_step' && e.pass).length, 3);
+  assert.equal(body.inventory.iron_pickaxe, 1);
+  assert.equal(session.plans.status(), 'план: выполнен');
+  assert.deepEqual(body.calls.filter(c => ['obtain', 'craft'].includes(c.tool)).map(c => [c.tool, c.args.item]),
+    [['obtain', 'stone_pickaxe'], ['obtain', 'iron_ingot'], ['craft', 'iron_pickaxe']]);
+  assert.ok(body.calls.some(c => c.tool === 'say' && c.args.text === 'Готово.'));
+  assert.deepEqual(inventoryCounts('main: 3 iron_ingot\n3 iron_ingot slots [0]\niron_pickaxe slots [1]\nsummary: building blocks 10'), { iron_ingot: 3, iron_pickaxe: 1 });
+  assert.equal(checkDone('pos 0 64 0', { position: [0, 64, 0] }).pass, true);
+  assert.throws(() => validatePlan({ ...pickaxePlan, steps: [{ id: 1, do: 'obtain iron_ingot 3', done: 'looks good' }] }));
+  const sample = JSON.parse((await readFile(join(f.dir, 'plans.jsonl'), 'utf8')).trim());
+  assert.equal(sample.goal_key, 'железная кирка нуля с');
+  assert.ok(sample.duration_ms >= 0);
+  t.diagnostic(`Fake planner sample: ${JSON.stringify(pickaxePlan)}`);
+  const english = await request({ ...f, text: 'craft an iron pickaxe from scratch',
+    planner: backend(async () => ({ text: JSON.stringify(pickaxePlan) })) });
+  assert.equal(english.body.inventory.iron_pickaxe, 1);
+}));
+
+test('failed steps replan with reasons, critic rejects unearned success, third failure tells player', async () => fixture(async f => {
+  const prompts = [], body = new FakeBody(); body.fail = true;
+  const planner = backend(async text => { prompts.push(text); return { text: JSON.stringify(pickaxePlan) }; });
+  const { events } = await request({ ...f, body, planner });
+  assert.equal(prompts.length, 3);
+  assert.match(prompts[1], /Previous failures:.*lava blocks the tunnel/u);
+  assert.equal(events.filter(e => e.type === 'plan_failure').length, 3);
+  assert.ok(body.calls.some(c => c.tool === 'say' && /Не получилось:.*lava/u.test(c.args.text)));
+  assert.equal((await new PlanLibrary(join(f.dir, 'plans.jsonl')).matches(goal)).length, 0);
+  const recovering = new FakeBody(); recovering.noGain = true; const repairPrompts = [];
+  await request({ ...f, body: recovering, planner: backend(async text => { repairPrompts.push(text); return { text: JSON.stringify(pickaxePlan) }; }) });
+  assert.equal(repairPrompts.length, 2);
+  assert.match(repairPrompts[1], /inv iron_ingot >= 3: 0\/3; no verified completion/u);
+  assert.equal(recovering.inventory.iron_pickaxe, 1);
+}));
+
+test('a repeated exact or near goal reuses persisted successful plan without calling planner', async () => fixture(async f => {
+  let plannerCalls = 0;
+  const planner = backend(async () => { plannerCalls++; return { text: JSON.stringify(pickaxePlan) }; });
+  await request({ ...f, planner });
+  for (const text of [goal, 'пожалуйста сделай железная кирка с нуля']) {
+    const { body, events } = await request({ ...f, planner, text });
+    assert.equal(body.inventory.iron_pickaxe, 1);
+    assert.ok(events.some(e => e.type === 'plan_reused'));
+  }
+  assert.equal(plannerCalls, 1);
+  const library = new PlanLibrary(join(f.dir, 'plans.jsonl'));
+  assert.equal((await library.matches(goal)).length, 2);
+  assert.ok((await library.matches('железная кирка с нуля 2')).every(m => m.score === 0));
+}));
+
+test('tool steps never call actor; free text restarts actor per step with tiny context and plan status', async () => fixture(async f => {
+  let actorCalls = 0, resets = 0;
+  const body = new FakeBody();
+  const actor = backend(async text => {
+    actorCalls++;
+    assert.match(text, /Goal:.*железная кирка/u); assert.match(text, /State:.*inventory:/u); assert.match(text, /Scene: forest/u);
+    assert.match(text, /план: шаг [12]\/2/u); assert.ok(text.length < 1100);
+    assert.ok(resets >= actorCalls);
+    // Status must bypass the occupied actor queue.
+    body.emit('event', { type: 'chat', from: 'Alex', text: 'план?' });
+    await body.call('Kirill', 'obtain', { item: actorCalls === 1 ? 'iron_ingot' : 'iron_pickaxe', count: actorCalls === 1 ? 3 : 1 });
+    return { text: '<silent>' };
+  });
+  actor.close = () => { resets++; };
+  const direct = await request({ ...f, body, actor, planner: backend(async () => ({ text: JSON.stringify(pickaxePlan) })) });
+  assert.equal(actorCalls, 0);
+  body.inventory = {};
+  // A different goal avoids reuse from the first request.
+  const plan = { ...pickaxePlan, steps: [
+    { id: 1, do: 'Smelt three iron ingots from the available materials.', done: 'inv iron_ingot >= 3' },
+    { id: 2, do: 'Make the requested iron pickaxe.', done: 'inv iron_pickaxe >= 1' },
+  ] };
+  direct.session.close();
+  await request({ ...f, body, actor, text: 'сделай железная кирка из материалов', planner: backend(async () => ({ text: JSON.stringify(plan) })) });
+  assert.equal(actorCalls, 2);
+  assert.ok(body.calls.some(c => c.tool === 'say' && /^план: шаг/u.test(c.args.text)));
+  assert.deepEqual(parseTool('goto 2 64 -3'), { tool: 'goto', args: { x: 2, y: 64, z: -3 } });
+  assert.deepEqual(parseTool('gather cobblestone 3').args, { item: 'cobblestone', count: 3 });
+  assert.deepEqual(parseRole('codex:gpt-6-luna:priority'), { backend: 'codex', model: 'gpt-6-luna', serviceTier: 'priority' });
+  assert.ok(buildCodexArgs(parseRole('codex:gpt-6.1-sol:medium')).includes('model_reasoning_effort="medium"'));
+  assert.ok(buildClaudeArgs(parseRole('claude:sonnet:high')).includes('--effort'));
+}));

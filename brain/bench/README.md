@@ -17,6 +17,14 @@ node brain/bench/run.js --models codex:passing,codex:failing --tiers default,pri
 node --test brain/test/ brain/bench/test/
 ```
 
+Select ADR-0010 role scenarios with `--role planner` (iron pickaxe from scratch, shelter before
+night) or `--role actor` (single obtain/craft steps). Without `--role`, the original eight reactive
+scenarios remain. Planner cases use `planner-prompt.md` and an MCP exposing only `knowledge`;
+they validate JSON, checkable conditions, acquisition skills and preparation/crafting order.
+The shelter position condition checks arrival only, not that a finished building exists.
+Actor cases get the goal, step, state, scene and one-line plan status. Raw rows include `role`.
+Both role sets support `--fake`; simulated planner answers also exercise MCP action rejection.
+
 Reports go to `build/model-bench-<UTC-time>.md` and the adjacent `.jsonl`. Fake reports are clearly
 marked as simulated; their scores/timings say nothing about real models. CLI defaults: all six
 models, tier `default`, three repeats, 120 seconds per turn (`--timeout-ms` overrides it).

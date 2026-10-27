@@ -7,20 +7,24 @@ import { dirname, resolve } from 'node:path';
 const here = dirname(fileURLToPath(import.meta.url));
 const registry = resolve(here, '../../mod/src/main/java/dev/blocknet/bridge/BridgeTools.java');
 const integers = new Set(['count', 'length', 'x', 'y', 'z', 'distance']);
+const booleans = new Set(['sneak', 'delta', 'fresh']);
 
 export function parseRegistry(source) {
-  return [...source.matchAll(/add\("([^"]+)", "([^"]+)", (true|false)((?:, "[^"]+")*)/g)].map(([, name, description, task, rest]) => {
+  return [...source.matchAll(/add\("([^"]+)", "([^"]+)", (true|false)((?:,\s*"[^"]+")*)/g)].map(([, name, description, task, rest]) => {
     const params = [...rest.matchAll(/"([^"]+)"/g)].map(([, param]) => param);
     const properties = {};
     const required = [];
     for (const param of params) {
       const optional = param.endsWith('?');
       const key = optional ? param.slice(0, -1) : param;
-      properties[key] = integers.has(key) ? { type: 'integer' } : { type: 'string' };
+      properties[key] = { type: integers.has(key) ? 'integer' : booleans.has(key) ? 'boolean' : 'string' };
+      if (key === 'count') Object.assign(properties[key], { minimum: 1, maximum: 1000000 });
+      if (key === 'mode') properties[key].enum = ['craft', 'get'];
       if (!optional) required.push(key);
     }
-    return { name, description, task: task === 'true',
-      params: { type: 'object', properties, required, additionalProperties: false } };
+    const schema = { type: 'object', properties, required, additionalProperties: false };
+    if (name === 'goto') schema.oneOf = [{ required: ['ref'] }, { required: ['x', 'y', 'z'] }];
+    return { name, description, task: task === 'true', params: schema };
   });
 }
 

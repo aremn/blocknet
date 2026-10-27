@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { performance } from 'node:perf_hooks';
 import { JsonProcess } from '../../json-process.js';
+import { roleScenarios } from '../role-scenarios.js';
 
 class McpProcess extends JsonProcess {
   write(message) { super.write({ jsonrpc: '2.0', ...message }); }
@@ -9,6 +10,8 @@ class McpProcess extends JsonProcess {
 
 // Independent scripted answers: no model executable or network service is used.
 const passing = {
+  'step-iron': { calls: [['obtain', { item: 'iron_ingot', count: 3 }]], answer: 'Готово.' },
+  'step-craft': { calls: [['craft', { item: 'iron_pickaxe', count: 1 }]], answer: 'Готово.' },
   wood: { calls: [['gather', { item: 'logs', count: 4 }]], answer: 'Готово!' },
   'wooden-pickaxe': { calls: [['craft', { item: 'wooden_pickaxe' }]], answer: 'Кирка готова!' },
   inventory: { calls: [['inv', {}]], answer: 'Дубовые брёвна и яблоки.' },
@@ -41,11 +44,20 @@ export class FakeBackend {
       this.process = new McpProcess(this.child, () => {});
       await this.process.request('initialize', { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'bench-fake', version: '1' } });
       const registry = await this.process.request('tools/list', {});
-      if (!registry.tools.some(t => t.name === 'gather') || !registry.tools.some(t => t.name === 'tool_feedback')) throw new Error('MCP registry missing');
+      if (this.options.role === 'planner') {
+        if (registry.tools.length !== 1 || registry.tools[0].name !== 'knowledge') throw new Error('Planner registry must expose only knowledge');
+        const denied = await this.process.request('tools/call', { name: 'obtain', arguments: { item: 'iron_ingot', count: 3 } }).catch(e => e);
+        if (!(denied instanceof Error)) throw new Error('Planner was allowed to act');
+      } else if (!registry.tools.some(t => t.name === 'gather') || !registry.tools.some(t => t.name === 'tool_feedback')) throw new Error('MCP registry missing');
     }
     this.sends++;
     const id = this.options.scenario.id;
+    if (this.options.role === 'planner') {
+      const plan = roleScenarios.planner.find(s => s.id === id).samplePlan;
+      return { text: this.options.model === 'failing' ? '{invalid' : JSON.stringify(plan), toolCalls: 0 };
+    }
     const script = { ...passing[id], ...(this.options.model === 'failing' ? failing[id] : {}) };
+    if (this.options.model === 'failing' && this.options.role === 'actor') script.calls = [];
     for (const [name, args] of script.calls) await this.process.request('tools/call', { name, arguments: args });
     return { text: script.answer, usage: this.options.backend === 'claude'
       ? { input_tokens: 80, cache_read_input_tokens: 20, output_tokens: 5 }

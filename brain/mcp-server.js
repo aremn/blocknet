@@ -26,6 +26,7 @@ export function serveMcp(body, bot, input = process.stdin, output = process.stdo
   let initialized = false;
   let calls = 0, reservation = Promise.resolve();
   const auditFile = options.auditFile ?? process.env.BLOCKNET_AUDIT;
+  const plannerOnly = (options.role ?? process.env.BLOCKNET_ROLE) === 'planner';
   // Serialize reservations, including concurrent calls. The brain clears this ledger before each
   // model turn; reading it also preserves the cap if an MCP subprocess reconnects mid-turn.
   const reserve = (name, args) => {
@@ -82,13 +83,15 @@ export function serveMcp(body, bot, input = process.stdin, output = process.stdo
         case 'tools/list': {
           if (!initialized && !version) throw new Error('Initialize first');
           const hello = await body.ready();
-          reply({ tools: hello.tools.map(tool => ({ name: tool.name, description: tool.description, inputSchema: tool.params })).concat(feedbackTool) });
+          reply({ tools: hello.tools.filter(t => !plannerOnly || t.name === 'knowledge')
+            .map(tool => ({ name: tool.name, description: tool.description, inputSchema: tool.params })).concat(plannerOnly ? [] : feedbackTool) });
           break;
         }
         case 'tools/call': {
           if (!initialized && !version) throw new Error('Initialize first');
           const { name, arguments: args = {} } = request.params ?? {};
           if (typeof name !== 'string') { error(-32602, 'Tool name required'); break; }
+          if (plannerOnly && name !== 'knowledge') { error(-32602, 'Planner may only call knowledge'); break; }
           if (!await reserve(name, args)) {
             reply({ content: [{ type: 'text', text: TURN_LIMIT_MESSAGE }], isError: true });
             break;

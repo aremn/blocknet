@@ -5,7 +5,7 @@ import { resolve, join } from 'node:path';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { createInterface } from 'node:readline';
-import { runBench, scenarios, parseArgs, normalizeUsage } from '../run.js';
+import { runBench, scenarios, roleScenarios, parseArgs, normalizeUsage } from '../run.js';
 import { evaluate } from '../rules.js';
 import { tools } from '../fake-body.js';
 import { FakeBackend } from './fake-backend.js';
@@ -116,4 +116,25 @@ test('tool fixture matches all real registry names/descriptions/task flags; CLI 
   assert.equal(tools.length, real.length);
   assert.equal(parseArgs(['--fake', '--repeat', '2']).fake, true);
   for (const argv of [['--repeat','0'], ['--models','oops'], ['--tiers','flex'], ['--repeat'], ['--unknown']]) assert.throws(() => parseArgs(argv));
+});
+
+test('planner and actor roles use isolated MCP, checkable ordered plans and single-step scenarios', async () => {
+  const outputDir = await mkdtemp(resolve('build/bench-role-test-'));
+  try {
+    for (const role of ['planner', 'actor']) {
+      assert.equal(parseArgs(['--role', role]).role, role);
+      const { records } = await runBench({ role, models: ['codex:passing', 'codex:failing'], repeat: 1,
+        outputDir, backendFactory: options => new FakeBackend(options) });
+      assert.equal(records.length, 4);
+      for (const row of records) {
+        assert.equal(row.role, role); assert.equal(row.pass, row.model === 'passing');
+        if (role === 'planner') { assert.equal(row.calls.length, 0); assert.match(row.input, /Available skills\/tools/u); }
+        else assert.match(row.input, /план: шаг/u);
+      }
+    }
+    const iron = roleScenarios.planner[0];
+    const reversed = { ...iron.samplePlan, steps: [...iron.samplePlan.steps].reverse().map((s, i) => ({ ...s, id: i + 1 })) };
+    assert.equal(evaluate(iron, [], JSON.stringify(reversed)).pass, false);
+    assert.throws(() => parseArgs(['--role', 'critic']));
+  } finally { await rm(outputDir, { recursive: true, force: true }); }
 });

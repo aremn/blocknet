@@ -58,7 +58,7 @@
           "type": "string"
         },
         "fresh": {
-          "type": "string"
+          "type": "boolean"
         }
       },
       "required": [],
@@ -73,7 +73,7 @@
       "type": "object",
       "properties": {
         "delta": {
-          "type": "string"
+          "type": "boolean"
         },
         "goal": {
           "type": "string"
@@ -129,7 +129,9 @@
           "type": "string"
         },
         "count": {
-          "type": "integer"
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
         }
       },
       "required": [
@@ -149,7 +151,9 @@
           "type": "string"
         },
         "count": {
-          "type": "integer"
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
         }
       },
       "required": [
@@ -164,8 +168,26 @@
     "task": false,
     "params": {
       "type": "object",
-      "properties": {},
-      "required": [],
+      "properties": {
+        "item": {
+          "type": "string"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "craft",
+            "get"
+          ]
+        }
+      },
+      "required": [
+        "item"
+      ],
       "additionalProperties": false
     }
   },
@@ -224,7 +246,21 @@
         }
       },
       "required": [],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": [
+            "ref"
+          ]
+        },
+        {
+          "required": [
+            "x",
+            "y",
+            "z"
+          ]
+        }
+      ]
     }
   },
   {
@@ -310,7 +346,9 @@
           "type": "string"
         },
         "count": {
-          "type": "integer"
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
         }
       },
       "required": [],
@@ -334,7 +372,7 @@
           "type": "integer"
         },
         "sneak": {
-          "type": "string"
+          "type": "boolean"
         }
       },
       "required": [
@@ -420,7 +458,9 @@
           "type": "string"
         },
         "count": {
-          "type": "integer"
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
         }
       },
       "required": [
@@ -440,7 +480,9 @@
           "type": "string"
         },
         "count": {
-          "type": "integer"
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
         }
       },
       "required": [
@@ -480,8 +522,31 @@
     "task": true,
     "params": {
       "type": "object",
-      "properties": {},
-      "required": [],
+      "properties": {
+        "x": {
+          "type": "integer"
+        },
+        "y": {
+          "type": "integer"
+        },
+        "z": {
+          "type": "integer"
+        },
+        "filter": {
+          "type": "string"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "z",
+        "filter"
+      ],
       "additionalProperties": false
     }
   },
@@ -491,8 +556,31 @@
     "task": true,
     "params": {
       "type": "object",
-      "properties": {},
-      "required": [],
+      "properties": {
+        "x": {
+          "type": "integer"
+        },
+        "y": {
+          "type": "integer"
+        },
+        "z": {
+          "type": "integer"
+        },
+        "filter": {
+          "type": "string"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "z",
+        "filter"
+      ],
       "additionalProperties": false
     }
   },

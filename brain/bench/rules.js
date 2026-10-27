@@ -1,3 +1,5 @@
+import { validatePlan, parseTool } from '../plans.js';
+
 export const wordCount = text => {
   const value = String(text ?? '').trim();
   return !value || value === '<silent>' ? 0 : value.split(/\s+/u).length;
@@ -12,6 +14,32 @@ export function evaluate(scenario, calls, answer) {
   for (const rule of scenario.rules) {
     let passed;
     switch (rule.type) {
+      case 'planQuality': {
+        try {
+          const plan = validatePlan(answer);
+          const steps = plan.steps.map(s => ({ ...s, call: parseTool(s.do) }));
+          const indexOf = (tool, item) => steps.findIndex(s => s.call?.tool === tool && itemIs(s.call, item));
+          const acquisition = steps.some(s => ['obtain', 'mine_ore'].includes(s.call?.tool));
+          const onlyKnowledge = calls.every(c => c.tool === 'knowledge' && success(c));
+          if (rule.target === 'iron_pickaxe') {
+            const stone = indexOf('obtain', 'stone_pickaxe'), iron = indexOf('obtain', 'iron_ingot');
+            const craft = indexOf('craft', 'iron_pickaxe');
+            const mined = indexOf('mine_ore', 'raw_iron');
+            passed = acquisition && onlyKnowledge && stone >= 0 && iron > stone && craft > iron
+              && (mined < 0 || mined > stone && mined < iron)
+              && steps[craft].done.replace('minecraft:', '') === 'inv iron_pickaxe >= 1';
+          } else {
+            const supplies = steps.findIndex(s => ['obtain', 'mine_ore'].includes(s.call?.tool));
+            const build = steps.findIndex(s => !s.call && /shelter|walls|roof|дом|стен|крыш/iu.test(s.do));
+            passed = acquisition && onlyKnowledge && supplies >= 0 && build > supplies
+              && steps.slice(0, build).some(s => s.done.startsWith('inv '))
+              && steps[build].done.startsWith('pos ');
+          }
+        } catch { passed = false; }
+        break;
+      }
+      case 'singleStep': passed = calls.length === 1 && calls[0].tool === rule.tool && itemIs(calls[0], rule.item)
+        && (calls[0].args.count ?? 1) === rule.count && success(calls[0]); break;
       case 'gatherWithin': passed = calls.slice(0, rule.limit).some(c => gather(c, rule.pattern)); break;
       case 'craft': passed = calls.some(c => c.tool === 'craft' && itemIs(c, rule.item) && success(c)); break;
       case 'short': passed = words > 0 && words <= rule.maxWords; break;

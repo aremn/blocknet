@@ -1,17 +1,16 @@
 # Blocknet brain
 
 Node 22, plain ES modules, no npm dependencies. The mod is the body; this process uses rules for
-short orders and one persistent model process per bot for other requests. The default backend is
-Codex (`gpt-6-luna`, priority service, low reasoning); Claude Haiku remains available. Both use
+short orders, a planner for goals and a small actor for individual steps. Defaults are
+`--planner claude:sonnet` and `--actor codex:gpt-6-luna:priority` (low reasoning). Both use
 your existing subscription login, with no API key or npm dependencies.
 
 1. Start Minecraft with the mod and spawn a bot: `/blocknet spawn Kirill`.
 2. From the repository root, run:
 
    ```sh
-   node brain/brain.js --bot Kirill --backend codex
-   # Switch to Claude:
-   node brain/brain.js --bot Kirill --backend claude
+   node brain/brain.js --bot Kirill
+   node brain/brain.js --bot Kirill --planner codex:gpt-6.1-sol:medium --actor claude:haiku
    ```
 
 3. In player chat: `Kirill, ко мне`, `Kirill stop`, `Kirill, осмотрись`, or a longer request such as
@@ -26,9 +25,13 @@ node brain/brain.js --bot Kirill --config "/path/to/minecraft/config/blocknet_ai
 ```
 
 `BLOCKNET_CONFIG`, `BLOCKNET_BOT`, and `BLOCKNET_ALIASES` supply the same defaults as `--config`,
-`--bot`, and `--alias`; `BLOCKNET_BACKEND` supplies the backend default. `--max-turns N` caps autoplay model turns (default 200); backend processes rotate every 30 turns. Config contains `port` (25599 by default) and a generated `token`; restart
+`--bot`, and `--alias`. Legacy `--backend` / `BLOCKNET_BACKEND` selects the actor family
+when `--actor` is omitted (`claude` uses Haiku). `--max-turns N` caps autoplay model calls
+(planner plus actor, default 200); actor sessions restart for each plan step. Config contains
+`port` (25599 by default) and a generated `token`; restart
 the Minecraft server after editing it. TCP binds only to `127.0.0.1`. The client reconnects every
-second; interrupted actions are never replayed automatically. Spawn the bot again after death.
+second; interrupted transport actions are never replayed automatically. After death autoplay waits
+for the body's respawn event before pursuing the goal again.
 
 The brain generates `brain/mcp.json` at startup (`brain/mcp.<name>.json` for other bots), pointing
 Claude to `mcp-server.js` with the absolute config path and bot name. The token stays in the mod's
@@ -86,7 +89,7 @@ authenticated; `CODEX_BIN` and optional `CODEX_SCRIPT` provide the equivalent ov
 Short stop/come/follow/look orders in English and Russian and clean Russian gather orders bypass
 the model. Messages queue during a call. `стоп`/`stop` acts immediately, closes the model process
 and clears queued requests; death also resets the session. A dead process restarts on the next
-request; an interrupted request is never replayed. Processes also rotate every 30 turns.
+request; an interrupted request is never replayed. Reactive conversations rotate every 10 turns.
 Model replies are sent after completion, allowing empty answers and `<silent>` to stay silent.
 Each user message includes a compact inventory, held item and low-health line only when changed;
 a fresh session gets the current line again. The English prompt asks for one casual sentence in
@@ -105,12 +108,58 @@ is the per-call MCP counter (reset before each call). Failed calls have null usa
 was available. Generated MCP configs and logs are ignored by git.
 
 ```sh
-node --test brain/test/
+node --test brain/test/ brain/bench/test/
 ```
 
 Tests cover rules, MCP framing/task outcomes, persistent Claude stream-json and Codex JSON-RPC
 with fake children, usage, restarts, and slow/fast acknowledgements. No tests call a model.
 Real authentication, end-to-end latency and model behavior require a connected live test.
+
+## Planner, executor, critic and plan library (ADR-0010 steps 2–3)
+
+`--planner backend:model[:tier|effort]` and `--actor backend:model[:tier|effort]` create separate
+backend sessions, even for the same model. Codex accepts `default`/`priority` service tier or a
+reasoning effort such as `medium`; Claude accepts effort such as `high`. The planner has its own
+MCP config and can call only `knowledge`; its system prompt is `planner-prompt.md`.
+
+Goal words (e.g. `сделай`, `построй`, `кирка`, `дом`, `build`, `make`) select the planner;
+single registered tool commands and short rules bypass it. Ordinary chat uses the actor, which
+can return `needs_plan` to escalate. Autoplay plans its goal once and ends on completion or final
+failure. Planner input contains current state/scene, one line per tool with argument order,
+previous failures, and the two nearest library examples. Invalid JSON/schema/conditions get one
+correction attempt; a second invalid response is reported to the player.
+
+```json
+{"goal":"железная кирка с нуля","steps":[{"id":1,"do":"obtain stone_pickaxe 1","done":"inv stone_pickaxe >= 1"},{"id":2,"do":"obtain iron_ingot 3","done":"inv iron_ingot >= 3"},{"id":3,"do":"craft iron_pickaxe 1","done":"inv iron_pickaxe >= 1"}],"budget_min":20}
+```
+
+Steps execute in order. Registered commands accept positional arguments (`obtain iron_ingot 3`)
+or JSON arguments (`goto {"ref":"t1"}`), and run directly through the body without the actor.
+Free text gets a fresh actor session with only the language rule, goal, step, done condition,
+state line, scene line and plan status. The critic reads full `inv` and `status` snapshots,
+ignores held-item echoes/summaries, and checks inventory totals or position. Supported conditions:
+`inv <item-id> >= <count>` and `pos <x> <y> <z> [within <radius>]`. Bare Minecraft item ids and
+`minecraft:` ids are equivalent; other namespaces remain distinct. Unsupported predicates are
+rejected, including claims that a house exists: position proves arrival only.
+
+The plan has 1–32 steps and `budget_min` in (0,120]. Each step gets an equal share unless it has
+its own positive `budget_min`; the original plan deadline also applies across replans. A body
+failure, unverified completion or budget expiry replans with the reason. After three failed steps
+in total (initial attempt plus at most two failure replans), the bot briefly tells the player.
+Budget expiry stops the body and actor. Stop/death cancel the plan; continue/respawn can pursue
+the autoplay goal again. Every actor message carries a one-line status; bare chat `план?` reads
+it immediately, even while a step is running, e.g. `план: шаг 2/3 obtain iron_ingot 3 — 1/3`.
+
+Successful plans append to ignored `brain/logs/plans.jsonl`: goal, normalized `goal_key`, steps,
+budget and `duration_ms`. Matching lowercases, removes punctuation/politeness and sorts words.
+An exact match or word-set similarity >= 0.8 reuses the plan without a planner call; differing
+numbers never match. Only successful, valid records are reused; malformed JSONL lines are ignored.
+After a failure the planner is always called, even if a matching cached plan exists.
+
+Role benchmarks: `node brain/bench/run.js --role planner --models claude:sonnet --repeat 1`
+and `--role actor --models codex:gpt-6-luna --repeat 1`. Add `--fake` for simulated backends.
+Planner cases check JSON, acquisition skills, preparation/crafting order and checkable conditions
+for `железная кирка с нуля` / `дом до ночи`; actor cases check one obtain/craft step.
 
 ## Autoplay, chat and learning logs
 
@@ -121,8 +170,8 @@ node brain/report.js
 node brain/report.js brain/logs/session-<date>-Kirill.jsonl 10
 ```
 
-Autoplay continues toward the goal after each answer, including changed state and recent task,
-damage and chat events, with a 1.2 second pause. Player chat takes priority. Bare `стоп`/`stop`
+Autoplay executes the goal plan, checking body state after each step. Ordinary queued chat is
+handled after the current plan; status and stop act immediately. Bare `стоп`/`stop`
 pauses and cancels the current action; `продолжай`/`continue` resumes. The defaults are hard limits
 of 200 model turns (including chat while autoplay is active) and 60 wall-clock minutes, including
 paused/disconnected time. Reaching either limit ends autoplay; one final reflection asks for

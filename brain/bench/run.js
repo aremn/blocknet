@@ -7,6 +7,9 @@ import { ClaudeBackend } from '../claude-backend.js';
 import { FakeBody } from './fake-body.js';
 import { evaluate, wordCount } from './rules.js';
 import { renderReport } from './report.js';
+import { roleScenarios } from './role-scenarios.js';
+import { plannerInput } from '../plans.js';
+export { roleScenarios } from './role-scenarios.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '../..');
@@ -19,19 +22,21 @@ export function parseArgs(argv) {
     const flag = argv[i];
     if (flag === '--fake') { options.fake = true; continue; }
     if (flag === '--help') { options.help = true; continue; }
-    if (!['--models', '--tiers', '--repeat', '--timeout-ms'].includes(flag)) throw new Error(`Unknown option: ${flag}`);
+    if (!['--models', '--tiers', '--repeat', '--timeout-ms', '--role'].includes(flag)) throw new Error(`Unknown option: ${flag}`);
     const value = argv[++i];
     if (!value || value.startsWith('--')) throw new Error(`Value required for ${flag}`);
     if (flag === '--models') options.models = value.split(',');
     if (flag === '--tiers') options.tiers = value.split(',');
     if (flag === '--repeat') options.repeat = Number(value);
     if (flag === '--timeout-ms') options.timeoutMs = Number(value);
+    if (flag === '--role') options.role = value;
   }
   validateOptions(options);
   return options;
 }
 
-function validateOptions({ models, tiers, repeat, timeoutMs }) {
+function validateOptions({ models, tiers, repeat, timeoutMs, role }) {
+  if (role != null && !['planner', 'actor'].includes(role)) throw new Error('Role must be planner or actor');
   if (!models.length || models.some(m => !/^(codex|claude):[^:\s,]+$/.test(m))) throw new Error('Use backend:model pairs (codex or claude)');
   if (!tiers.length || tiers.some(t => !['default', 'priority'].includes(t))) throw new Error('Tiers must be default or priority');
   if (!Number.isInteger(repeat) || repeat < 1) throw new Error('Repeat must be a positive integer');
@@ -47,7 +52,9 @@ export function normalizeUsage(usage = {}, backend) {
   return { input: usage.inputTokens ?? null, cached: usage.cachedInputTokens ?? null, output: usage.outputTokens ?? null };
 }
 
-export function scenarioPrompt(scenario) {
+export function scenarioPrompt(scenario, role) {
+  if (role === 'planner') return plannerInput({ goal: scenario.message, state: scenario.state, scene: scenario.scene });
+  if (scenario.step) return `Goal: ${scenario.goal}\nStep: ${scenario.step}\nDone: ${scenario.done}\nState: ${scenario.state}\nScene: ${scenario.scene}\n${scenario.planStatus}`;
   return scenario.autoplay ? `${scenario.message}\nState: ${scenario.state}\nScene: ${scenario.scene}`
     : `You are BenchBot. Alex: ${scenario.message}\nState: ${scenario.state}\nScene: ${scenario.scene}`;
 }
@@ -55,8 +62,8 @@ export function scenarioPrompt(scenario) {
 export const createBackend = options => options.backend === 'codex' ? new CodexBackend(options) : new ClaudeBackend(options);
 
 export async function runBench({ models = defaultModels.split(','), tiers = ['default'], repeat = 3, timeoutMs = 120_000,
-  cases = scenarios, outputDir = join(root, 'build'), backendFactory = createBackend, onProgress = () => {} } = {}) {
-  validateOptions({ models, tiers, repeat, timeoutMs });
+  role, cases = role ? roleScenarios[role] : scenarios, outputDir = join(root, 'build'), backendFactory = createBackend, onProgress = () => {} } = {}) {
+  validateOptions({ models, tiers, repeat, timeoutMs, role });
   await mkdir(outputDir, { recursive: true });
   const workspace = await mkdtemp(join(outputDir, 'model-bench-work-'));
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -65,13 +72,14 @@ export async function runBench({ models = defaultModels.split(','), tiers = ['de
   const records = [];
   const body = new FakeBody();
   const configFile = join(workspace, 'bridge.json'), auditFile = join(workspace, 'audit.jsonl');
-  const promptFile = join(root, 'brain/prompt.md');
+  const promptFile = join(root, role === 'planner' ? 'brain/planner-prompt.md' : 'brain/prompt.md');
   const prompt = await readFile(promptFile, 'utf8');
   try {
     await body.start(configFile);
     const mcpServer = { command: process.execPath, args: [join(here, 'mcp.js')], env: {
       BLOCKNET_CONFIG: configFile, BLOCKNET_BOT: 'BenchBot', BLOCKNET_AUDIT: auditFile,
       BLOCKNET_SESSION: join(workspace, 'session.jsonl'), BLOCKNET_SESSION_ID: 'benchmark',
+      ...(role === 'planner' && { BLOCKNET_ROLE: 'planner' }),
     } };
     const mcpConfig = join(workspace, 'mcp.json');
     await writeFile(mcpConfig, JSON.stringify({ mcpServers: { blocknet: mcpServer } }));
@@ -79,14 +87,14 @@ export async function runBench({ models = defaultModels.split(','), tiers = ['de
     for (const spec of models) for (const tier of tiers) for (const scenario of cases) {
       const [backend, model] = spec.split(':');
       const options = { backend, model, serviceTier: tier, prompt, promptFile, mcpConfig, mcpServer,
-        cwd: workspace, maxTurns: repeat + 1, timeoutMs, scenario };
+        cwd: workspace, maxTurns: repeat + 1, timeoutMs, scenario, role };
       let session;
       let warm = false;
       try {
         for (let index = 1; index <= repeat; index++) {
           body.reset(scenario);
           await writeFile(auditFile, '');
-          const input = scenarioPrompt(scenario);
+          const input = scenarioPrompt(scenario, role);
           const started = performance.now();
           let result, error, timer;
           try {
@@ -106,6 +114,7 @@ export async function runBench({ models = defaultModels.split(','), tiers = ['de
           const answer = result?.text ?? '';
           const verdict = error ? { pass: false, failedRules: ['backendError'], words: wordCount(answer) } : evaluate(scenario, calls, answer);
           const row = { time: new Date().toISOString(), simulated: backendFactory !== createBackend,
+            role: role ?? 'actor',
             backend, model, tier, effectiveTier: backend === 'claude' ? null : tier,
             scenario: scenario.id, repeat: index, temperature: warm ? 'warm' : 'cold', ms,
             // Claude starts its internal clock after spawn; account for that startup outside send's clock.
@@ -132,7 +141,7 @@ export async function runBench({ models = defaultModels.split(','), tiers = ['de
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     const options = parseArgs(process.argv.slice(2));
-    if (options.help) console.log('node brain/bench/run.js --models backend:model,... [--tiers default,priority] [--repeat 3] [--timeout-ms 120000] [--fake]');
+    if (options.help) console.log('node brain/bench/run.js --models backend:model,... [--role planner|actor] [--tiers default,priority] [--repeat 3] [--timeout-ms 120000] [--fake]');
     else {
       if (options.fake) options.backendFactory = (await import('./test/fake-backend.js')).fakeBackendFactory;
       const result = await runBench({ ...options, onProgress: row => process.stderr.write(`${row.backend}:${row.model}/${row.tier} ${row.scenario} #${row.repeat}: ${row.pass ? 'PASS' : row.failedRules.join(',')} ${row.ms}ms\n`) });
