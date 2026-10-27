@@ -35,7 +35,7 @@ final class ContainerTask {
     private AbstractContainerMenu menu;
     private Phase phase = Phase.OPEN;
     private int delay;
-    private int ticks;
+    private int phaseTicks;
     private int origin = -1;
     private long remaining;
     private long batch;
@@ -64,10 +64,6 @@ final class ContainerTask {
             }
             bot.containerMemory().observe(bot, pos);
         }
-        if (++ticks > 12_000) {
-            fail("cannot reach or transfer timed out");
-            return;
-        }
         if (delay-- > 0) {
             return;
         }
@@ -78,6 +74,14 @@ final class ContainerTask {
             case PLACE -> place();
             case RETURN -> returnCursor();
         }
+    }
+
+    boolean checkTimeout() {
+        if (++phaseTicks > CraftExecutor.PHASE_TIMEOUT) {
+            fail("step 1: stuck in " + phase.name().toLowerCase(java.util.Locale.ROOT));
+            return false;
+        }
+        return !finished;
     }
 
     private List<Slot> sources() {
@@ -162,7 +166,7 @@ final class ContainerTask {
                 return;
             }
         }
-        phase = Phase.SELECT;
+        next(Phase.SELECT);
     }
 
     private void select() {
@@ -182,7 +186,7 @@ final class ContainerTask {
                     fail("source rejected pickup");
                     return;
                 }
-                phase = Phase.PLACE;
+                next(Phase.PLACE);
                 return;
             }
         }
@@ -192,7 +196,7 @@ final class ContainerTask {
     private void place() {
         ItemStack carried = menu.getCarried();
         if (batch == 0 || carried.isEmpty()) {
-            phase = Phase.RETURN;
+            next(Phase.RETURN);
             return;
         }
         // Merge compatible stacks before occupying an empty slot needed by another identity.
@@ -220,7 +224,7 @@ final class ContainerTask {
             batch -= transferred;
             moved.merge(key, (long) transferred, Long::sum);
             if (batch == 0 || menu.getCarried().isEmpty()) {
-                phase = Phase.RETURN;
+                next(Phase.RETURN);
             }
             return;
         }
@@ -236,7 +240,12 @@ final class ContainerTask {
             }
         }
         origin = -1;
-        phase = Phase.SELECT;
+        next(Phase.SELECT);
+    }
+
+    private void next(Phase next) {
+        phase = next;
+        phaseTicks = 0;
     }
 
     private void click(int slot, int button) {

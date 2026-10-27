@@ -1,5 +1,6 @@
 package dev.blocknet.control;
 
+import dev.blocknet.Blocknet;
 import dev.blocknet.body.BotPlayer;
 import dev.blocknet.crafting.CraftPlan;
 import dev.blocknet.crafting.CraftingCalculation;
@@ -7,6 +8,7 @@ import dev.blocknet.crafting.ItemKey;
 import dev.blocknet.crafting.PlannerCatalogs;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.Deque;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -30,12 +32,14 @@ import net.minecraft.world.item.crafting.CraftingRecipe;
 import net.minecraft.world.item.crafting.RecipeHolder;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 
 /** Tick-driven player actions. The plan is a material forecast, never permission to edit stacks. */
 final class CraftExecutor {
     static final int CLICK_DELAY = 3;
+    static final int PHASE_TIMEOUT = 200;
     private enum Phase { WITHDRAW, STEP, STATION, OPEN, PLACE, READY, TAKE, LOAD, COOK, DRAIN, CLEANUP, COLLECT }
 
     private record SourceItem(String dimension, long position, String description, ItemKey item) {}
@@ -60,9 +64,13 @@ final class CraftExecutor {
     private long repetitions;
     private int delay;
     private int phaseTicks;
+    private int cookingOpenTicks;
     private boolean replanned;
     private boolean finished;
     private BlockPos stationPos;
+    private Deque<BlockPos> placementCandidates;
+    private boolean placementRetried;
+    private Vec3 placementWalk;
     private String cleanupStation;
     private long cleanupBefore;
     private RecipeHolder<?> recipe;
@@ -137,12 +145,6 @@ final class CraftExecutor {
         if (finished || delay-- > 0) {
             return;
         }
-        long timeout = phase == Phase.COOK && recipe.value() instanceof AbstractCookingRecipe cooking
-            ? Math.max(12_000L, cooking.getCookingTime() * batchOperations * 3 + 2_000) : 12_000;
-        if (++phaseTicks > timeout) {
-            fail("timed out during " + phase);
-            return;
-        }
         if (expectedMenu != null && bot.containerMenu != expectedMenu) {
             fail("menu closed during " + phase);
             return;
@@ -168,6 +170,28 @@ final class CraftExecutor {
             case CLEANUP -> cleanup();
             case COLLECT -> {}
         }
+    }
+
+    /** Also runs while the controller is mining or collecting a station for this task. */
+    boolean checkTimeout() {
+        if (finished) {
+            return false;
+        }
+        if (withdrawal != null) {
+            return withdrawal.checkTimeout();
+        }
+        long timeout = phase == Phase.COOK && recipe.value() instanceof AbstractCookingRecipe cooking
+            ? Math.max(12_000L, (long) cooking.getCookingTime() * batchOperations * 3 + 2_000)
+            : phase == Phase.COLLECT ? PHASE_TIMEOUT * 2 : PHASE_TIMEOUT;
+        boolean openingFurnace = phase == Phase.COOK && cookWait <= 0 && clicks.isEmpty()
+            && !(bot.containerMenu instanceof AbstractFurnaceMenu);
+        cookingOpenTicks = openingFurnace ? cookingOpenTicks + 1 : 0;
+        if (++phaseTicks > timeout || cookingOpenTicks > PHASE_TIMEOUT) {
+            complete("failed: step " + (stepIndex + 1) + ": stuck in "
+                + (cookingOpenTicks > PHASE_TIMEOUT ? "open" : phase.name().toLowerCase(java.util.Locale.ROOT)));
+            return false;
+        }
+        return true;
     }
 
     boolean isWithdrawing() {
@@ -272,6 +296,9 @@ final class CraftExecutor {
             next(Phase.PLACE);
         } else {
             stationPos = stations.get(station);
+            placementCandidates = null;
+            placementRetried = false;
+            placementWalk = null;
             next(Phase.STATION);
         }
     }
@@ -317,26 +344,35 @@ final class CraftExecutor {
             delay = CLICK_DELAY - 1;
             return;
         }
-        for (Direction direction : Direction.Plane.HORIZONTAL) {
-            BlockPos spot = bot.blockPosition().relative(direction);
-            BlockPos ground = spot.below();
-            if (!bot.level().getBlockState(spot).canBeReplaced()
-                || !bot.level().getBlockState(ground).isFaceSturdy(bot.level(), ground, Direction.UP)
-                || !bot.canInteractWithBlock(ground, -0.5)) {
-                continue;
-            }
-            Vec3 point = Vec3.atCenterOf(ground).add(0, 0.4999, 0);
-            var hit = bot.level().clip(new ClipContext(bot.getEyePosition(), point,
-                ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, bot));
-            if (hit.getType() != HitResult.Type.BLOCK || !hit.getBlockPos().equals(ground)) {
-                continue;
-            }
-            var placedHit = controller.craftApproach(ground);
-            if (placedHit == null) {
+        if (placementWalk != null) {
+            if (!controller.craftWalk(placementWalk)) {
                 return;
             }
-            bot.gameMode.useItemOn(bot, bot.serverLevel(), bot.getMainHandItem(), InteractionHand.MAIN_HAND,
-                new BlockHitResult(point, Direction.UP, ground, false));
+            placementWalk = null;
+        }
+        if (placementCandidates == null) {
+            placementCandidates = placementCandidates();
+        }
+        while (!placementCandidates.isEmpty()) {
+            BlockPos spot = placementCandidates.peekFirst();
+            String rejection = placementRejection(spot);
+            if (rejection != null) {
+                rejectPlacement(rejection);
+                continue;
+            }
+            BlockPos ground = spot.below();
+            Vec3 point = Vec3.atCenterOf(ground).add(0, 0.4999, 0);
+            if (!controller.craftAim(point)) {
+                return;
+            }
+            boolean sneaking = bot.isShiftKeyDown();
+            bot.setShiftKeyDown(true); // Place even when the support itself opens a menu.
+            try {
+                bot.gameMode.useItemOn(bot, bot.serverLevel(), bot.getMainHandItem(), InteractionHand.MAIN_HAND,
+                    new BlockHitResult(point, Direction.UP, ground, false));
+            } finally {
+                bot.setShiftKeyDown(sneaking);
+            }
             if (bot.level().getBlockState(spot).is(net.minecraft.world.level.block.Block.byItem(CraftStations.item(step().station())))) {
                 stationPos = spot.immutable();
                 stations.put(step().station(), stationPos);
@@ -344,8 +380,89 @@ final class CraftExecutor {
                 next(Phase.OPEN);
                 return;
             }
+            rejectPlacement("placement rejected by useItemOn");
+        }
+        if (!placementRetried) {
+            placementRetried = true;
+            placementWalk = findPlacementWalk();
+            if (placementWalk != null) {
+                placementCandidates = null;
+                return;
+            }
         }
         fail("no free place for " + step().station());
+    }
+
+    private Deque<BlockPos> placementCandidates() {
+        int reach = (int) Math.ceil(bot.blockInteractionRange());
+        BlockPos feet = bot.blockPosition();
+        var candidates = new ArrayList<BlockPos>();
+        for (BlockPos spot : BlockPos.betweenClosed(feet.offset(-reach, -1, -reach), feet.offset(reach, 1, reach))) {
+            if (bot.canInteractWithBlock(spot.below(), -0.5)) {
+                candidates.add(spot.immutable());
+            }
+        }
+        candidates.sort(Comparator.comparingDouble(pos -> bot.position().distanceToSqr(Vec3.atCenterOf(pos))));
+        return new ArrayDeque<>(candidates);
+    }
+
+    private String placementRejection(BlockPos spot) {
+        var level = bot.serverLevel();
+        BlockPos ground = spot.below();
+        if (!level.getBlockState(spot).canBeReplaced()) {
+            return "not replaceable";
+        }
+        if (!level.getBlockState(ground).isFaceSturdy(level, ground, Direction.UP)) {
+            return "no sturdy support";
+        }
+        // All supported stations fill their block. Include the bot and non-building entities too.
+        if (bot.getBoundingBox().intersects(new AABB(spot))
+            || !level.getEntities(bot, new AABB(spot), entity -> !entity.isSpectator()).isEmpty()) {
+            return "intersects entity bounding box";
+        }
+        if (!bot.canInteractWithBlock(ground, -0.5)) {
+            return "out of reach";
+        }
+        Vec3 point = Vec3.atCenterOf(ground).add(0, 0.4999, 0);
+        var hit = level.clip(new ClipContext(bot.getEyePosition(), point,
+            ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, bot));
+        if (hit.getType() != HitResult.Type.BLOCK || !hit.getBlockPos().equals(ground)
+            || hit.getDirection() != Direction.UP) {
+            return "support face not visible";
+        }
+        return null;
+    }
+
+    private void rejectPlacement(String reason) {
+        Blocknet.LOGGER.debug("{} rejected {} placement at {}: {}", bot.getGameProfile().getName(),
+            step().station(), placementCandidates.removeFirst(), reason);
+    }
+
+    private Vec3 findPlacementWalk() {
+        var level = bot.serverLevel();
+        BlockPos feet = bot.blockPosition();
+        for (Direction direction : Direction.Plane.HORIZONTAL) {
+            Vec3 destination = null;
+            for (int distance = 1; distance <= 2; distance++) {
+                BlockPos spot = feet.relative(direction, distance);
+                BlockPos ground = spot.below();
+                Vec3 point = Vec3.atCenterOf(ground).add(0, 0.4999, 0);
+                var hit = level.clip(new ClipContext(bot.getEyePosition(), point,
+                    ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, bot));
+                AABB body = bot.getBoundingBox().move(Vec3.atBottomCenterOf(spot).subtract(bot.position()));
+                if (!level.getBlockState(ground).isFaceSturdy(level, ground, Direction.UP)
+                    || hit.getType() != HitResult.Type.BLOCK || !hit.getBlockPos().equals(ground)
+                    || !level.noCollision(bot, body)
+                    || !level.noCollision(bot, bot.getBoundingBox().minmax(body))) {
+                    break;
+                }
+                destination = Vec3.atBottomCenterOf(spot);
+            }
+            if (destination != null) {
+                return destination;
+            }
+        }
+        return null;
     }
 
     private void open() {

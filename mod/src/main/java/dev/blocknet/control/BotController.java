@@ -291,6 +291,19 @@ public final class BotController {
         return approachAndAim(pos);
     }
 
+    boolean craftAim(Vec3 point) {
+        lookAt(point);
+        return isLookingAt(point);
+    }
+
+    boolean craftWalk(Vec3 point) {
+        if (hasArrived(point)) {
+            return true;
+        }
+        walkTowards(point);
+        return false;
+    }
+
     void craftMine(BlockPos pos) {
         target = pos;
         task = Task.MINE_APPROACH;
@@ -377,6 +390,12 @@ public final class BotController {
             bot.zza = 0.0F;
             bot.xxa = 0.0F;
             bot.setJumping(false);
+        }
+        if (containerTask != null && !containerTask.checkTimeout()) {
+            return;
+        }
+        if (crafting != null && !crafting.checkTimeout()) {
+            return;
         }
         if (target == null) {
             return;

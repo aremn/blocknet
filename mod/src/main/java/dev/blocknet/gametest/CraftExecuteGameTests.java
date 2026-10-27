@@ -170,6 +170,51 @@ public final class CraftExecuteGameTests {
         smelt(helper, "BnCraftRecover", true);
     }
 
+    @GameTest(template = "arena", timeoutTicks = 600)
+    public static void placesFurnaceNearBlockEdgeWithTableInTheWay(GameTestHelper helper) {
+        BotPlayer bot = bot(helper, "BnCraftEdge", stack(Items.RAW_IRON, 1), stack(Items.COAL, 1),
+            stack(Items.COBBLESTONE, 8));
+        Vec3 position = helper.absoluteVec(new Vec3(4.85, 1, 3.5));
+        bot.moveTo(position.x, position.y, position.z, 180, 0);
+        bot.setYHeadRot(180);
+        BlockPos table = new BlockPos(4, 1, 2);
+        helper.setBlock(table, Blocks.CRAFTING_TABLE);
+        helper.assertTrue(CraftStations.visible(bot).containsKey("crafting_table"), "neighbouring table visible");
+        List<String> reports = new ArrayList<>();
+        bot.controller().craft(new ItemStack(Items.IRON_INGOT), 1, reports::add);
+        helper.succeedWhen(() -> {
+            done(helper, bot, reports, "crafted 1 iron_ingot");
+            helper.assertTrue(helper.getTick() >= 200, "real furnace cooking time");
+            helper.assertTrue(bot.getInventory().countItem(Items.IRON_INGOT) == 1, "furnace placed and used");
+            helper.assertBlockPresent(Blocks.CRAFTING_TABLE, table);
+            helper.assertTrue(reports.getFirst().contains("left a furnace at "), "placed furnace remains without tool");
+            BotManager.despawn("BnCraftEdge");
+        });
+    }
+
+    @GameTest(template = "arena", timeoutTicks = 260)
+    public static void failsPlacementOnNarrowPillarWithoutLosingInventory(GameTestHelper helper) {
+        for (int y = 0; y < 4; y++) {
+            helper.setBlock(new BlockPos(4, y, 4), Blocks.STONE);
+        }
+        BotPlayer bot = TestArena.spawnBot(helper, "BnCraftPillar", new Vec3(4.5, 4, 4.5));
+        bot.getInventory().clearContent();
+        bot.getInventory().add(stack(Items.FURNACE, 1));
+        bot.getInventory().add(stack(Items.RAW_IRON, 1));
+        bot.getInventory().add(stack(Items.COAL, 1));
+        var before = inventory(bot);
+        List<String> reports = new ArrayList<>();
+        bot.controller().craft(new ItemStack(Items.IRON_INGOT), 1, reports::add);
+        helper.succeedWhen(() -> {
+            done(helper, bot, reports, "failed: step 1 ");
+            helper.assertTrue(reports.getFirst().contains("no free place for furnace"), "bounded placement failure: " + reports);
+            helper.assertTrue(helper.getTick() <= 200, "fails within placement time limit");
+            helper.assertTrue(inventory(bot).equals(before), "all inventory intact");
+            helper.assertTrue(bot.blockPosition().equals(helper.absolutePos(new BlockPos(4, 4, 4))), "did not walk off pillar");
+            BotManager.despawn("BnCraftPillar");
+        });
+    }
+
     @GameTest(template = "arena", timeoutTicks = 60)
     public static void missingMaterialsReportOnceWithoutMovingItems(GameTestHelper helper) {
         BotPlayer bot = bot(helper, "BnCraftMissing", stack(Items.OAK_LOG, 1));
