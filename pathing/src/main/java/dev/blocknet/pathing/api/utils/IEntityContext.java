@@ -21,7 +21,7 @@ import dev.blocknet.pathing.api.BaritoneAPI;
 import dev.blocknet.pathing.api.IBaritone;
 import dev.blocknet.pathing.api.cache.IWorldData;
 import dev.blocknet.pathing.api.entity.LivingEntityHungerManager;
-import dev.blocknet.pathing.api.entity.LivingEntityInventory;
+import dev.blocknet.pathing.api.entity.BotHands;
 import dev.blocknet.pathing.api.pathing.calc.Avoidance;
 import java.util.List;
 import java.util.Optional;
@@ -51,7 +51,7 @@ public interface IEntityContext {
    }
 
    @Nullable
-   LivingEntityInventory inventory();
+   BotHands inventory();
 
    @Nullable
    LivingEntityHungerManager hungerManager();

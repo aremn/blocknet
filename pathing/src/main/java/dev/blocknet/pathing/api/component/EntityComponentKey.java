@@ -58,4 +58,11 @@ public class EntityComponentKey<C> {
          return Optional.empty();
       }
    }
+
+   /** Forgets the entity's component, for example when a bot leaves the world. */
+   public final void remove(Object object) {
+      if (object instanceof LivingEntity provider) {
+         this.storage.remove(provider.getUUID());
+      }
+   }
 }

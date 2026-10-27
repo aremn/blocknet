@@ -20,8 +20,7 @@ package dev.blocknet.pathing.pathing.movement;
 import dev.blocknet.pathing.Baritone;
 import dev.blocknet.pathing.api.IBaritone;
 import dev.blocknet.pathing.api.Settings;
-import dev.blocknet.pathing.api.entity.IInventoryProvider;
-import dev.blocknet.pathing.api.entity.LivingEntityInventory;
+import dev.blocknet.pathing.api.entity.BotHands;
 import dev.blocknet.pathing.api.pathing.movement.ActionCosts;
 import dev.blocknet.pathing.api.pathing.movement.MovementStatus;
 import dev.blocknet.pathing.api.utils.BetterBlockPos;
@@ -366,15 +365,15 @@ public interface MovementHelper extends ActionCosts {
 
    static void switchToBestToolFor(IEntityContext ctx, BlockState b) {
       LivingEntity entity = ctx.entity();
-      if (entity instanceof IInventoryProvider) {
+      if (BotHands.of(entity) != null) {
          switchToBestToolFor(ctx, b, new ToolSet(entity), ctx.baritone().settings().preferSilkTouch.get());
       }
    }
 
    static void switchToBestToolFor(IEntityContext ctx, BlockState b, ToolSet ts, boolean preferSilkTouch) {
-      LivingEntityInventory inventory = ctx.inventory();
+      BotHands inventory = ctx.inventory();
       if (inventory != null && !ctx.baritone().settings().disableAutoTool.get() && !ctx.baritone().settings().assumeExternalAutoTool.get()) {
-         inventory.selectedSlot = ts.getBestSlot(b.getBlock(), preferSilkTouch);
+         inventory.selectSlot(ts.getBestSlot(b.getBlock(), preferSilkTouch));
       }
    }
 

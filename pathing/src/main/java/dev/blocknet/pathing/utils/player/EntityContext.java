@@ -20,9 +20,8 @@ package dev.blocknet.pathing.utils.player;
 import dev.blocknet.pathing.api.BaritoneAPI;
 import dev.blocknet.pathing.api.cache.IWorldData;
 import dev.blocknet.pathing.api.entity.IHungerManagerProvider;
-import dev.blocknet.pathing.api.entity.IInventoryProvider;
+import dev.blocknet.pathing.api.entity.BotHands;
 import dev.blocknet.pathing.api.entity.LivingEntityHungerManager;
-import dev.blocknet.pathing.api.entity.LivingEntityInventory;
 import dev.blocknet.pathing.api.pathing.calc.Avoidance;
 import dev.blocknet.pathing.api.utils.BetterBlockPos;
 import dev.blocknet.pathing.api.utils.IEntityContext;
@@ -63,8 +62,8 @@ public class EntityContext implements IEntityContext {
 
    @Nullable
    @Override
-   public LivingEntityInventory inventory() {
-      return this.entity instanceof IInventoryProvider ? ((IInventoryProvider)this.entity).getLivingInventory() : null;
+   public BotHands inventory() {
+      return BotHands.of(this.entity);
    }
 
    @Nullable
@@ -105,7 +104,7 @@ public class EntityContext implements IEntityContext {
       BetterBlockPos feet = new BetterBlockPos(x, this.entity().getY() + 0.1251, z);
       ServerLevel world = this.world();
       if (world != null) {
-         LevelChunk chunk = world.getChunkSource().getChunkNow(Mth.floor(x) >> 4, Mth.floor(z) >> 4);
+         LevelChunk chunk = dev.blocknet.pathing.utils.LoadedChunks.get(world.getChunkSource(), Mth.floor(x) >> 4, Mth.floor(z) >> 4);
          if (chunk != null && chunk.getBlockState(feet).getBlock() instanceof SlabBlock) {
             return feet.up();
          }

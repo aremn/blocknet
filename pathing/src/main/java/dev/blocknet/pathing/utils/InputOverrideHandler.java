@@ -68,7 +68,9 @@ public final class InputOverrideHandler extends Behavior implements IInputOverri
 
    @Override
    public final void onTickServer() {
-      if (this.needsUpdate) {
+      // Blocknet: re-apply every tick, not only on change. A player's movement inputs decay each
+      // tick, and block breaking only progresses while the break helper ticks.
+      {
          if (this.isInputForcedDown(Input.CLICK_LEFT)) {
             this.setInputForceState(Input.CLICK_RIGHT, false);
          }

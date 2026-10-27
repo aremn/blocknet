@@ -20,8 +20,7 @@ package dev.blocknet.pathing.pathing.movement;
 import dev.blocknet.pathing.Pathing;
 import dev.blocknet.pathing.Baritone;
 import dev.blocknet.pathing.api.IBaritone;
-import dev.blocknet.pathing.api.entity.IInventoryProvider;
-import dev.blocknet.pathing.api.entity.LivingEntityInventory;
+import dev.blocknet.pathing.api.entity.BotHands;
 import dev.blocknet.pathing.behavior.InventoryBehavior;
 import dev.blocknet.pathing.cache.WorldData;
 import dev.blocknet.pathing.utils.BlockStateInterface;
@@ -85,7 +84,7 @@ public class CalculationContext {
    public final int width;
    public final int requiredSideSpace;
    public final int height;
-   private final IInventoryProvider player;
+   private final BotHands player;
    private final MutableBlockPos blockPos;
    /** Dimension id ({@code minecraft:overworld}) of this context's world; resolved once (per-path constant). */
    private final String protectionDimId;
@@ -103,7 +102,7 @@ public class CalculationContext {
       this.safeForThreadedUse = forUseOnAnotherThread;
       this.baritone = baritone;
       LivingEntity entity = baritone.getEntityContext().entity();
-      this.player = entity instanceof IInventoryProvider ? (IInventoryProvider)entity : null;
+      this.player = BotHands.of(entity);
       this.world = baritone.getEntityContext().world();
       this.protectionDimId = this.world.dimension().location().toString();
       this.worldData = (WorldData)baritone.getWorldProvider().getCurrentWorld();
@@ -112,7 +111,7 @@ public class CalculationContext {
       this.hasThrowaway = baritone.settings().allowPlace.get() && ((Baritone)baritone).getInventoryBehavior().hasGenericThrowaway();
       this.hasWaterBucket = this.player != null
          && baritone.settings().allowWaterBucketFall.get()
-         && LivingEntityInventory.isValidHotbarIndex(InventoryBehavior.getSlotWithStack(this.player.getLivingInventory(), Pathing.WATER_BUCKETS))
+         && BotHands.isValidHotbarIndex(InventoryBehavior.getSlotWithStack(this.player, Pathing.WATER_BUCKETS))
          && !this.world.dimensionType().ultraWarm();
       this.canSprint = this.player != null && baritone.settings().allowSprint.get();
       this.placeBlockCost = baritone.settings().blockPlacementPenalty.get();

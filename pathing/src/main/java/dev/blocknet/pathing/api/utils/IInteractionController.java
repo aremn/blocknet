@@ -18,7 +18,8 @@
 package dev.blocknet.pathing.api.utils;
 
 import dev.blocknet.pathing.api.component.EntityComponentKey;
-import dev.blocknet.pathing.utils.player.EntityInteractionController;
+import dev.blocknet.pathing.utils.player.PlayerInteractionController;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.world.InteractionHand;
@@ -29,7 +30,12 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.BlockHitResult;
 
 public interface IInteractionController {
-   EntityComponentKey<IInteractionController> KEY = new EntityComponentKey<>(EntityInteractionController::new);
+   EntityComponentKey<IInteractionController> KEY = new EntityComponentKey<>(entity -> {
+      if (entity instanceof ServerPlayer player) {
+         return new PlayerInteractionController(player);
+      }
+      throw new IllegalArgumentException("Blocknet pathing drives server players only: " + entity);
+   });
 
    boolean hasBrokenBlock();
 

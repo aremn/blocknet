@@ -18,7 +18,7 @@
 package dev.blocknet.pathing.utils;
 
 import dev.blocknet.pathing.api.IBaritone;
-import dev.blocknet.pathing.api.entity.IInventoryProvider;
+import dev.blocknet.pathing.api.entity.BotHands;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.function.Function;
@@ -72,9 +72,9 @@ public class ToolSet {
 
    public int getBestSlot(Block b, boolean preferSilkTouch, boolean pathingCalculation) {
       if (b.defaultBlockState().getBlock().defaultDestroyTime() == 0.0F) {
-         return ((IInventoryProvider)this.player).getLivingInventory().selectedSlot;
+         return BotHands.of(this.player).selectedSlot();
       } else if (this.baritone.settings().disableAutoTool.get() && pathingCalculation) {
-         return ((IInventoryProvider)this.player).getLivingInventory().selectedSlot;
+         return BotHands.of(this.player).selectedSlot();
       } else {
          int best = 0;
          double highestSpeed = Double.NEGATIVE_INFINITY;
@@ -83,7 +83,7 @@ public class ToolSet {
          BlockState blockState = b.defaultBlockState();
 
          for (int i = 0; i < 9; i++) {
-            ItemStack itemStack = ((IInventoryProvider)this.player).getLivingInventory().getItem(i);
+            ItemStack itemStack = BotHands.of(this.player).getItem(i);
             if ((this.baritone.settings().useSwordToMine.get() || !(itemStack.getItem() instanceof SwordItem))
                && (!this.baritone.settings().itemSaver.get() || itemStack.getDamageValue() < itemStack.getMaxDamage() || itemStack.getMaxDamage() <= 1)) {
                double speed = calculateSpeedVsBlock(itemStack, blockState);
@@ -110,7 +110,7 @@ public class ToolSet {
    }
 
    private double getBestDestructionTime(Block b) {
-      ItemStack stack = ((IInventoryProvider)this.player).getLivingInventory().getItem(this.getBestSlot(b, false, true));
+      ItemStack stack = BotHands.of(this.player).getItem(this.getBestSlot(b, false, true));
       return calculateSpeedVsBlock(stack, b.defaultBlockState()) * this.avoidanceMultiplier(b);
    }
 

@@ -18,8 +18,7 @@
 package dev.blocknet.pathing.behavior;
 
 import dev.blocknet.pathing.Baritone;
-import dev.blocknet.pathing.api.entity.IInventoryProvider;
-import dev.blocknet.pathing.api.entity.LivingEntityInventory;
+import dev.blocknet.pathing.api.entity.BotHands;
 import dev.blocknet.pathing.utils.ToolSet;
 import java.util.ArrayList;
 import java.util.OptionalInt;
@@ -51,16 +50,16 @@ public final class InventoryBehavior extends Behavior {
    @Override
    public void onTickServer() {
       if (this.baritone.settings().allowInventory.get()) {
-         if (this.ctx.entity() instanceof IInventoryProvider player) {
-            if (this.firstValidThrowaway(player.getLivingInventory()) >= 9) {
-               this.swapWithHotBar(this.firstValidThrowaway(player.getLivingInventory()), 8, player.getLivingInventory());
+         if (BotHands.of(this.ctx.entity()) instanceof BotHands player) {
+            if (this.firstValidThrowaway(player) >= 9) {
+               this.swapWithHotBar(this.firstValidThrowaway(player), 8, player);
             }
 
             int pick = this.bestToolAgainst(Blocks.STONE, PickaxeItem.class);
             if (pick >= 9) {
                for (int i = 0; i < 9; i++) {
-                  if (player.getLivingInventory().getItem(i).getItem() != Items.BUCKET) {
-                     this.swapWithHotBar(pick, i, player.getLivingInventory());
+                  if (player.getItem(i).getItem() != Items.BUCKET) {
+                     this.swapWithHotBar(pick, i, player);
                      break;
                   }
                }
@@ -69,7 +68,7 @@ public final class InventoryBehavior extends Behavior {
       }
    }
 
-   public void attemptToPutOnHotbar(int inMainInvy, Predicate<Integer> disallowedHotbar, LivingEntityInventory inventory) {
+   public void attemptToPutOnHotbar(int inMainInvy, Predicate<Integer> disallowedHotbar, BotHands inventory) {
       OptionalInt destination = this.getTempHotbarSlot(disallowedHotbar);
       if (destination.isPresent()) {
          this.swapWithHotBar(inMainInvy, destination.getAsInt(), inventory);
@@ -77,14 +76,14 @@ public final class InventoryBehavior extends Behavior {
    }
 
    public OptionalInt getTempHotbarSlot(Predicate<Integer> disallowedHotbar) {
-      LivingEntityInventory inventory = this.ctx.inventory();
+      BotHands inventory = this.ctx.inventory();
       if (inventory == null) {
          return OptionalInt.empty();
       } else {
          ArrayList<Integer> candidates = new ArrayList<>();
 
          for (int i = 1; i < 8; i++) {
-            if (((ItemStack)inventory.main.get(i)).isEmpty() && !disallowedHotbar.test(i)) {
+            if (((ItemStack)inventory.main().get(i)).isEmpty() && !disallowedHotbar.test(i)) {
                candidates.add(i);
             }
          }
@@ -101,14 +100,14 @@ public final class InventoryBehavior extends Behavior {
       }
    }
 
-   private void swapWithHotBar(int inInventory, int inHotbar, LivingEntityInventory inventory) {
+   private void swapWithHotBar(int inInventory, int inHotbar, BotHands inventory) {
       ItemStack h = inventory.getItem(inHotbar);
       inventory.setItem(inHotbar, inventory.getItem(inInventory));
       inventory.setItem(inInventory, h);
    }
 
-   private int firstValidThrowaway(LivingEntityInventory inventory) {
-      NonNullList<ItemStack> invy = inventory.main;
+   private int firstValidThrowaway(BotHands inventory) {
+      NonNullList<ItemStack> invy = inventory.main();
 
       for (int i = 0; i < invy.size(); i++) {
          if (this.baritone.settings().acceptableThrowawayItems.get().contains(((ItemStack)invy.get(i)).getItem())) {
@@ -120,7 +119,7 @@ public final class InventoryBehavior extends Behavior {
    }
 
    private int bestToolAgainst(Block against, Class<? extends TieredItem> cla$$) {
-      NonNullList<ItemStack> invy = this.ctx.inventory().main;
+      NonNullList<ItemStack> invy = this.ctx.inventory().main();
       int bestInd = -1;
       double bestSpeed = -1.0;
 
@@ -186,28 +185,28 @@ public final class InventoryBehavior extends Behavior {
    }
 
    public boolean throwaway(boolean select, Predicate<? super ItemStack> desired) {
-      if (!(this.ctx.entity() instanceof IInventoryProvider p)) {
+      if (!(BotHands.of(this.ctx.entity()) instanceof BotHands p)) {
          return false;
       } else {
-         NonNullList var7 = p.getLivingInventory().main;
+         NonNullList var7 = p.main();
 
          for (int i = 0; i < 9; i++) {
             ItemStack item = (ItemStack)var7.get(i);
             if (desired.test(item)) {
                if (select) {
-                  p.getLivingInventory().selectedSlot = i;
+                  p.selectSlot(i);
                }
 
                return true;
             }
          }
 
-         if (desired.test((ItemStack)p.getLivingInventory().offHand.get(0))) {
+         if (desired.test((ItemStack)p.offHand().get(0))) {
             for (int ix = 0; ix < 9; ix++) {
                ItemStack item = (ItemStack)var7.get(ix);
                if (item.isEmpty() || item.getItem() instanceof PickaxeItem) {
                   if (select) {
-                     p.getLivingInventory().selectedSlot = ix;
+                     p.selectSlot(ix);
                   }
 
                   return true;
@@ -219,9 +218,9 @@ public final class InventoryBehavior extends Behavior {
       }
    }
 
-   public static int getSlotWithStack(LivingEntityInventory inv, TagKey<Item> tag) {
-      for (int i = 0; i < inv.main.size(); i++) {
-         if (!((ItemStack)inv.main.get(i)).isEmpty() && ((ItemStack)inv.main.get(i)).is(tag)) {
+   public static int getSlotWithStack(BotHands inv, TagKey<Item> tag) {
+      for (int i = 0; i < inv.main().size(); i++) {
+         if (!((ItemStack)inv.main().get(i)).isEmpty() && ((ItemStack)inv.main().get(i)).is(tag)) {
             return i;
          }
       }

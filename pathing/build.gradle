@@ -13,6 +13,9 @@ java.toolchain.languageVersion = JavaLanguageVersion.of(21)
 neoForge {
     version = project.neo_version
 
+    // The mod ships the access transformer; pathing compiles against the same widened classes.
+    accessTransformers = files('../mod/src/main/resources/META-INF/accesstransformer.cfg')
+
     parchment {
         mappingsVersion = project.parchment_mappings_version
         minecraftVersion = project.parchment_minecraft_version
@@ -22,4 +25,11 @@ neoForge {
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
     options.compilerArgs.addAll(['-Xmaxerrs', '5000'])
+}
+
+// Loaded into the game layer as a library (not a mod of its own) when nested in the Blocknet jar.
+tasks.named('jar', Jar).configure {
+    manifest {
+        attributes('FMLModType': 'GAMELIBRARY')
+    }
 }

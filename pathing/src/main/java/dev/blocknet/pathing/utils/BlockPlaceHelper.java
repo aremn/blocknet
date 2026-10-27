@@ -18,7 +18,7 @@
 package dev.blocknet.pathing.utils;
 
 import dev.blocknet.pathing.api.BaritoneAPI;
-import dev.blocknet.pathing.api.entity.IInventoryProvider;
+import dev.blocknet.pathing.api.entity.BotHands;
 import dev.blocknet.pathing.api.utils.IEntityContext;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
@@ -42,7 +42,7 @@ public class BlockPlaceHelper {
       } else {
          HitResult mouseOver = this.ctx.objectMouseOver();
          boolean isRowingBoat = this.ctx.entity().getVehicle() != null && this.ctx.entity().getVehicle() instanceof Boat;
-         if (rightClickRequested && this.ctx.entity() instanceof IInventoryProvider && !isRowingBoat && mouseOver != null && mouseOver.getType() == Type.BLOCK) {
+         if (rightClickRequested && this.ctx.inventory() != null && !isRowingBoat && mouseOver != null && mouseOver.getType() == Type.BLOCK) {
             this.rightClickTimer = BaritoneAPI.getGlobalSettings().rightClickSpeed.get();
             LivingEntity player = this.ctx.entity();
 

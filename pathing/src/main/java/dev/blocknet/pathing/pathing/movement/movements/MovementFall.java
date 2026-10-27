@@ -19,7 +19,7 @@ package dev.blocknet.pathing.pathing.movement.movements;
 
 import dev.blocknet.pathing.Pathing;
 import dev.blocknet.pathing.api.IBaritone;
-import dev.blocknet.pathing.api.entity.LivingEntityInventory;
+import dev.blocknet.pathing.api.entity.BotHands;
 import dev.blocknet.pathing.api.pathing.movement.MovementStatus;
 import dev.blocknet.pathing.api.utils.BetterBlockPos;
 import dev.blocknet.pathing.api.utils.Rotation;
@@ -88,15 +88,15 @@ public class MovementFall extends Movement {
          BlockState destState = this.ctx.world().getBlockState(this.dest);
          boolean isWater = destState.getFluidState().getType() instanceof WaterFluid;
          if (!isWater && this.willPlaceBucket() && !playerFeet.equals(this.dest)) {
-            LivingEntityInventory inventory = this.ctx.inventory();
+            BotHands inventory = this.ctx.inventory();
             if (inventory == null
-               || !LivingEntityInventory.isValidHotbarIndex(InventoryBehavior.getSlotWithStack(inventory, Pathing.WATER_BUCKETS))
+               || !BotHands.isValidHotbarIndex(InventoryBehavior.getSlotWithStack(inventory, Pathing.WATER_BUCKETS))
                || this.ctx.world().dimensionType().ultraWarm()) {
                return state.setStatus(MovementStatus.UNREACHABLE);
             }
 
             if (this.ctx.entity().getY() - this.dest.getY() < this.ctx.playerController().getBlockReachDistance() && !this.ctx.entity().onGround()) {
-               inventory.selectedSlot = InventoryBehavior.getSlotWithStack(inventory, Pathing.WATER_BUCKETS);
+               inventory.selectSlot(InventoryBehavior.getSlotWithStack(inventory, Pathing.WATER_BUCKETS));
                targetRotation = new Rotation(toDest.getYaw(), 90.0F);
                if (this.ctx.isLookingAt(this.dest) || this.ctx.isLookingAt(this.dest.down())) {
                   state.setInput(Input.CLICK_RIGHT, true);
@@ -116,9 +116,9 @@ public class MovementFall extends Movement {
             }
 
             state.setInput(Input.JUMP, true);
-            LivingEntityInventory inventoryx = this.ctx.inventory();
-            if (inventoryx != null && LivingEntityInventory.isValidHotbarIndex(InventoryBehavior.getSlotWithStack(inventoryx, Pathing.EMPTY_BUCKETS))) {
-               inventoryx.selectedSlot = InventoryBehavior.getSlotWithStack(inventoryx, Pathing.EMPTY_BUCKETS);
+            BotHands inventoryx = this.ctx.inventory();
+            if (inventoryx != null && BotHands.isValidHotbarIndex(InventoryBehavior.getSlotWithStack(inventoryx, Pathing.EMPTY_BUCKETS))) {
+               inventoryx.selectSlot(InventoryBehavior.getSlotWithStack(inventoryx, Pathing.EMPTY_BUCKETS));
                if (this.ctx.entity().getDeltaMovement().y >= 0.0) {
                   return state.setInput(Input.CLICK_RIGHT, true);
                }

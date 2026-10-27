@@ -50,7 +50,7 @@ public class BlockStateInterface {
    }
 
    public boolean worldContainsLoadedChunk(int blockX, int blockZ) {
-      return this.provider.getChunkNow(blockX >> 4, blockZ >> 4) != null;
+      return LoadedChunks.get(this.provider, blockX >> 4, blockZ >> 4) != null;
    }
 
    public static Block getBlock(IEntityContext ctx, BlockPos pos) {
@@ -73,7 +73,7 @@ public class BlockStateInterface {
          if (cached != null && cached.getPos().x == x >> 4 && cached.getPos().z == z >> 4) {
             return getFromChunk(this.world, cached, x, y, z);
          } else {
-            LevelChunk chunk = this.provider.getChunkNow(x >> 4, z >> 4);
+            LevelChunk chunk = LoadedChunks.get(this.provider, x >> 4, z >> 4);
             if (chunk != null && !chunk.isEmpty()) {
                this.prev = chunk;
                return getFromChunk(this.world, chunk, x, y, z);
@@ -89,7 +89,7 @@ public class BlockStateInterface {
       if (prevChunk != null && prevChunk.getPos().x == x >> 4 && prevChunk.getPos().z == z >> 4) {
          return true;
       } else {
-         prevChunk = this.provider.getChunkNow(x >> 4, z >> 4);
+         prevChunk = LoadedChunks.get(this.provider, x >> 4, z >> 4);
          if (prevChunk != null && !prevChunk.isEmpty()) {
             this.prev = prevChunk;
             return true;
