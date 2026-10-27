@@ -90,7 +90,16 @@ public final class BotGameTests {
         BlockPos stone = new BlockPos(4, 1, 4);
         helper.setBlock(stone, Blocks.STONE);
         BotPlayer bot = TestArena.spawnBot(helper, "BnPuncher", new Vec3(1.5, 1, 4.5));
-        bot.controller().mine(helper.absolutePos(stone), message -> {});
+        // The high-level mine task now rejects missing tools. Keep proving the underlying
+        // player code path's honest hand-breaking speed independently of that precondition.
+        bot.getInventory().clearContent();
+        var pos = helper.absolutePos(stone);
+        bot.gameMode.handleBlockBreakAction(pos,
+            net.minecraft.network.protocol.game.ServerboundPlayerActionPacket.Action.START_DESTROY_BLOCK,
+            net.minecraft.core.Direction.UP, helper.getLevel().getMaxBuildHeight(), 0);
+        helper.runAfterDelay(150, () -> bot.gameMode.handleBlockBreakAction(pos,
+            net.minecraft.network.protocol.game.ServerboundPlayerActionPacket.Action.STOP_DESTROY_BLOCK,
+            net.minecraft.core.Direction.UP, helper.getLevel().getMaxBuildHeight(), 1));
         helper.runAfterDelay(100, () -> helper.assertBlockPresent(Blocks.STONE, stone));
         helper.succeedWhen(() -> {
             helper.assertBlockPresent(Blocks.AIR, stone);

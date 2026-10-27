@@ -22,6 +22,7 @@ import dev.blocknet.pathing.api.Settings;
 import dev.blocknet.pathing.api.entity.BotHands;
 import dev.blocknet.pathing.utils.ToolSet;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.OptionalInt;
 import java.util.Random;
 import java.util.function.Predicate;
@@ -47,6 +48,12 @@ import net.minecraft.world.phys.Vec3;
 import net.neoforged.neoforge.common.Tags;
 
 public final class InventoryBehavior extends Behavior {
+   /** Shared policy for navigation and the body's building-block summary. */
+   public static final List<TagKey<Item>> THROWAWAY_TAGS = List.of(
+      Tags.Items.COBBLESTONES, Tags.Items.STONES, ItemTags.DIRT, ItemTags.PLANKS,
+      ItemTags.LOGS, Tags.Items.NETHERRACKS, Tags.Items.SANDSTONE_BLOCKS
+   );
+
    public InventoryBehavior(Baritone baritone) {
       super(baritone);
    }
@@ -155,9 +162,7 @@ public final class InventoryBehavior extends Behavior {
          return false;
       }
       return settings.acceptableThrowawayItems.get().contains(stack.getItem())
-         || stack.is(Tags.Items.COBBLESTONES) || stack.is(Tags.Items.STONES)
-         || stack.is(ItemTags.DIRT) || stack.is(ItemTags.PLANKS) || stack.is(ItemTags.LOGS)
-         || stack.is(Tags.Items.NETHERRACKS) || stack.is(Tags.Items.SANDSTONE_BLOCKS);
+         || THROWAWAY_TAGS.stream().anyMatch(stack::is);
    }
 
    public boolean selectThrowawayForLocation(boolean select, int x, int y, int z) {

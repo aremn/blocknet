@@ -53,6 +53,7 @@ grep -a -E "GAME TESTS COMPLETE|required tests (passed|failed)|failed at" build/
 |---|---|
 | `body/` | `BotPlayer` (ServerPlayer, runs its own physics in `tick()`), `BotConnection`, `BotPacketListener`, `BotManager` (spawn/despawn/nearest) |
 | `control/` | `BotController`: one task at a time (goto, mine, use), head turning, aiming, tool choice |
+| `state/` | `ItemDescriber`/`ToolFacts`: generic item facts and vanilla tool probes; `BodyState`/`BodyStateTracker`: on-demand compact sections, independent revisions, bounded inventory diff history (ADR-0006); no transport |
 | `command/` | `/blocknet` debug commands; the bot name is optional (nearest bot) |
 | `client/` | Optional client side: radial menu on the mouse wheel; only sends `/blocknet` commands |
 | `mixin/` | `PlayerListMixin` installs `BotPacketListener` during `placeNewPlayer` |

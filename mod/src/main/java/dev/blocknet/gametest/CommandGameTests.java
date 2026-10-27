@@ -59,7 +59,7 @@ public final class CommandGameTests {
         helper.succeed();
     }
 
-    private static CommandSourceStack commandSource(GameTestHelper helper, List<String> reports) {
+    static CommandSourceStack commandSource(GameTestHelper helper, List<String> reports) {
         CommandSource output = new CommandSource() {
             @Override public void sendSystemMessage(Component message) { reports.add(message.getString()); }
             @Override public boolean acceptsSuccess() { return true; }

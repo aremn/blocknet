@@ -1,6 +1,8 @@
 package dev.blocknet.control;
 
 import dev.blocknet.body.BotPlayer;
+import dev.blocknet.state.ItemDescriber;
+import dev.blocknet.state.ToolFacts;
 import dev.blocknet.pathing.api.IBaritone;
 import dev.blocknet.pathing.api.Settings;
 import dev.blocknet.pathing.behavior.InventoryBehavior;
@@ -108,9 +110,15 @@ public final class BotController {
     private int breakTicks;
     private int collectTicks;
     private int sequence;
+    private boolean miningToolAlmostBroken;
 
     public BotController(BotPlayer bot) {
         this.bot = bot;
+    }
+
+    /** The pathfinder owns movement only while this controller has a navigation leg. */
+    public boolean isNavigating() {
+        return pathGoal != null;
     }
 
     /** Paths to the exact feet block, trying more costly routes before settling for the closest spot. */
@@ -194,7 +202,28 @@ public final class BotController {
 
     /** Walks into reach of the block, breaks it and picks up the drops. */
     public void mine(BlockPos pos, Consumer<String> reporter) {
+        stop();
+        BlockState state = bot.serverLevel().getBlockState(pos);
+        if (state.requiresCorrectToolForDrops() && bestCorrectTool(state) < 0) {
+            reporter.accept("blocked: need a tool for " + BuiltInRegistries.BLOCK.getKey(state.getBlock())
+                + " (" + ToolFacts.requirement(state) + ")");
+            return;
+        }
         start(Task.MINE_APPROACH, pos, reporter);
+        int tool = bestCorrectTool(state);
+        miningToolAlmostBroken = tool >= 0 && ItemDescriber.wear(bot.getInventory().getItem(tool)).equals("almost broken");
+    }
+
+    private int bestCorrectTool(BlockState state) {
+        int selected = bot.getInventory().selected;
+        ItemStack held = bot.getInventory().getItem(selected);
+        int best = !held.isEmpty() && held.isCorrectToolForDrops(state) ? selected : -1;
+        for (int slot = 0; slot < bot.getInventory().getContainerSize(); slot++) {
+            ItemStack stack = bot.getInventory().getItem(slot);
+            if (!stack.isEmpty() && stack.isCorrectToolForDrops(state)
+                && (best < 0 || stack.getDestroySpeed(state) > bot.getInventory().getItem(best).getDestroySpeed(state))) best = slot;
+        }
+        return best;
     }
 
     /** Walks into reach of the block and right-clicks it with the held item. */
@@ -214,6 +243,7 @@ public final class BotController {
         followTarget = null;
         followLegPosition = null;
         followRetryTicks = 0;
+        miningToolAlmostBroken = false;
         if (wasFollowing) {
             pathing().settings().allowSprint.set(followAllowSprint);
             reporter.accept("stopped");
@@ -280,6 +310,7 @@ public final class BotController {
         strategy = Strategy.NORMAL;
         closestRange = 1;
         navigationTicks = 0;
+        miningToolAlmostBroken = false;
     }
 
     private IBaritone pathing() {
@@ -689,14 +720,23 @@ public final class BotController {
         Inventory inventory = bot.getInventory();
         int best = inventory.selected;
         float bestScore = toolScore(inventory.getItem(best), state);
-        for (int slot = 0; slot < Inventory.getSelectionSize(); slot++) {
+        for (int slot = 0; slot < inventory.getContainerSize(); slot++) {
             float score = toolScore(inventory.getItem(slot), state);
             if (score > bestScore) {
                 best = slot;
                 bestScore = score;
             }
         }
-        inventory.selected = best;
+        if (best >= Inventory.getSelectionSize()) {
+            ItemStack held = inventory.getItem(inventory.selected);
+            inventory.setItem(inventory.selected, inventory.getItem(best));
+            inventory.setItem(best, held);
+        } else {
+            inventory.selected = best;
+        }
+        if (resumeTarget == null && (task == Task.MINE_APPROACH || task == Task.MINE_BREAK)) {
+            miningToolAlmostBroken |= ItemDescriber.wear(bot.getMainHandItem()).equals("almost broken");
+        }
     }
 
     private static float toolScore(ItemStack stack, BlockState state) {
@@ -713,6 +753,8 @@ public final class BotController {
     }
 
     private void finish(String message) {
+        if (miningToolAlmostBroken) message += " (tool almost broken)";
+        miningToolAlmostBroken = false;
         if (task == Task.FOLLOW) {
             pathing().settings().allowSprint.set(followAllowSprint);
         }

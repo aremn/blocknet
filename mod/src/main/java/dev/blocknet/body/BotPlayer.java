@@ -2,6 +2,7 @@ package dev.blocknet.body;
 
 import com.mojang.authlib.GameProfile;
 import dev.blocknet.control.BotController;
+import dev.blocknet.state.BodyStateTracker;
 import dev.blocknet.pathing.api.IBaritone;
 import net.minecraft.network.DisconnectionDetails;
 import net.minecraft.network.chat.Component;
@@ -20,6 +21,11 @@ import net.minecraft.world.food.FoodData;
  */
 public final class BotPlayer extends ServerPlayer {
     private final BotController controller = new BotController(this);
+    private final BodyStateTracker bodyState = new BodyStateTracker(this);
+
+    public BodyStateTracker bodyState() {
+        return bodyState;
+    }
 
     public BotPlayer(MinecraftServer server, ServerLevel level, GameProfile profile) {
         super(server, level, profile, ClientInformation.createDefault());
@@ -39,7 +45,17 @@ public final class BotPlayer extends ServerPlayer {
         // The pathfinder, when it has work, overrides this tick's inputs and rotation.
         IBaritone pathing = IBaritone.KEY.getNullable(this);
         if (pathing != null) {
+            float forward = zza;
+            float sideways = xxa;
+            boolean jump = jumping;
             pathing.serverTick();
+            // Its idle input handler clears keys too. Preserve controller movement (e.g.
+            // collecting a freshly mined drop) when no navigation leg owns the feet.
+            if (!controller.isNavigating()) {
+                zza = forward;
+                xxa = sideways;
+                setJumping(jump);
+            }
         }
         super.tick();
         doTick();

@@ -10,6 +10,7 @@ import com.mojang.brigadier.exceptions.SimpleCommandExceptionType;
 import com.mojang.brigadier.suggestion.SuggestionProvider;
 import dev.blocknet.body.BotManager;
 import dev.blocknet.body.BotPlayer;
+import dev.blocknet.state.BodyState;
 import java.util.function.Consumer;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
@@ -26,6 +27,9 @@ import net.neoforged.neoforge.event.RegisterCommandsEvent;
  * /blocknet spawn &lt;name&gt;
  * /blocknet despawn &lt;name&gt;
  * /blocknet list
+ * /blocknet status [name]
+ * /blocknet inv [name]
+ * /blocknet changes [name]
  * /blocknet goto [name] &lt;pos&gt;
  * /blocknet come [name]
  * /blocknet follow [name]
@@ -65,6 +69,26 @@ public final class BlocknetCommands {
                     .executes(BlocknetCommands::despawn)))
             .then(Commands.literal("list")
                 .executes(BlocknetCommands::list))
+            .then(withBot("status", false, (context, bot) -> {
+                var snapshot = bot.bodyState().snapshot();
+                sendSection(context.getSource(), "body", snapshot.sections().get("body"));
+                sendSection(context.getSource(), "task", snapshot.sections().get("task"));
+                return 1;
+            }))
+            .then(withBot("inv", false, (context, bot) -> {
+                sendSection(context.getSource(), "inventory", bot.bodyState().snapshot().sections().get("inventory"));
+                return 1;
+            }))
+            .then(withBot("changes", false, (context, bot) -> {
+                var delta = bot.bodyState().changes();
+                if (delta.sections().isEmpty()) {
+                    context.getSource().sendSuccess(() -> Component.literal("no changes"), false);
+                } else {
+                    delta.sections().forEach((name, section) -> sendSection(context.getSource(), name, section));
+                    delta.inventoryDiff().forEach(line -> context.getSource().sendSuccess(() -> Component.literal(line), false));
+                }
+                return 1;
+            }))
             .then(withBot("goto", true, (context, bot) -> {
                 bot.controller().goTo(BlockPosArgument.getLoadedBlockPos(context, "pos"), reporter(context.getSource(), bot));
                 return 1;
@@ -99,6 +123,10 @@ public final class BlocknetCommands {
                 bot.controller().stop();
                 return 1;
             })));
+    }
+
+    private static void sendSection(CommandSourceStack source, String name, BodyState.Section section) {
+        source.sendSuccess(() -> Component.literal(name + " r" + section.revision() + ": " + section.text()), false);
     }
 
     /** A command aimed at one bot, run on behalf of a command source. */
