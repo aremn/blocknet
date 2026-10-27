@@ -26,8 +26,8 @@ public final class BotGameTests {
 
     @GameTest(template = "arena", timeoutTicks = 200)
     public static void joinsAsRealPlayer(GameTestHelper helper) {
-        floor(helper);
-        BotPlayer bot = spawn(helper, "BnJoiner", new Vec3(4.5, 1, 4.5));
+        TestArena.floor(helper);
+        BotPlayer bot = TestArena.spawnBot(helper, "BnJoiner", new Vec3(4.5, 1, 4.5));
         helper.succeedWhen(() -> {
             helper.assertTrue(helper.getLevel().getServer().getPlayerList().getPlayer(bot.getUUID()) == bot, "bot is in the player list");
             helper.assertTrue(bot.connection instanceof BotPacketListener, "bot uses its own packet listener");
@@ -38,8 +38,8 @@ public final class BotGameTests {
 
     @GameTest(template = "arena", timeoutTicks = 200)
     public static void walksToTarget(GameTestHelper helper) {
-        floor(helper);
-        BotPlayer bot = spawn(helper, "BnWalker", new Vec3(1.5, 1, 1.5));
+        TestArena.floor(helper);
+        BotPlayer bot = TestArena.spawnBot(helper, "BnWalker", new Vec3(1.5, 1, 1.5));
         BlockPos goal = helper.absolutePos(new BlockPos(7, 1, 7));
         bot.controller().goTo(goal, message -> {});
         helper.succeedWhen(() -> {
@@ -50,10 +50,10 @@ public final class BotGameTests {
 
     @GameTest(template = "arena", timeoutTicks = 200)
     public static void minesDirtByHandAndPicksItUp(GameTestHelper helper) {
-        floor(helper);
+        TestArena.floor(helper);
         BlockPos dirt = new BlockPos(4, 1, 4);
         helper.setBlock(dirt, Blocks.DIRT);
-        BotPlayer bot = spawn(helper, "BnDigger", new Vec3(1.5, 1, 4.5));
+        BotPlayer bot = TestArena.spawnBot(helper, "BnDigger", new Vec3(1.5, 1, 4.5));
         bot.controller().mine(helper.absolutePos(dirt), message -> {});
         helper.succeedWhen(() -> {
             helper.assertBlockPresent(Blocks.AIR, dirt);
@@ -66,10 +66,10 @@ public final class BotGameTests {
 
     @GameTest(template = "arena", timeoutTicks = 200)
     public static void picksPickaxeForStone(GameTestHelper helper) {
-        floor(helper);
+        TestArena.floor(helper);
         BlockPos stone = new BlockPos(4, 1, 4);
         helper.setBlock(stone, Blocks.STONE);
-        BotPlayer bot = spawn(helper, "BnMiner", new Vec3(1.5, 1, 4.5));
+        BotPlayer bot = TestArena.spawnBot(helper, "BnMiner", new Vec3(1.5, 1, 4.5));
         bot.getInventory().setItem(5, new ItemStack(Items.WOODEN_PICKAXE));
         bot.controller().mine(helper.absolutePos(stone), message -> {});
         helper.succeedWhen(() -> {
@@ -84,10 +84,10 @@ public final class BotGameTests {
     /** Honest rules: stone by hand takes ~7.5 s and drops nothing. */
     @GameTest(template = "arena", timeoutTicks = 400)
     public static void stoneByHandIsSlowAndDropsNothing(GameTestHelper helper) {
-        floor(helper);
+        TestArena.floor(helper);
         BlockPos stone = new BlockPos(4, 1, 4);
         helper.setBlock(stone, Blocks.STONE);
-        BotPlayer bot = spawn(helper, "BnPuncher", new Vec3(1.5, 1, 4.5));
+        BotPlayer bot = TestArena.spawnBot(helper, "BnPuncher", new Vec3(1.5, 1, 4.5));
         bot.controller().mine(helper.absolutePos(stone), message -> {});
         helper.runAfterDelay(100, () -> helper.assertBlockPresent(Blocks.STONE, stone));
         helper.succeedWhen(() -> {
@@ -97,17 +97,5 @@ public final class BotGameTests {
             helper.assertTrue(helper.getTick() >= 150, "stone broke too fast: tick " + helper.getTick());
             BotManager.despawn("BnPuncher");
         });
-    }
-
-    private static void floor(GameTestHelper helper) {
-        for (int x = 0; x < 9; x++) {
-            for (int z = 0; z < 9; z++) {
-                helper.setBlock(new BlockPos(x, 0, z), Blocks.STONE);
-            }
-        }
-    }
-
-    private static BotPlayer spawn(GameTestHelper helper, String name, Vec3 relativePos) {
-        return BotManager.spawn(helper.getLevel().getServer(), name, helper.getLevel(), helper.absoluteVec(relativePos), 0.0F);
     }
 }

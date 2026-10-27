@@ -18,7 +18,18 @@ sourceSets.main.resources {
 }
 
 repositories {
-    // Add here additional repositories if required by some of the dependencies below.
+    // Modrinth Maven: other mods for local runs and tests, as maven.modrinth:<slug>:<version>.
+    exclusiveContent {
+        forRepository {
+            maven {
+                name = 'Modrinth'
+                url = 'https://api.modrinth.com/maven'
+            }
+        }
+        filter {
+            includeGroup 'maven.modrinth'
+        }
+    }
 }
 
 base {
@@ -107,6 +118,11 @@ configurations {
 }
 
 dependencies {
+    // Test fixture mods: real modded blocks and machines to check the mod-agnostic body against,
+    // in dev runs and GameTests only. localRuntime keeps them out of the published mod.
+    localRuntime "maven.modrinth:ae2:${ae2_version}"
+    localRuntime "maven.modrinth:guideme:${guideme_version}"
+
     // Example optional mod dependency with JEI
     // The JEI API is declared for compile time use, while the full JEI artifact is used at runtime
     // compileOnly "mezz.jei:jei-${mc_version}-common-api:${jei_version}"
