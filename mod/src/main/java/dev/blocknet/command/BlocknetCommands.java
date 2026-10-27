@@ -49,6 +49,7 @@ import net.neoforged.neoforge.event.RegisterCommandsEvent;
  * /blocknet follow [name]
  * /blocknet mine [name] &lt;pos&gt;
  * /blocknet use [name] &lt;pos&gt;
+ * /blocknet look [name]
  * /blocknet close [name]
  * /blocknet stop [name]
  * </pre>
@@ -89,6 +90,10 @@ public final class BlocknetCommands {
             .then(containerCommand("deposit"))
             .then(containerCommand("withdraw"))
             .then(memoryCommand())
+            .then(withBot("look", false, (context, bot) -> {
+                bot.controller().look(reporter(context.getSource(), bot));
+                return 1;
+            }))
             .then(withBot("look-in", true, (context, bot) -> {
                 bot.controller().lookIn(BlockPosArgument.getLoadedBlockPos(context, "pos"), reporter(context.getSource(), bot));
                 return 1;
@@ -212,7 +217,7 @@ public final class BlocknetCommands {
         var result = new CraftingCalculation(bot.serverLevel(), dev.blocknet.crafting.PlannerCatalogs.get(bot.serverLevel()),
             CraftingCalculation.Limits.DEFAULT, process -> CraftStations.EXECUTABLE.contains(process.station()))
             .plan(ItemArgument.getItem(context, "item").createItemStack(1, false), count, inventory,
-                CraftStations.visible(bot).keySet(), bot.containerMemory().sources(bot), mode);
+                CraftStations.remembered(bot).keySet(), bot.containerMemory().sources(bot), mode);
         for (String line : result.text().split("\\n"))
             context.getSource().sendSuccess(() -> Component.literal(line), false);
         return 1;

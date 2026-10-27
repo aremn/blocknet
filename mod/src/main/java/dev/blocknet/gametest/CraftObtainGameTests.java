@@ -100,12 +100,13 @@ public final class CraftObtainGameTests {
             new ItemStack(Items.RAW_IRON, 3), new ItemStack(Items.COAL),
             new ItemStack(Items.COBBLESTONE, 8), new ItemStack(Items.IRON_PICKAXE));
         helper.setBlock(TABLE, Blocks.CRAFTING_TABLE);
+        TestArena.see(helper, bot, TABLE);
         List<String> reports = new ArrayList<>();
         var source = source(helper, bot, reports);
         helper.getLevel().getServer().getCommands().performPrefixedCommand(source,
             "blocknet craft BnCraftNew iron_ingot 3");
         helper.succeedWhen(() -> {
-            report(helper, bot, reports, "[BnCraftNew] crafted 3 iron_ingot");
+            report(helper, bot, reports, "[BnCraftNew] crafted 3 iron_ingot (placed own furnace)");
             helper.assertTrue(helper.getTick() >= 600, "three real smelts");
             helper.assertTrue(bot.getInventory().countItem(Items.IRON_INGOT) == 8, "five old plus three new");
             helper.assertTrue(bot.getInventory().countItem(Items.RAW_IRON) == 0
@@ -125,12 +126,12 @@ public final class CraftObtainGameTests {
             .thenExecute(() -> {
                 var plan = new CraftingCalculation(bot.serverLevel(), PlannerCatalogs.get(bot.serverLevel()))
                     .plan(new ItemStack(Items.IRON_INGOT), 3, bot.getInventory().items,
-                        CraftStations.visible(bot).keySet(), bot.containerMemory().sources(bot));
+                        CraftStations.remembered(bot).keySet(), bot.containerMemory().sources(bot));
                 helper.assertTrue(plan.status() == CraftPlan.Status.OK && plan.withdrawals().isEmpty(), plan.text());
                 reports.clear();
                 bot.controller().craft(new ItemStack(Items.IRON_INGOT), 3, reports::add);
             }).thenWaitUntil(() -> {
-                report(helper, bot, reports, "crafted 3 iron_ingot");
+                report(helper, bot, reports, "crafted 3 iron_ingot (placed own furnace)");
                 helper.assertTrue(chest.countItem(Items.IRON_INGOT) == 5, "target chest untouched");
                 helper.assertTrue(bot.getInventory().countItem(Items.IRON_INGOT) == 3, "new ingots");
                 helper.assertTrue(bot.getInventory().countItem(Items.RAW_IRON) == 0, "actually smelted");
@@ -252,7 +253,7 @@ public final class CraftObtainGameTests {
                 reports.clear();
                 bot.controller().get(new ItemStack(Items.IRON_INGOT), 5, reports::add);
             }).thenWaitUntil(() -> {
-                report(helper, bot, reports, "got 5 iron_ingot: had 2, took 2 from " + chestDescription(helper) + ", crafted 1");
+                report(helper, bot, reports, "got 5 iron_ingot: had 2, took 2 from " + chestDescription(helper) + ", crafted 1 (placed own furnace)");
                 helper.assertTrue(chest.countItem(Items.IRON_INGOT) == 0
                     && bot.getInventory().countItem(Items.IRON_INGOT) == 5
                     && bot.getInventory().countItem(Items.RAW_IRON) == 0, "all three sources used");
@@ -281,7 +282,7 @@ public final class CraftObtainGameTests {
                 reports.clear();
                 bot.controller().get(new ItemStack(Items.IRON_INGOT), 5, reports::add);
             }).thenWaitUntil(() -> {
-                report(helper, bot, reports, "got 5 iron_ingot: had 2, took 2 from " + chestDescription(helper) + ", crafted 1");
+                report(helper, bot, reports, "got 5 iron_ingot: had 2, took 2 from " + chestDescription(helper) + ", crafted 1 (placed own furnace)");
                 helper.assertTrue(chest.countItem(Items.IRON_INGOT) == 0
                     && bot.getInventory().countItem(Items.IRON_INGOT) == 5
                     && bot.getInventory().countItem(Items.RAW_IRON) == 0,

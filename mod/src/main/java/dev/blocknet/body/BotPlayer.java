@@ -3,6 +3,7 @@ package dev.blocknet.body;
 import com.mojang.authlib.GameProfile;
 import dev.blocknet.control.BotController;
 import dev.blocknet.memory.ContainerMemory;
+import dev.blocknet.memory.WorldMemory;
 import dev.blocknet.state.BodyStateTracker;
 import dev.blocknet.pathing.api.IBaritone;
 import net.minecraft.network.DisconnectionDetails;
@@ -34,6 +35,10 @@ public final class BotPlayer extends ServerPlayer {
 
     public ContainerMemory containerMemory() {
         return ContainerMemory.forBot(this);
+    }
+
+    public WorldMemory worldMemory() {
+        return WorldMemory.forBot(this);
     }
 
     public BotController controller() {

@@ -3,6 +3,7 @@ package dev.blocknet.control;
 import dev.blocknet.body.BotPlayer;
 import dev.blocknet.crafting.CraftPlan;
 import dev.blocknet.memory.ContainerMemory;
+import dev.blocknet.memory.WorldMemory;
 import dev.blocknet.state.ItemDescriber;
 import dev.blocknet.state.ToolFacts;
 import dev.blocknet.pathing.api.IBaritone;
@@ -62,7 +63,11 @@ public final class BotController {
     /** Give up on a path that has not reached its goal after this long (5 minutes). */
     private static final int MAX_PATH_TICKS = 20 * 60 * 5;
 
-    private enum Task { IDLE, GOTO, FOLLOW, MINE_APPROACH, MINE_BREAK, COLLECT, USE, CRAFT, CONTAINER }
+    private enum Task { IDLE, GOTO, FOLLOW, MINE_APPROACH, MINE_BREAK, COLLECT, USE, CRAFT, CONTAINER, LOOK }
+
+    private int lookTicks;
+    private float lookStartYaw;
+    private long lookStartTick;
 
     @Nullable
     private CraftExecutor crafting;
@@ -247,6 +252,31 @@ public final class BotController {
         container(pos, ContainerTask.Action.INSPECT, stack -> true, 0, reporter);
     }
 
+    /** A deliberate player-like sweep; other tools never start this task themselves. */
+    public void look(Consumer<String> reporter) {
+        start(Task.LOOK, bot.blockPosition(), reporter);
+        lookTicks = 0;
+        lookStartYaw = bot.getYRot();
+        lookStartTick = bot.getServer().overworld().getGameTime();
+    }
+
+    private void tickLook() {
+        float yaw = lookStartYaw + ++lookTicks * 18;
+        float pitch = 20 + 15 * (float) Math.sin(lookTicks * Math.PI / 10);
+        turnTowards(yaw, pitch);
+        Vec3 eye = bot.getEyePosition();
+        for (int horizontal = -12; horizontal <= 12; horizontal += 2) {
+            for (int vertical = -45; vertical <= 55; vertical += 3) {
+                Vec3 direction = Vec3.directionFromRotation(Mth.clamp(bot.getXRot() + vertical, -89, 89),
+                    bot.getYRot() + horizontal);
+                WorldMemory.clip(bot, eye.add(direction.scale(16)), ClipContext.Block.VISUAL);
+            }
+        }
+        if (lookTicks == 20) {
+            finish(bot.worldMemory().looked(bot, lookStartTick));
+        }
+    }
+
     public void deposit(BlockPos pos, String filter, int count, Consumer<String> reporter) {
         transfer(pos, ContainerTask.Action.DEPOSIT, filter, count, reporter);
     }
@@ -293,7 +323,11 @@ public final class BotController {
 
     boolean craftAim(Vec3 point) {
         lookAt(point);
-        return isLookingAt(point);
+        boolean facing = isLookingAt(point);
+        if (facing) {
+            WorldMemory.clip(bot, point, ClipContext.Block.VISUAL);
+        }
+        return facing;
     }
 
     boolean craftWalk(Vec3 point) {
@@ -362,6 +396,7 @@ public final class BotController {
             case USE -> "going to use block at " + where;
             case CRAFT -> "crafting";
             case CONTAINER -> "using container at " + where;
+            case LOOK -> "looking around";
             case IDLE -> "idle";
         };
     }
@@ -409,6 +444,7 @@ public final class BotController {
             case USE -> tickUse(target);
             case CRAFT -> crafting.tick();
             case CONTAINER -> containerTask.tick();
+            case LOOK -> tickLook();
             case IDLE -> {}
         }
     }
@@ -496,8 +532,7 @@ public final class BotController {
             fail(followName + " is gone");
             return;
         }
-        boolean visible = bot.level().clip(new ClipContext(bot.getEyePosition(), leader.getEyePosition(),
-            ClipContext.Block.VISUAL, ClipContext.Fluid.NONE, bot)).getType() == HitResult.Type.MISS;
+        boolean visible = WorldMemory.clip(bot, leader.getEyePosition(), ClipContext.Block.VISUAL).getType() == HitResult.Type.MISS;
         if (visible) {
             lastSeenFollowPosition = leader.position();
             lastSeenFollowOnGround = leader.onGround();
@@ -746,7 +781,7 @@ public final class BotController {
         }
 
         Vec3 eye = bot.getEyePosition();
-        BlockPos blocker = level.clip(new ClipContext(eye, center, ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, bot)).getBlockPos();
+        BlockPos blocker = WorldMemory.clip(bot, center, ClipContext.Block.OUTLINE).getBlockPos();
         BlockState blockerState = level.getBlockState(blocker);
         if (resumeTarget == null && isClearable(blockerState) && clearedObstacles < MAX_CLEARED_OBSTACLES
             && bot.canInteractWithBlock(blocker, -0.5)) {
@@ -779,7 +814,7 @@ public final class BotController {
             }
         }
         for (Vec3 point : points) {
-            BlockHitResult hit = level.clip(new ClipContext(eye, point, ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, bot));
+            BlockHitResult hit = WorldMemory.clip(bot, point, ClipContext.Block.OUTLINE);
             if (hit.getType() == HitResult.Type.BLOCK && hit.getBlockPos().equals(pos)) {
                 return hit;
             }

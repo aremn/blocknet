@@ -239,6 +239,7 @@ public final class ContainerGameTests {
         ChestBlockEntity chest = chest(helper);
         chest.setItem(0, new ItemStack(Items.IRON_INGOT, 3));
         helper.setBlock(new BlockPos(3, 1, 4), Blocks.CRAFTING_TABLE);
+        TestArena.see(helper, bot, new BlockPos(3, 1, 4));
         bot.getInventory().add(new ItemStack(Items.STICK, 2));
         List<String> reports = new ArrayList<>();
         bot.controller().lookIn(helper.absolutePos(CHEST), reports::add);
@@ -246,7 +247,7 @@ public final class ContainerGameTests {
             .thenExecute(() -> {
                 var plan = new CraftingCalculation(bot.serverLevel(), dev.blocknet.crafting.PlannerCatalogs.get(bot.serverLevel()))
                     .plan(new ItemStack(Items.IRON_PICKAXE), 1, bot.getInventory().items,
-                        CraftStations.visible(bot).keySet(), bot.containerMemory().sources(bot));
+                        CraftStations.remembered(bot).keySet(), bot.containerMemory().sources(bot));
                 helper.assertTrue(plan.status() == CraftPlan.Status.OK && plan.withdrawals().size() == 1
                     && plan.withdrawals().getFirst().count() == 3, plan.text());
                 Blocknet.LOGGER.info("Container craft plan sample:\n{}", plan.text());
@@ -272,6 +273,7 @@ public final class ContainerGameTests {
         var far = (net.minecraft.world.Container) helper.getBlockEntity(farPos);
         far.setItem(0, new ItemStack(Items.IRON_INGOT, 3));
         helper.setBlock(new BlockPos(3, 1, 4), Blocks.CRAFTING_TABLE);
+        TestArena.see(helper, bot, new BlockPos(3, 1, 4));
         bot.getInventory().add(new ItemStack(Items.STICK, 2));
         List<String> reports = new ArrayList<>();
         bot.controller().lookIn(helper.absolutePos(farPos), reports::add);
@@ -370,6 +372,7 @@ public final class ContainerGameTests {
     public static void plannerUsesInventoryThenNearestComponentAwareSource(GameTestHelper helper) {
         BotPlayer bot = bot(helper, "BnContainerPlan");
         helper.setBlock(CHEST, Blocks.CRAFTING_TABLE);
+        TestArena.see(helper, bot, CHEST);
         bot.getInventory().add(new ItemStack(Items.STICK, 2));
         bot.getInventory().add(new ItemStack(Items.IRON_INGOT, 1));
         ItemStack named = new ItemStack(Items.IRON_INGOT);
@@ -380,7 +383,7 @@ public final class ContainerGameTests {
         var far = new dev.blocknet.crafting.RememberedSource(dimension, helper.absolutePos(new BlockPos(8, 1, 8)).asLong(),
             "minecraft:chest", Map.of(key(Items.IRON_INGOT), 10L));
         var plan = new CraftingCalculation(bot.serverLevel(), dev.blocknet.crafting.PlannerCatalogs.get(bot.serverLevel()))
-            .plan(new ItemStack(Items.IRON_PICKAXE), 1, bot.getInventory().items, CraftStations.visible(bot).keySet(), List.of(near, far));
+            .plan(new ItemStack(Items.IRON_PICKAXE), 1, bot.getInventory().items, CraftStations.remembered(bot).keySet(), List.of(near, far));
         helper.assertTrue(plan.status() == CraftPlan.Status.OK && plan.taken().getOrDefault(key(Items.IRON_INGOT), 0L) == 1
             && plan.withdrawals().size() == 1 && plan.withdrawals().getFirst().source().equals(near)
             && plan.withdrawals().getFirst().count() == 2 && plan.withdrawals().getFirst().item().equals(new ItemKey(named)), plan.text());
@@ -392,6 +395,7 @@ public final class ContainerGameTests {
     public static void furnaceExecutionRemembersInputsAndFinalEmptyMenu(GameTestHelper helper) {
         BotPlayer bot = bot(helper, "BnContainerCook");
         helper.setBlock(CHEST, Blocks.FURNACE);
+        TestArena.see(helper, bot, CHEST);
         bot.getInventory().add(new ItemStack(Items.RAW_IRON));
         bot.getInventory().add(new ItemStack(Items.COAL));
         List<String> reports = new ArrayList<>();
@@ -410,6 +414,7 @@ public final class ContainerGameTests {
     public static void readOnlyOutputRefusesUnsafePartialWithdrawal(GameTestHelper helper) {
         BotPlayer bot = bot(helper, "BnContainerOut");
         helper.setBlock(CHEST, Blocks.FURNACE);
+        TestArena.see(helper, bot, CHEST);
         var furnace = (net.minecraft.world.Container) helper.getBlockEntity(CHEST);
         furnace.setItem(2, new ItemStack(Items.IRON_INGOT, 10));
         List<String> reports = new ArrayList<>();

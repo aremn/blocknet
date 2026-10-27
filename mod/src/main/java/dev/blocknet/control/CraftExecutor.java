@@ -6,6 +6,7 @@ import dev.blocknet.crafting.CraftPlan;
 import dev.blocknet.crafting.CraftingCalculation;
 import dev.blocknet.crafting.ItemKey;
 import dev.blocknet.crafting.PlannerCatalogs;
+import dev.blocknet.memory.WorldMemory;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -108,14 +109,15 @@ final class CraftExecutor {
                 + (plan.hints().isEmpty() ? "" : "; " + String.join("; ", plan.hints())));
         } else if (plan.status() == CraftPlan.Status.MISSING) {
             complete("blocked: missing " + plan.missing().entrySet().stream()
-                .map(entry -> entry.getValue() + " " + entry.getKey()).collect(Collectors.joining(", ")));
+                .map(entry -> entry.getValue() + " " + entry.getKey()).collect(Collectors.joining(", "))
+                + bot.worldMemory().uncheckedHint(bot));
         } else if (plan.status() != CraftPlan.Status.OK) {
             fail("search limit");
         }
     }
 
     private void replan() {
-        stations.putAll(CraftStations.visible(bot));
+        stations.putAll(CraftStations.remembered(bot));
         var inventory = new ArrayList<ItemStack>();
         // Recipe placement uses the player's main inventory, not equipped armor or offhand.
         bot.getInventory().items.forEach(stack -> inventory.add(stack.copy()));
@@ -325,10 +327,7 @@ final class CraftExecutor {
 
     private void station() {
         if (stationPos != null) {
-            if (!bot.level().getBlockState(stationPos).is(net.minecraft.world.level.block.Block.byItem(CraftStations.item(step().station())))) {
-                fail("station disappeared");
-                return;
-            }
+            // Validate only after approaching and seeing it; a remembered position may be occluded.
             next(Phase.OPEN);
             return;
         }
@@ -377,6 +376,7 @@ final class CraftExecutor {
                 stationPos = spot.immutable();
                 stations.put(step().station(), stationPos);
                 placed.put(step().station(), stationPos);
+                notes.add("placed own " + step().station());
                 next(Phase.OPEN);
                 return;
             }
@@ -424,8 +424,7 @@ final class CraftExecutor {
             return "out of reach";
         }
         Vec3 point = Vec3.atCenterOf(ground).add(0, 0.4999, 0);
-        var hit = level.clip(new ClipContext(bot.getEyePosition(), point,
-            ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, bot));
+        var hit = WorldMemory.clip(bot, point, ClipContext.Block.OUTLINE);
         if (hit.getType() != HitResult.Type.BLOCK || !hit.getBlockPos().equals(ground)
             || hit.getDirection() != Direction.UP) {
             return "support face not visible";
@@ -447,8 +446,7 @@ final class CraftExecutor {
                 BlockPos spot = feet.relative(direction, distance);
                 BlockPos ground = spot.below();
                 Vec3 point = Vec3.atCenterOf(ground).add(0, 0.4999, 0);
-                var hit = level.clip(new ClipContext(bot.getEyePosition(), point,
-                    ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, bot));
+                var hit = WorldMemory.clip(bot, point, ClipContext.Block.OUTLINE);
                 AABB body = bot.getBoundingBox().move(Vec3.atBottomCenterOf(spot).subtract(bot.position()));
                 if (!level.getBlockState(ground).isFaceSturdy(level, ground, Direction.UP)
                     || hit.getType() != HitResult.Type.BLOCK || !hit.getBlockPos().equals(ground)
@@ -468,6 +466,10 @@ final class CraftExecutor {
     private void open() {
         BlockHitResult hit = controller.craftApproach(stationPos);
         if (hit == null) {
+            return;
+        }
+        if (!step().station().equals(CraftStations.kind(bot.level().getBlockState(stationPos)))) {
+            fail("station disappeared or changed");
             return;
         }
         bot.gameMode.useItemOn(bot, bot.serverLevel(), bot.getMainHandItem(), InteractionHand.MAIN_HAND, hit);

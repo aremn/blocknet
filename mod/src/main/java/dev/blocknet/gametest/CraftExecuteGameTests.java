@@ -61,7 +61,7 @@ public final class CraftExecuteGameTests {
 
     private static CraftPlan plan(BotPlayer bot, Item item, int count) {
         return new CraftingCalculation(bot.serverLevel(), PlannerCatalogs.get(bot.serverLevel()))
-            .plan(new ItemStack(item), count, bot.getInventory().items, CraftStations.visible(bot).keySet());
+            .plan(new ItemStack(item), count, bot.getInventory().items, CraftStations.remembered(bot).keySet());
     }
 
     private static void done(GameTestHelper helper, BotPlayer bot, List<String> reports, String prefix) {
@@ -90,26 +90,35 @@ public final class CraftExecuteGameTests {
         });
     }
 
-    @GameTest(template = "arena", timeoutTicks = 250)
-    public static void visibleTableSavesTheThirdLog(GameTestHelper helper) {
+    @GameTest(template = "arena", timeoutTicks = 300)
+    public static void lookFindsTableBehindBotAndSavesTheThirdLog(GameTestHelper helper) {
         BotPlayer bot = bot(helper, "BnCraftPlaced", stack(Items.OAK_LOG, 2));
-        helper.setBlock(TABLE, Blocks.CRAFTING_TABLE);
-        var plan = plan(bot, Items.WOODEN_PICKAXE, 1);
-        helper.assertTrue(plan.status() == CraftPlan.Status.OK && plan.steps().stream()
-            .noneMatch(step -> step.outputs().containsKey(new ItemKey(new ItemStack(Items.CRAFTING_TABLE)))), plan.text());
+        BlockPos table = new BlockPos(3, 1, 2);
+        helper.setBlock(table, Blocks.CRAFTING_TABLE);
+        List<String> looks = new ArrayList<>();
         List<String> reports = new ArrayList<>();
-        bot.controller().craft(new ItemStack(Items.WOODEN_PICKAXE), 1, reports::add);
-        helper.succeedWhen(() -> {
-            done(helper, bot, reports, "crafted 1 wooden_pickaxe");
-            helper.assertBlockPresent(Blocks.CRAFTING_TABLE, TABLE);
-            helper.assertTrue(bot.getInventory().countItem(Items.CRAFTING_TABLE) == 0, "no new table");
-            helper.assertTrue(bot.getInventory().countItem(Items.WOODEN_PICKAXE) == 1, "pickaxe produced");
-            BotManager.despawn("BnCraftPlaced");
-        });
+        bot.controller().look(looks::add);
+        helper.startSequence().thenWaitUntil(() -> helper.assertTrue(looks.size() == 1, "look finished"))
+            .thenExecute(() -> {
+                helper.assertTrue(helper.getTick() >= 20 && looks.getFirst().contains("crafting_table"), looks.toString());
+                var plan = plan(bot, Items.WOODEN_PICKAXE, 1);
+                helper.assertTrue(plan.status() == CraftPlan.Status.OK && plan.steps().stream()
+                    .noneMatch(step -> step.outputs().containsKey(new ItemKey(new ItemStack(Items.CRAFTING_TABLE)))), plan.text());
+                bot.controller().craft(new ItemStack(Items.WOODEN_PICKAXE), 1, reports::add);
+            }).thenWaitUntil(() -> {
+                done(helper, bot, reports, "crafted 1 wooden_pickaxe");
+                helper.assertBlockPresent(Blocks.CRAFTING_TABLE, table);
+                helper.assertTrue(bot.getInventory().countItem(Items.CRAFTING_TABLE) == 0
+                    && !reports.getFirst().contains("placed own"), "no new table placed");
+                helper.assertTrue(bot.getInventory().countItem(Items.WOODEN_PICKAXE) == 1, "pickaxe produced");
+                for (BlockPos pos : BlockPos.betweenClosed(0, 1, 0, 8, 2, 8)) {
+                    helper.assertTrue(pos.equals(table) || !helper.getBlockState(pos).is(Blocks.CRAFTING_TABLE), "only original table remains");
+                }
+            }).thenExecute(() -> BotManager.despawn("BnCraftPlaced")).thenSucceed();
     }
 
-    @GameTest(template = "arena_tall", timeoutTicks = 60)
-    public static void tableBehindWallDoesNotChangePlan(GameTestHelper helper) {
+    @GameTest(template = "arena_tall", timeoutTicks = 80)
+    public static void lookDoesNotReportTableBehindWall(GameTestHelper helper) {
         BotPlayer bot = bot(helper, "BnCraftHidden", stack(Items.OAK_LOG, 2));
         var without = plan(bot, Items.WOODEN_PICKAXE, 1);
         for (int x = 0; x < 9; x++) {
@@ -118,20 +127,52 @@ public final class CraftExecuteGameTests {
             }
         }
         helper.setBlock(new BlockPos(4, 1, 6), Blocks.CRAFTING_TABLE);
-        var hidden = plan(bot, Items.WOODEN_PICKAXE, 1);
-        helper.assertTrue(!CraftStations.visible(bot).containsKey("crafting_table"), "no view through wall");
-        helper.assertTrue(hidden.status() == CraftPlan.Status.MISSING && hidden.text().equals(without.text()), hidden.text());
-        List<String> reports = new ArrayList<>();
-        bot.controller().craft(new ItemStack(Items.WOODEN_PICKAXE), 1, reports::add);
-        done(helper, bot, reports, "blocked: missing ");
-        BotManager.despawn("BnCraftHidden");
-        helper.succeed();
+        List<String> looks = new ArrayList<>();
+        bot.controller().look(looks::add);
+        helper.startSequence().thenWaitUntil(() -> helper.assertTrue(looks.size() == 1, "look finished"))
+            .thenExecute(() -> {
+                helper.assertTrue(helper.getTick() >= 20 && !looks.getFirst().contains("crafting_table"), looks.toString());
+                var hidden = plan(bot, Items.WOODEN_PICKAXE, 1);
+                helper.assertTrue(!CraftStations.remembered(bot).containsKey("crafting_table"), "no view through wall");
+                helper.assertTrue(hidden.status() == CraftPlan.Status.MISSING && hidden.text().equals(without.text()), hidden.text());
+                List<String> reports = new ArrayList<>();
+                bot.controller().craft(new ItemStack(Items.WOODEN_PICKAXE), 1, reports::add);
+                done(helper, bot, reports, "blocked: missing ");
+                BotManager.despawn("BnCraftHidden");
+            }).thenSucceed();
+    }
+
+    @GameTest(template = "arena", timeoutTicks = 80)
+    public static void missingIronHintsAtSeenUnopenedChest(GameTestHelper helper) {
+        BotPlayer bot = bot(helper, "BnLookChest", stack(Items.STICK, 2));
+        helper.setBlock(TABLE, Blocks.CRAFTING_TABLE);
+        BlockPos chestPos = new BlockPos(2, 1, 3);
+        helper.setBlock(chestPos, Blocks.CHEST);
+        var chest = (net.minecraft.world.level.block.entity.ChestBlockEntity) helper.getBlockEntity(chestPos);
+        chest.setItem(0, new ItemStack(Items.IRON_INGOT, 3));
+        List<String> looks = new ArrayList<>();
+        bot.controller().look(looks::add);
+        helper.startSequence().thenWaitUntil(() -> helper.assertTrue(looks.size() == 1, "look finished"))
+            .thenExecute(() -> {
+                helper.assertTrue(looks.getFirst().contains("contents unknown"), looks.toString());
+                List<String> reports = new ArrayList<>();
+                bot.controller().craft(new ItemStack(Items.IRON_PICKAXE), 1, reports::add);
+                done(helper, bot, reports, "blocked: missing ");
+                BlockPos absolute = helper.absolutePos(chestPos);
+                helper.assertTrue(reports.getFirst().contains(
+                    "unchecked containers nearby: chest " + absolute.getX() + " " + absolute.getY() + " " + absolute.getZ()), reports.toString());
+                helper.assertTrue(bot.containerMemory().entries().isEmpty() && chest.getOpenNess(1) == 0,
+                    "chest never opened or observed through menu");
+                helper.assertTrue(chest.countItem(Items.IRON_INGOT) == 3 && bot.containerMenu == bot.inventoryMenu, "chest untouched");
+                BotManager.despawn("BnLookChest");
+            }).thenSucceed();
     }
 
     private static void smelt(GameTestHelper helper, String name, boolean pickaxe) {
         BotPlayer bot = bot(helper, name, stack(Items.RAW_IRON, 3), stack(Items.COAL, 1), stack(Items.COBBLESTONE, 8));
         // A furnace is a 3x3 recipe: these materials require access to a table.
         helper.setBlock(TABLE, Blocks.CRAFTING_TABLE);
+        TestArena.see(helper, bot, TABLE);
         if (pickaxe) {
             bot.getInventory().add(new ItemStack(Items.IRON_PICKAXE));
         }
@@ -179,7 +220,8 @@ public final class CraftExecuteGameTests {
         bot.setYHeadRot(180);
         BlockPos table = new BlockPos(4, 1, 2);
         helper.setBlock(table, Blocks.CRAFTING_TABLE);
-        helper.assertTrue(CraftStations.visible(bot).containsKey("crafting_table"), "neighbouring table visible");
+        TestArena.see(helper, bot, table);
+        helper.assertTrue(CraftStations.remembered(bot).containsKey("crafting_table"), "neighbouring table visible");
         List<String> reports = new ArrayList<>();
         bot.controller().craft(new ItemStack(Items.IRON_INGOT), 1, reports::add);
         helper.succeedWhen(() -> {
@@ -254,6 +296,7 @@ public final class CraftExecuteGameTests {
     public static void executesForeignTableRecipeDiscoveredAtRuntime(GameTestHelper helper) {
         BotPlayer bot = bot(helper, "BnCraftForeign");
         helper.setBlock(TABLE, Blocks.CRAFTING_TABLE);
+        TestArena.see(helper, bot, TABLE);
         var holder = helper.getLevel().getRecipeManager().getRecipes().stream()
             .filter(candidate -> candidate.id().getNamespace().equals(FIXTURE_NAMESPACE)
                 && candidate.value() instanceof CraftingRecipe && !candidate.value().isSpecial()
@@ -316,6 +359,7 @@ public final class CraftExecuteGameTests {
         String station = smoker ? "smoker" : "blast_furnace";
         BotPlayer bot = bot(helper, name, stack(input, 3), stack(Items.COAL, 2));
         helper.setBlock(TABLE, smoker ? Blocks.SMOKER : Blocks.BLAST_FURNACE);
+        TestArena.see(helper, bot, TABLE);
         var plan = plan(bot, output, 3);
         helper.assertTrue(plan.status() == CraftPlan.Status.OK
             && plan.steps().stream().allMatch(step -> step.station().equals(station)), plan.text());
@@ -405,6 +449,7 @@ public final class CraftExecuteGameTests {
         BotPlayer bot = bot(helper, "BnCraftCake", stack(Items.MILK_BUCKET, 3), stack(Items.SUGAR, 2),
             stack(Items.WHEAT, 3), stack(Items.EGG, 1));
         helper.setBlock(TABLE, Blocks.CRAFTING_TABLE);
+        TestArena.see(helper, bot, TABLE);
         List<String> reports = new ArrayList<>();
         bot.controller().craft(new ItemStack(Items.CAKE), 1, reports::add);
         helper.succeedWhen(() -> {
@@ -422,8 +467,9 @@ public final class CraftExecuteGameTests {
             bot.getY(), helper.absoluteVec(new Vec3(4.5, 1, 1.5)).z, 0, 0);
         BlockPos distant = new BlockPos(4, 1, 6);
         helper.setBlock(distant, Blocks.CRAFTING_TABLE);
+        TestArena.see(helper, bot, distant);
         helper.assertTrue(!bot.canInteractWithBlock(helper.absolutePos(distant), -0.5)
-            && CraftStations.visible(bot).containsKey("crafting_table"), "visible but outside reach");
+            && CraftStations.remembered(bot).containsKey("crafting_table"), "visible but outside reach");
         List<String> reports = new ArrayList<>();
         bot.controller().craft(new ItemStack(Items.WOODEN_PICKAXE), 1, reports::add);
         helper.succeedWhen(() -> {
@@ -486,6 +532,7 @@ public final class CraftExecuteGameTests {
     public static void cookingBatchLargerThanSlotRunsInMultipleLoads(GameTestHelper helper) {
         BotPlayer bot = bot(helper, "BnCraftBatch", stack(Items.RAW_IRON, 64), stack(Items.RAW_IRON, 1), stack(Items.COAL, 9));
         helper.setBlock(TABLE, Blocks.FURNACE);
+        TestArena.see(helper, bot, TABLE);
         List<String> reports = new ArrayList<>();
         bot.controller().craft(new ItemStack(Items.IRON_INGOT), 65, reports::add);
         helper.succeedWhen(() -> {
@@ -501,6 +548,7 @@ public final class CraftExecuteGameTests {
     public static void sameItemCanBeBothCookingInputAndFuel(GameTestHelper helper) {
         BotPlayer bot = bot(helper, "BnCraftWoodFuel", stack(Items.OAK_LOG, 2));
         helper.setBlock(TABLE, Blocks.FURNACE);
+        TestArena.see(helper, bot, TABLE);
         List<String> reports = new ArrayList<>();
         bot.controller().craft(new ItemStack(Items.CHARCOAL), 1, reports::add);
         helper.succeedWhen(() -> {
