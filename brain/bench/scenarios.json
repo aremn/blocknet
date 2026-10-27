@@ -1,0 +1,80 @@
+[
+  {
+    "id": "wood", "message": "накопай дерева",
+    "state": "inventory: empty; held: nothing",
+    "inventory": "empty inventory; free slots 36",
+    "scene": "forest, day, clear. you: on grass, facing N, holding nothing\ntrees: t1 oak x5 NE 6m\nhostile: none. unexplored: E past 32m",
+    "responses": [
+      {"tool": "gather", "itemPattern": "^(logs?|wood|(?:minecraft:)?oak_log|t1)$", "text": "gathered 4 oak_log", "inventory": "4 oak_log; free slots 35"}
+    ],
+    "rules": [
+      {"type": "gatherWithin", "pattern": "^(logs?|wood|(?:minecraft:)?oak_log|t1)$", "limit": 3},
+      {"type": "observedTargets"}
+    ]
+  },
+  {
+    "id": "wooden-pickaxe", "message": "сделай кирку",
+    "state": "inventory: 5 oak_log; held: nothing",
+    "inventory": "5 oak_log; free slots 35",
+    "scene": "forest, day, clear. you: on grass, facing N, holding nothing\ntrees: t1 oak x5 NE 6m. hostile: none",
+    "responses": [
+      {"tool": "craft", "itemPattern": "^(?:minecraft:)?wooden_pickaxe$", "text": "crafted 1 wooden_pickaxe (planks, sticks and crafting_table made from logs)", "inventory": "1 wooden_pickaxe, 2 oak_log, 1 crafting_table"}
+    ],
+    "rules": [{"type": "craft", "item": "wooden_pickaxe"}, {"type": "short", "maxWords": 12}]
+  },
+  {
+    "id": "inventory", "message": "что у тебя в инвентаре?",
+    "state": "inventory: 5 oak_log, 2 apple; held: nothing",
+    "inventory": "5 oak_log, 2 apple; free slots 34",
+    "scene": "forest, day, clear. you: on grass, facing N, holding nothing\ncarrying: 5 oak_log, 2 apple. hostile: none",
+    "responses": [],
+    "rules": [
+      {"type": "calls", "max": 1, "allowed": ["inv", "scene"]},
+      {"type": "mentions", "patterns": ["бр[её]в|дерев|дуб|oak|logs?", "яблок|apple"]}
+    ]
+  },
+  {
+    "id": "greeting", "message": "привет, как дела?",
+    "state": "inventory: empty; held: nothing", "inventory": "empty inventory",
+    "scene": "plains, day, clear. you: on grass, facing N, holding nothing. hostile: none",
+    "responses": [],
+    "rules": [{"type": "calls", "max": 0}, {"type": "short", "maxWords": 12}, {"type": "mentions", "patterns": ["привет|здрав|хай|hello|hey|hi\\b"]}]
+  },
+  {
+    "id": "coal", "message": "найди уголь",
+    "state": "inventory: 1 wooden_pickaxe; held: wooden_pickaxe", "inventory": "1 wooden_pickaxe",
+    "scene": "plains, day, clear. you: on grass, facing N, holding wooden_pickaxe\ntrees: none seen. ores: none seen. hostile: none\nunexplored: E past 32m",
+    "responses": [{"tool": "explore", "text": "plains, day, clear. you: on grass, facing E, holding wooden_pickaxe\nstone: s1 cliff E 12m (coal vein c1 x4 on it, 13m). hostile: none\nunexplored: E past 64m", "scene": "plains, day, clear. you: on grass, facing E\nstone: s1 cliff E 12m (coal vein c1 x4 on it, 13m). hostile: none"}],
+    "rules": [{"type": "observeExplore"}, {"type": "observedTargets"}]
+  },
+  {
+    "id": "night-danger", "message": "Continue toward the goal: survive and progress: get wood, tools, shelter, iron; current state: inventory: 8 dirt, 1 wooden_pickaxe; held: wooden_pickaxe. Scene: plains, night, clear. hostile: z1 zombie N 6m approaching; safe: f1 observed open path S 12m, away from zombie. Events: [{\"type\":\"moment\",\"kind\":\"hostile_seen\",\"text\":\"zombie N 6m approaching\"}]. Pick the next action.",
+    "autoplay": true,
+    "state": "inventory: 8 dirt, 1 wooden_pickaxe; held: wooden_pickaxe",
+    "inventory": "8 dirt, 1 wooden_pickaxe",
+    "scene": "plains, night, clear. you: on grass, facing N, holding wooden_pickaxe\nhostile: z1 zombie N 6m approaching\nsafe: f1 observed open path S 12m, away from zombie\nvisible support: dirt at 0 63 0; empty space at 0 64 0",
+    "coordinates": [[0, 64, 0]], "safeRefs": ["f1"],
+    "responses": [
+      {"tool": "goto", "args": {"ref": "f1"}, "text": "arrived at f1; zombie now N 18m"},
+      {"tool": "place", "args": {"item": "dirt", "x": 0, "y": 64, "z": 0}, "text": "placed dirt; obstacle between you and zombie"}
+    ],
+    "rules": [{"type": "dangerFirst"}, {"type": "observedTargets"}]
+  },
+  {
+    "id": "stone-pickaxe", "message": "сделай каменную кирку",
+    "state": "inventory: 1 wooden_pickaxe, 5 oak_log; held: wooden_pickaxe",
+    "inventory": "1 wooden_pickaxe, 5 oak_log",
+    "scene": "forest, day, clear. you: on stone, facing W, holding wooden_pickaxe\nstone: s1 exposed stone W 3m. hostile: none",
+    "responses": [
+      {"tool": "gather", "itemPattern": "^(stone|cobblestone|(?:minecraft:)?cobblestone|s1)$", "text": "gathered 3 cobblestone", "inventory": "1 wooden_pickaxe, 5 oak_log, 3 cobblestone"},
+      {"tool": "craft", "itemPattern": "^(?:minecraft:)?stone_pickaxe$", "requires": "cobblestone", "text": "crafted 1 stone_pickaxe", "inventory": "1 wooden_pickaxe, 1 stone_pickaxe, 2 oak_log"}
+    ],
+    "rules": [{"type": "gatherBeforeCraft", "pattern": "^(stone|cobblestone|(?:minecraft:)?cobblestone|s1)$", "item": "stone_pickaxe"}]
+  },
+  {
+    "id": "other-player", "message": "@Vasya го на сервер завтра",
+    "state": "inventory: empty; held: nothing", "inventory": "empty inventory",
+    "scene": "plains, day, clear. you: on grass, facing N, holding nothing. hostile: none",
+    "responses": [], "rules": [{"type": "silent"}, {"type": "calls", "max": 0}]
+  }
+]

@@ -2,9 +2,9 @@ import { spawn } from 'node:child_process';
 import { JsonProcess, processOptions } from './json-process.js';
 
 // Values are TOML, passed as separate argv entries (JSON strings also quote TOML strings).
-export function buildCodexArgs({ mcpServer, model = 'gpt-6-luna' } = {}) {
+export function buildCodexArgs({ mcpServer, model = 'gpt-6-luna', serviceTier = 'priority' } = {}) {
   const config = {
-    model: JSON.stringify(model), service_tier: '"priority"', model_reasoning_effort: '"low"',
+    model: JSON.stringify(model), service_tier: JSON.stringify(serviceTier), model_reasoning_effort: '"low"',
     approval_policy: '"never"', sandbox_mode: '"read-only"', project_doc_max_bytes: '0',
     'features.skip_host_skill_discovery': 'true', 'features.skill_search': 'false',
     'features.plugins': 'false', 'features.apps': 'false', 'features.memories': 'false',
@@ -41,7 +41,7 @@ export class CodexBackend {
     await this.process.request('initialize', { clientInfo: { name: 'blocknet', version: '1.0' }, capabilities: null });
     this.process.write({ method: 'initialized' });
     const result = await this.process.request('thread/start', {
-      model: this.model, serviceTier: 'priority', cwd: this.options.cwd,
+      model: this.model, serviceTier: this.options.serviceTier ?? 'priority', cwd: this.options.cwd,
       approvalPolicy: 'never', sandbox: 'read-only', baseInstructions: this.options.prompt,
       developerInstructions: 'Use only the blocknet MCP tools to act in Minecraft.', ephemeral: true,
     });
@@ -63,7 +63,7 @@ export class CodexBackend {
       const launch = async () => {
         if (!this.process) await this.initialize();
         await this.process.request('turn/start', { threadId: this.threadId,
-          input: [{ type: 'text', text, text_elements: [] }], effort: 'low', serviceTier: 'priority',
+          input: [{ type: 'text', text, text_elements: [] }], effort: 'low', serviceTier: this.options.serviceTier ?? 'priority',
           approvalPolicy: 'never' });
       };
       const turn = this.active;

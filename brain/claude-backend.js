@@ -1,8 +1,8 @@
 import { spawn } from 'node:child_process';
 import { JsonProcess, processOptions } from './json-process.js';
 
-export function buildClaudeArgs({ mcpConfig = 'brain/mcp.json', promptFile = 'brain/prompt.md' } = {}) {
-  return ['-p', '--model', 'haiku', '--mcp-config', mcpConfig, '--strict-mcp-config',
+export function buildClaudeArgs({ mcpConfig = 'brain/mcp.json', promptFile = 'brain/prompt.md', model = 'haiku' } = {}) {
+  return ['-p', '--model', model, '--mcp-config', mcpConfig, '--strict-mcp-config',
     '--tools', '', '--allowedTools', 'mcp__blocknet', '--permission-mode', 'dontAsk',
     '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
     '--include-partial-messages', '--system-prompt-file', promptFile];
@@ -19,6 +19,7 @@ export class ClaudeBackend {
   model = 'haiku';
   constructor(options = {}) {
     this.options = options;
+    this.model = options.model ?? 'haiku';
     this.turns = 0;
     this.maxTurns = options.maxTurns ?? 30;
     this.spawnProcess = options.spawnProcess ?? spawn;

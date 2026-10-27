@@ -1,0 +1,492 @@
+[
+  {
+    "name": "status",
+    "description": "Read health, position and current task.",
+    "task": false,
+    "params": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "inv",
+    "description": "Read inventory and tool, food and space hints.",
+    "task": false,
+    "params": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "changes",
+    "description": "Read state changes since this connection's last changes call.",
+    "task": false,
+    "params": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "memory",
+    "description": "Read remembered container contents; optionally filter items.",
+    "task": false,
+    "params": {
+      "type": "object",
+      "properties": {
+        "filter": {
+          "type": "string"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "look",
+    "description": "Turn 360 degrees and return the scene; optional focus: trees, ores, water, danger, built, stations.",
+    "task": true,
+    "params": {
+      "type": "object",
+      "properties": {
+        "focus": {
+          "type": "string"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "scene",
+    "description": "Read the remembered scene instantly, without turning; delta gives one line of changes.",
+    "task": false,
+    "params": {
+      "type": "object",
+      "properties": {
+        "delta": {
+          "type": "boolean"
+        },
+        "goal": {
+          "type": "string"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "explore",
+    "description": "Walk through observed safe space toward a frontier, then look and report new objects.",
+    "task": true,
+    "params": {
+      "type": "object",
+      "properties": {
+        "direction": {
+          "type": "string"
+        },
+        "distance": {
+          "type": "integer"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "plan",
+    "description": "Plan recipes without acting; mode craft makes new items, get counts owned items.",
+    "task": false,
+    "params": {
+      "type": "object",
+      "properties": {
+        "item": {
+          "type": "string"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "craft",
+            "get"
+          ]
+        }
+      },
+      "required": [
+        "item"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "come",
+    "description": "Walk near an online player in the same dimension.",
+    "task": true,
+    "params": {
+      "type": "object",
+      "properties": {
+        "player": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "player"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "follow",
+    "description": "Follow a player until stopped or replaced by another task.",
+    "task": true,
+    "params": {
+      "type": "object",
+      "properties": {
+        "player": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "player"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "goto",
+    "description": "Walk to an observed object ref, or supplied exact block coordinates; never invent coordinates.",
+    "task": true,
+    "params": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "type": "string"
+        },
+        "x": {
+          "type": "integer"
+        },
+        "y": {
+          "type": "integer"
+        },
+        "z": {
+          "type": "integer"
+        }
+      },
+      "required": [],
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": [
+            "ref"
+          ]
+        },
+        {
+          "required": [
+            "x",
+            "y",
+            "z"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "mine",
+    "description": "Walk to and mine one block, then collect its drops; needs a suitable tool.",
+    "task": true,
+    "params": {
+      "type": "object",
+      "properties": {
+        "x": {
+          "type": "integer"
+        },
+        "y": {
+          "type": "integer"
+        },
+        "z": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "z"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "gather",
+    "description": "Gather MORE items from an observed ref or logs/wood, stone/cobblestone, coal, iron, dirt, sand or exact item id; requires the right tool.",
+    "task": true,
+    "params": {
+      "type": "object",
+      "properties": {
+        "item": {
+          "type": "string"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        }
+      },
+      "required": [
+        "item"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "use",
+    "description": "Walk to and right-click one block; sneak bypasses block interactions.",
+    "task": true,
+    "params": {
+      "type": "object",
+      "properties": {
+        "x": {
+          "type": "integer"
+        },
+        "y": {
+          "type": "integer"
+        },
+        "z": {
+          "type": "integer"
+        },
+        "sneak": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "z"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "eat",
+    "description": "Eat one inventory food through player use; omitted item selects safe nutritious food.",
+    "task": true,
+    "params": {
+      "type": "object",
+      "properties": {
+        "item": {
+          "type": "string"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "place",
+    "description": "Place an inventory block at x y z; optional clicked face: up/down/north/south/east/west. Sneaks automatically.",
+    "task": true,
+    "params": {
+      "type": "object",
+      "properties": {
+        "item": {
+          "type": "string"
+        },
+        "x": {
+          "type": "integer"
+        },
+        "y": {
+          "type": "integer"
+        },
+        "z": {
+          "type": "integer"
+        },
+        "face": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "item",
+        "x",
+        "y",
+        "z"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "craft",
+    "description": "Craft a count of NEW items; look for stations first and read missing-material hints.",
+    "task": true,
+    "params": {
+      "type": "object",
+      "properties": {
+        "item": {
+          "type": "string"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        }
+      },
+      "required": [
+        "item"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "get",
+    "description": "Obtain at least count items, counting inventory and remembered sources.",
+    "task": true,
+    "params": {
+      "type": "object",
+      "properties": {
+        "item": {
+          "type": "string"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        }
+      },
+      "required": [
+        "item"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "look-in",
+    "description": "Open a container, remember its visible menu slots and close it.",
+    "task": true,
+    "params": {
+      "type": "object",
+      "properties": {
+        "x": {
+          "type": "integer"
+        },
+        "y": {
+          "type": "integer"
+        },
+        "z": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "z"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "deposit",
+    "description": "Put items into a container; filter is item id, #tag, all or junk; omitted count means all.",
+    "task": true,
+    "params": {
+      "type": "object",
+      "properties": {
+        "x": {
+          "type": "integer"
+        },
+        "y": {
+          "type": "integer"
+        },
+        "z": {
+          "type": "integer"
+        },
+        "filter": {
+          "type": "string"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "z",
+        "filter"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "withdraw",
+    "description": "Take items from a container through menu clicks; omitted count means all matching items.",
+    "task": true,
+    "params": {
+      "type": "object",
+      "properties": {
+        "x": {
+          "type": "integer"
+        },
+        "y": {
+          "type": "integer"
+        },
+        "z": {
+          "type": "integer"
+        },
+        "filter": {
+          "type": "string"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "z",
+        "filter"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "stop",
+    "description": "Cancel the current action immediately.",
+    "task": false,
+    "params": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "say",
+    "description": "Say one short message to all players as this bot.",
+    "task": false,
+    "params": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "player": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "additionalProperties": false
+    }
+  }
+]
