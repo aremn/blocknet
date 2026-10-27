@@ -547,6 +547,7 @@ public final class CraftExecuteGameTests {
                     bot.getBoundingBox().inflate(3)).stream().map(net.minecraft.world.entity.item.ItemEntity::getItem)
                     .filter(stack -> stack.is(Items.OAK_LOG)).mapToLong(ItemStack::getCount).sum();
                 helper.assertTrue(logs == 3, "all logs dropped through player death: " + logs);
+                BotManager.despawn("BnCraftDeath");
             })
             .thenSucceed();
     }
@@ -625,6 +626,25 @@ public final class CraftExecuteGameTests {
             helper.assertTrue(bot.getInventory().countItem(Items.WOODEN_PICKAXE) == 1
                 && bot.getInventory().countItem(Items.CRAFTING_TABLE) == 1, "named logs really crafted");
             BotManager.despawn("BnCraftNamed");
+        });
+    }
+    @GameTest(template = "arena", timeoutTicks = 700)
+    public static void slopeCraftSucceedsWhenStationDropCannotBeCollected(GameTestHelper helper) {
+        BotPlayer bot = bot(helper, "BnCraftSlope", stack(Items.OAK_LOG, 3));
+        // A two-level ledge next to the crafting area; recovery drops cannot be picked up.
+        for (int x = 0; x < 4; x++) for (int z = 0; z < 9; z++) helper.setBlock(new BlockPos(x, 1, z), Blocks.STONE);
+        List<String> reports = new ArrayList<>();
+        bot.controller().craft(new ItemStack(Items.WOODEN_PICKAXE), 1, reports::add);
+        helper.onEachTick(() -> {
+            for (var drop : bot.level().getEntitiesOfClass(net.minecraft.world.entity.item.ItemEntity.class, bot.getBoundingBox().inflate(8))) {
+                if (drop.getItem().is(Items.CRAFTING_TABLE)) drop.setNeverPickUp();
+            }
+        });
+        helper.succeedWhen(() -> {
+            done(helper, bot, reports, "crafted 1 wooden_pickaxe");
+            helper.assertTrue(reports.getFirst().contains("left a crafting_table at "), "station recovery is only a note: " + reports);
+            helper.assertTrue(bot.getInventory().countItem(Items.WOODEN_PICKAXE) == 1, "crafted item retained");
+            BotManager.despawn("BnCraftSlope");
         });
     }
 }

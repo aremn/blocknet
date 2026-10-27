@@ -90,6 +90,13 @@ public final class BlocknetCommands {
             .then(craftCommand(buildContext, CraftPlan.Mode.CRAFT))
             .then(craftCommand(buildContext, CraftPlan.Mode.OBTAIN))
             .then(gatherCommand(buildContext))
+            .then(Commands.literal("attack").then(Commands.argument("query", StringArgumentType.greedyString()).executes(c -> {
+                String[] words = StringArgumentType.getString(c, "query").trim().split("\\s+", 2);
+                BotPlayer selected = BotManager.get(words[0]);
+                if (selected == null) selected = nearestBot(c.getSource());
+                selected.controller().attack(words.length == 2 ? words[1] : words[0], reporter(c.getSource(), selected));
+                return 1;
+            })))
             .then(miningCommand("tunnel"))
             .then(miningCommand("descend"))
             .then(eatCommand(buildContext))
@@ -214,8 +221,8 @@ public final class BlocknetCommands {
             if (action.equals("look")) {
                 boolean fresh = words.remove("fresh");
                 argument = words.isEmpty() ? "" : words.getFirst();
-                if (!java.util.List.of("", "trees", "ores", "water", "danger", "built", "stations").contains(argument) || words.size() > 1)
-                    throw new IllegalArgumentException("use look [trees|ores|water|danger|built|stations]");
+                if (!java.util.List.of("", "trees", "ores", "water", "danger", "built", "stations", "food").contains(argument) || words.size() > 1)
+                    throw new IllegalArgumentException("use look [trees|ores|water|danger|built|stations|food]");
                 bot.controller().look(argument, fresh, report);
             } else if (action.equals("scene")) {
                 if (words.size() > 1 || !argument.isEmpty() && !argument.equals("delta")) throw new IllegalArgumentException("use scene [delta]");

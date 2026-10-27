@@ -192,7 +192,13 @@ final class CraftExecutor {
         boolean openingFurnace = phase == Phase.COOK && cookWait <= 0 && clicks.isEmpty()
             && !(bot.containerMenu instanceof AbstractFurnaceMenu);
         cookingOpenTicks = openingFurnace ? cookingOpenTicks + 1 : 0;
+        if (phase == Phase.OPEN) timeout = 6000;
         if (++phaseTicks > timeout || cookingOpenTicks > PHASE_TIMEOUT) {
+            if (phase == Phase.COLLECT) {
+                controller.resumeCraftCleanup();
+                collected();
+                return true;
+            }
             complete("failed: step " + (stepIndex + 1) + ": stuck in "
                 + (cookingOpenTicks > PHASE_TIMEOUT ? "open" : phase.name().toLowerCase(java.util.Locale.ROOT)));
             return false;
@@ -741,7 +747,13 @@ final class CraftExecutor {
             }
         }
         expected.values().removeIf(value -> value == 0);
-        if (!expected.equals(inventory())) {
+        // Walking to a station may pick up unrelated drops. Only deficits invalidate the forecast.
+        var actual = inventory();
+        if (expected.entrySet().stream()
+                // Defensive attacks or clearing the approach may wear unrelated tools.
+                .filter(e -> !e.getKey().stack().isDamageableItem() || step().inputs().containsKey(e.getKey())
+                    || step().outputs().containsKey(e.getKey()))
+                .anyMatch(e -> actual.getOrDefault(e.getKey(), 0L) < e.getValue())) {
             fail("material balance changed");
             return;
         }
@@ -798,8 +810,7 @@ final class CraftExecutor {
 
     void collected() {
         if (amount(new ItemKey(new ItemStack(CraftStations.item(cleanupStation)))) <= cleanupBefore) {
-            fail("station drop not collected at " + coordinates(stationPos));
-            return;
+            notes.add("left a " + cleanupStation + " at " + coordinates(stationPos));
         }
         bot.worldMemory().forgetOwn(bot, stationPos);
         placed.remove(cleanupStation);
@@ -851,6 +862,13 @@ final class CraftExecutor {
     }
 
     void fail(String reason) {
+        if (phase == Phase.COLLECT) {
+            notes.add("left a " + cleanupStation + " at " + coordinates(stationPos));
+            placed.remove(cleanupStation);
+            next(Phase.CLEANUP);
+            controller.resumeCraftCleanup();
+            return;
+        }
         if (withdrawal != null) {
             withdrawal.fail(reason);
             return;

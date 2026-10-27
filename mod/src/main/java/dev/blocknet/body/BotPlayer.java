@@ -8,14 +8,12 @@ import dev.blocknet.memory.WorldMemory;
 import dev.blocknet.vision.VisionSensor;
 import dev.blocknet.state.BodyStateTracker;
 import dev.blocknet.pathing.api.IBaritone;
-import net.minecraft.network.DisconnectionDetails;
-import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ClientInformation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.damagesource.DamageSource;
-import net.minecraft.world.food.FoodData;
+
 
 /**
  * The bot's body: a real server-side player without a client.
@@ -56,8 +54,14 @@ public final class BotPlayer extends ServerPlayer {
         return controller;
     }
 
+    private int respawnTicks;
+
     @Override
     public void tick() {
+        if (isDeadOrDying()) {
+            if (++respawnTicks == 20) BotManager.respawn(this);
+            return;
+        }
         if (getServer() != null && getServer().getTickCount() % 10 == 0) {
             connection.resetPosition();
             serverLevel().getChunkSource().move(this);
@@ -66,7 +70,8 @@ public final class BotPlayer extends ServerPlayer {
         vision.tick();
         // The pathfinder, when it has work, overrides this tick's inputs and rotation.
         IBaritone pathing = IBaritone.KEY.getNullable(this);
-        if (pathing != null) {
+        // Even idle pathing rearranges hotbar tools; defense owns hands as well as feet.
+        if (pathing != null && !controller.defending()) {
             float forward = zza;
             float sideways = xxa;
             boolean jump = jumping;
@@ -89,6 +94,7 @@ public final class BotPlayer extends ServerPlayer {
         float before = getHealth();
         super.actuallyHurt(source, amount);
         moments.damage(source, before, getHealth());
+        if (getHealth() < before) controller.mobHurt(source);
     }
 
     @Override
@@ -103,22 +109,13 @@ public final class BotPlayer extends ServerPlayer {
         moments.emit("item_broke", net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(item).toString());
     }
 
-    /**
-     * Until respawning is implemented, a dead bot leaves the game; its items drop as usual. Health
-     * and hunger are reset before it leaves, because leaving saves player data and a bot spawned
-     * again under the same name would otherwise load in dead.
-     */
+    /** Vanilla death owns drops and keepInventory; respawning runs on a later server tick. */
     @Override
     public void die(DamageSource source) {
+        if (isDeadOrDying() && respawnTicks > 0) return;
         moments.death(source);
         controller.stop();
         super.die(source);
-        BridgeServer.botDied(this);
-        BotManager.forget(this);
-        setHealth(getMaxHealth());
-        foodData = new FoodData();
-        if (connection instanceof BotPacketListener listener) {
-            listener.disconnect(new DisconnectionDetails(Component.literal("Died")));
-        }
+        BridgeServer.botDied(this, source);
     }
 }

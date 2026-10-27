@@ -165,3 +165,28 @@ lava, doors, protecting player builds).
 The user writes Russian, casually, and wants results more than explanations. Answer in Russian,
 lead with what changed and how to try it in game, mention what you could not verify, and keep
 English to code, commands and commit messages.
+
+
+## Live autoplay recovery (second session)
+
+- Build with a client running: `./gradlew build --offline -x deployJar -x removeOldDeployedJars`.
+  Set JDK 21 first; set `GRADLE_USER_HOME=C:/Users/ncpaa/.gradle` if the wrapper misses its cached distribution.
+- Death uses vanilla drops/keepInventory, then `PlayerList.respawn` after 20 ticks. The respawn mixin
+  preserves BotPlayer and its inert listener; BotManager tracks the replacement. `bot.died` carries
+  cause, position and items_dropped, followed by `bot.respawned`. Brain waits and continues autoplay.
+- Danger pauses task ticking/timeouts and navigation (including idle pathing hotbar rearrangement). It fights visible approaching hostiles within
+  6 blocks or mob attackers, through player attacks and cooldown: sword > axe > pickaxe > hand.
+  It retreats below 30% health or when outnumbered, and resumes after threats die or leave 16 blocks.
+  Moments: danger_reflex, danger_clear; only danger_failed wakes the brain (low health or continuing
+  damage after 10 seconds). `attack <ref|type>` uses observed entity UUIDs or type names.
+- Craft station recovery is best effort: pickup failure reports `crafted ... (left a crafting_table at x y z)`.
+  Material forecasts reject deficits, allowing incidental pickups. Opening a remembered station allows
+  navigation time rather than only the short menu timeout.
+- `look food` includes observed animals, food drops and crops. Failed look-in hints remembered containers.
+  Bridge goto/gather accept quoted comma-separated refs (first ref) and nested `{ref: "t1"}` values.
+- Sessions rotate every 10 turns with goal, inventory summary, last 3 task results and current scene line.
+  Scene output caps at 12 lines and two representatives per class, including structures.
+- After BridgeTools changes run `node brain/bench/sync-tools.js`; tools.json is generated.
+  Socket GameTests use port zero; an occupied live bridge port warns without failing the server.
+  Run the full GameTest suite once at the end; inspect required tests, failed at and exceptions in
+  build/gametest.log. Node: `node --test brain/test/`. Leave changes uncommitted when requested.

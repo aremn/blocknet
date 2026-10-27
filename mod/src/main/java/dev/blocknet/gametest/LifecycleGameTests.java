@@ -12,7 +12,7 @@ import net.minecraft.world.phys.Vec3;
 import net.neoforged.neoforge.gametest.GameTestHolder;
 import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
 
-/** Bots moving at player speed, dying and being spawned again. */
+/** Bots moving at player speed and automatically respawning through vanilla player lifecycle. */
 @GameTestHolder(Blocknet.MOD_ID)
 @PrefixGameTestTemplate(false)
 public final class LifecycleGameTests {
@@ -32,17 +32,21 @@ public final class LifecycleGameTests {
         });
     }
 
-    /** A bot spawned again under the name of one that died comes back alive and takes orders. */
+    /** Damage kills the old body; the tracked replacement respawns alive and takes orders. */
     @GameTest(template = "arena", timeoutTicks = 300)
     public static void respawnsAliveAfterDeath(GameTestHelper helper) {
         TestArena.floor(helper);
         BotPlayer first = TestArena.spawnBot(helper, "BnPhoenix", new Vec3(1.5, 1, 4.5));
+        first.getInventory().clearContent();
+        first.getInventory().add(new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.DIAMOND));
+        first.setRespawnPosition(helper.getLevel().dimension(), first.blockPosition(), 0, true, false);
         first.hurt(first.damageSources().genericKill(), Float.MAX_VALUE);
         AtomicReference<BotPlayer> second = new AtomicReference<>();
         BlockPos goal = helper.absolutePos(new BlockPos(5, 1, 4));
-        helper.runAfterDelay(10, () -> {
-            helper.assertTrue(BotManager.get("BnPhoenix") == null, "the dead bot is no longer tracked");
-            BotPlayer bot = TestArena.spawnBot(helper, "BnPhoenix", new Vec3(1.5, 1, 4.5));
+        helper.runAfterDelay(25, () -> {
+            BotPlayer bot = BotManager.get("BnPhoenix");
+            helper.assertTrue(bot != null && bot != first && bot.isAlive(), "automatically respawned and tracked");
+            helper.assertTrue(bot.getInventory().countItem(net.minecraft.world.item.Items.DIAMOND) == 0, "death drops inventory");
             bot.controller().goTo(goal, message -> {});
             second.set(bot);
         });
@@ -72,6 +76,7 @@ public final class LifecycleGameTests {
         helper.succeedWhen(() -> {
             helper.assertTrue(alive.blockPosition().equals(goal), "the living bot took the order, is at " + alive.blockPosition().toShortString());
             BotManager.despawn("BnSurvivor");
+            BotManager.despawn("BnFallen");
         });
     }
 }

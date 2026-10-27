@@ -23,7 +23,7 @@ public final class BridgeTools {
         add("inv", "Read inventory and tool, food and space hints.", false);
         add("changes", "Read state changes since this connection's last changes call.", false);
         add("memory", "Read remembered container contents; optionally filter items.", false, "filter?");
-        add("look", "Return the scene; recent nearby looks use one frontal frame, fresh forces a 360 degree turn; optional focus: trees, ores, water, danger, built, stations.", true, "focus?", "fresh?");
+        add("look", "Return the scene; recent nearby looks use one frontal frame, fresh forces a 360 degree turn; optional focus: trees, ores, water, danger, built, stations, food.", true, "focus?", "fresh?");
         add("scene", "Read the remembered scene instantly, without turning; delta gives one line of changes.", false, "delta?", "goal?");
         add("explore", "Walk through observed safe space toward a frontier, then look and report new objects.", true, "direction?", "distance?");
         add("plan", "Plan recipes without acting; mode craft makes new items, get counts owned items.", false,
@@ -43,6 +43,7 @@ public final class BridgeTools {
         add("mine", "Walk to and mine one block, then collect its drops; needs a suitable tool.", true, "x", "y", "z");
         add("gather", "Gather MORE items from an observed ref or logs/wood, stone/cobblestone, coal, iron, dirt, sand or exact item id; requires the right tool.", true, "item?", "ref?", "target?", "count?");
         add("use", "Walk to and right-click one block; sneak bypasses block interactions.", true, "x", "y", "z", "sneak?");
+        add("attack", "Attack an observed entity ref or type with the best weapon; retreat when overwhelmed.", true, "target");
         add("eat", "Eat one inventory food through player use; omitted item selects safe nutritious food.", true, "item?");
         add("place", "Place an inventory block at x y z; optional clicked face: up/down/north/south/east/west. Sneaks automatically.", true, "item", "x", "y", "z", "face?");
         add("craft", "Craft a count of NEW items; look for stations first and read missing-material hints.", true, "item", "count?");
@@ -108,11 +109,21 @@ public final class BridgeTools {
 
     public static void run(BotPlayer bot, Tool tool, JsonObject args,
             Map<String, Map<String, Long>> baselines, Consumer<String> report) {
+        args = args.deepCopy();
+        for (String key : List.of("ref", "item", "target")) {
+            if (args.has(key) && (tool.name().equals("goto") || tool.name().equals("gather"))) {
+                var value = args.get(key);
+                if (value.isJsonObject() && value.getAsJsonObject().has("ref")) value = value.getAsJsonObject().get("ref");
+                if (value.isJsonPrimitive() && value.getAsJsonPrimitive().isString())
+                    args.addProperty(key, normalizeRef(value.getAsString()));
+            }
+        }
+        final JsonObject normalizedArgs = args;
         for (var key : tool.params().getAsJsonArray("required")) {
             if (!args.has(key.getAsString())) throw new IllegalArgumentException("Missing " + key.getAsString());
         }
         JsonObject properties = tool.params().getAsJsonObject("properties");
-        args.entrySet().forEach(entry -> {
+        normalizedArgs.entrySet().forEach(entry -> {
             String key = entry.getKey();
             var value = entry.getValue();
             if (!properties.has(key) || !value.isJsonPrimitive()) {
@@ -143,6 +154,7 @@ public final class BridgeTools {
             throw new IllegalArgumentException("goto needs ref OR x, y, z");
         }
         if (tool.name().equals("scene") && args.has("goal")) bot.controller().scene().goal(args.get("goal").getAsString());
+        if (tool.name().equals("attack")) { bot.controller().attack(word(args, "target", null), report); return; }
         String name = bot.getGameProfile().getName();
         if (tool.name().equals("say")) {
             String text = args.get("text").getAsString().replaceAll("[\\r\\n]+", " ");
@@ -205,6 +217,11 @@ public final class BridgeTools {
         };
         bot.getServer().getCommands().performPrefixedCommand(source.withSource(output), String.join(" ", words));
         if (tool.name().equals("stop")) report.accept("stopped");
+    }
+
+    public static String normalizeRef(String value) {
+        String first = value.trim().replace("\"", "").split(",", 2)[0].trim();
+        return first.matches("[a-z][0-9]+") ? first : value;
     }
 
     private static String word(JsonObject args, String key, String fallback) {

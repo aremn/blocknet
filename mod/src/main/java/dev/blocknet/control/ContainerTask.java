@@ -112,7 +112,9 @@ final class ContainerTask {
             if (replaced || !state.hasBlockEntity() && state.getMenuProvider(bot.level(), pos) == null) {
                 bot.containerMemory().forget(bot, pos);
             }
-            fail("not a container or container did not open");
+            fail("not a container or container did not open" + bot.worldMemory().nearby(bot, 64).stream()
+                .filter(e -> e.container() && !e.pos().equals(pos)).limit(3)
+                .map(e -> "; remembered container " + e.pos().toShortString()).collect(Collectors.joining()));
             return;
         }
         menu = bot.containerMenu;

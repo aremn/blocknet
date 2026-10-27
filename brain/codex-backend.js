@@ -30,7 +30,7 @@ export class CodexBackend {
     this.options = options;
     this.model = options.model ?? 'gpt-6-luna';
     this.spawnProcess = options.spawnProcess ?? spawn;
-    this.maxTurns = options.maxTurns ?? 30;
+    this.maxTurns = options.maxTurns ?? 10;
     this.turns = 0;
     this.totalUsage = {};
   }

@@ -176,3 +176,42 @@ test('prompt build keeps the latest player language rule in autoplay', async () 
     assert.match(systemPrompt, /language the player last used, including autoplay chat/);
   } finally { session.close(); }
 });
+
+
+test('death waits for respawn, then fake autoplay continues with a death note', async () => {
+  const body = new FakeBody(), prompts = [];
+  const session = new BrainSession({ body, backend: fakeBackend(async text => { prompts.push(text); return { text: '<silent>' }; }),
+    bot: 'Kirill', goal: 'survive', maxTurns: 3, pauseMs: 20 });
+  try {
+    await session.start(); await until(() => session.turns === 1 && !session.busy);
+    body.emit('event', { type: 'bot.died', bot: 'Kirill', position: '1 2 3', cause: 'zombie', items_dropped: true });
+    await sleep(60); assert.equal(session.turns, 1); assert.equal(session.paused, false);
+    body.emit('event', { type: 'bot.respawned', bot: 'Kirill', position: '4 5 6' });
+    await until(() => session.ended && !session.busy);
+    assert.equal(session.turns, 3);
+    assert.ok(prompts.some(text => text.includes('you died at 1 2 3 (zombie); items dropped there')));
+  } finally { session.close(); }
+});
+
+test('session rotates after ten turns and sends goal, inventory, last three results and scene', async () => {
+  const body = new FakeBody(), prompts = []; let closes = 0;
+  body.hello.tools = [{ name: 'scene' }];
+  body.call = async (bot, tool) => ({ result: tool === 'changes'
+    ? 'body r1: health 20/20; inventory r1: selected 0; main: iron_sword; 4 oak_log slots [1]; 3 apple slots [2]'
+    : tool === 'scene' ? 'plains, day, clear. you: on stone\ntrees: t1 oak' : 'ok' });
+  const backend = fakeBackend(async text => {
+    prompts.push(text);
+    if (prompts.length <= 10) body.emit('event', { type: 'task.finished', bot: 'Kirill', result: `result ${prompts.length}` });
+    return { text: '<silent>' };
+  });
+  backend.close = () => { closes++; };
+  const session = new BrainSession({ body, backend, bot: 'Kirill', goal: 'build shelter', maxTurns: 11, pauseMs: 1 });
+  try {
+    await session.start(); await until(() => session.ended && !session.busy);
+    assert.equal(closes, 1);
+    assert.ok(!prompts[9].includes('Session summary:'));
+    assert.match(prompts[10], /Session summary: goal: build shelter; inventory: 4 oak_log, 3 apple/u);
+    assert.match(prompts[10], /last 3 results: \["result 8","result 9","result 10"\]/u);
+    assert.match(prompts[10], /current scene: plains, day, clear/u);
+  } finally { session.close(); }
+});

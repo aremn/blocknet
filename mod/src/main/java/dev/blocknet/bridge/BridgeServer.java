@@ -34,6 +34,7 @@ import net.neoforged.neoforge.event.server.ServerStoppingEvent;
 /** Local JSON-RPC lines transport. Only server.execute callbacks touch Minecraft state. */
 public final class BridgeServer implements AutoCloseable {
     private static BridgeServer active;
+    private static final Set<BridgeServer> SERVERS = ConcurrentHashMap.newKeySet();
     private static final Gson GSON = new Gson();
     private final MinecraftServer server;
     private final String token;
@@ -50,6 +51,7 @@ public final class BridgeServer implements AutoCloseable {
         Thread accept = new Thread(this::accept, "blocknet-bridge-accept");
         accept.setDaemon(true);
         accept.start();
+        SERVERS.add(this);
     }
 
     public int port() { return listener.getLocalPort(); }
@@ -94,8 +96,22 @@ public final class BridgeServer implements AutoCloseable {
         if (active != null) active.broadcast(event);
     }
 
-    public static void botDied(BotPlayer bot) {
-        if (active != null) active.broadcast(object("type", "bot.died", "bot", bot.getGameProfile().getName()));
+    public static void botDied(BotPlayer bot, net.minecraft.world.damagesource.DamageSource source) {
+        var event = object("type", "bot.died", "bot", bot.getGameProfile().getName(),
+            "cause", source.getEntity() == null ? source.getMsgId()
+                : net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE.getKey(source.getEntity().getType()).getPath(),
+            "position", bot.getBlockX() + " " + bot.getBlockY() + " " + bot.getBlockZ());
+        event.addProperty("items_dropped", !bot.level().getGameRules().getBoolean(net.minecraft.world.level.GameRules.RULE_KEEPINVENTORY));
+        SERVERS.forEach(bridge -> bridge.broadcast(event));
+    }
+
+    public static void botRespawned(BotPlayer bot) {
+        var event = object("type", "bot.respawned", "bot", bot.getGameProfile().getName(),
+            "position", bot.getBlockX() + " " + bot.getBlockY() + " " + bot.getBlockZ());
+        SERVERS.forEach(bridge -> {
+            bridge.clients.forEach(client -> client.baselines.remove(bot.getGameProfile().getName()));
+            bridge.broadcast(event);
+        });
     }
 
     private void accept() {
@@ -119,6 +135,7 @@ public final class BridgeServer implements AutoCloseable {
     @Override
     public void close() {
         closed = true;
+        SERVERS.remove(this);
         try { listener.close(); } catch (IOException ignored) { }
         clients.forEach(Client::close);
     }

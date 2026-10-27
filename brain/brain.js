@@ -40,8 +40,8 @@ export class CompactState {
     }
     const inventory = text.match(/inventory r\d+: ([\s\S]*?)(?=\n(?:body|task) r\d+:|$)/u)?.[1];
     if (inventory) {
-      this.facts.held = inventory.match(/^main: (?:\d+ )?([\w:./-]+)/mu)?.[1] ?? 'empty';
-      this.facts.inventory = inventory.split('\n').filter(line => line.includes(' slots [')).map(line => {
+      this.facts.held = inventory.match(/(?:^|; )main: (?:\d+ )?([\w:./-]+)/mu)?.[1] ?? 'empty';
+      this.facts.inventory = inventory.split(/\n|; /u).filter(line => line.includes(' slots [')).map(line => {
         const match = line.match(/^(?:(\d+) )?([\w:./-]+)/u);
         return match ? `${match[1] ?? 1} ${match[2]}` : '';
       }).filter(Boolean).join(', ') || 'empty';
@@ -69,6 +69,7 @@ export class BrainSession {
     Object.assign(this, { body, backend, bot, goal, maxTurns, maxMinutes, pauseMs, log, auditFile, lessonsFile, usageFile });
     this.router = new ChatRouter(bot, aliases, listen);
     this.compact = new CompactState(); this.summary = new ResultSummary();
+    this.recentResults = []; this.sessionTurns = 0;
     this.queue = []; this.events = []; this.busy = false; this.generation = 0; this.turns = 0;
     this.paused = false; this.ended = false; this.closed = false;
     this.onEvent = event => this.event(event);
@@ -106,7 +107,7 @@ export class BrainSession {
   }
   schedule() {
     clearTimeout(this.nextTimer);
-    if (this.closed || this.busy || !this.goal || this.paused || this.ended || !this.body.hello) return;
+    if (this.awaitingRespawn || this.closed || this.busy || !this.goal || this.paused || this.ended || !this.body.hello) return;
     if (!this.body.hello.bots?.some(name => name.toLowerCase() === this.bot.toLowerCase())) return;
     this.nextTimer = setTimeout(() => {
       if (this.queue.length === 0) this.queue.push({ autoplay: true, from: 'Goal', text: this.goal });
@@ -114,7 +115,7 @@ export class BrainSession {
     }, this.pauseMs);
   }
   cancel(clear = true) {
-    this.generation++; this.backend.close(); this.compact.reset();
+    this.generation++; this.backend.close(); this.sessionTurns = 0; this.compact.reset();
     clearTimeout(this.nextTimer);
     if (clear) this.queue.length = 0;
   }
@@ -139,10 +140,26 @@ export class BrainSession {
       this.events.push(perception(event)); if (this.events.length > 16) this.events.shift();
     }
     if (event.type !== 'chat') {
-      if (event.type === 'moment' || event.type === 'task.finished' || event.type === 'bot.died') {
+      if (event.type === 'moment' || event.type === 'task.finished' || event.type === 'bot.died' || event.type === 'bot.respawned') {
         this.events.push(perception(event)); if (this.events.length > 16) this.events.shift();
       }
-      if (event.type === 'bot.died') { this.paused = true; this.cancel(); }
+      if (event.type === 'task.finished') {
+        this.recentResults.push(String(event.result).slice(0, 300));
+        this.recentResults = this.recentResults.slice(-3);
+      }
+      if (event.type === 'bot.died') {
+        this.awaitingRespawn = true; this.cancel(false);
+        this.events.push(`you died at ${event.position} (${event.cause}); ${event.items_dropped === false ? 'inventory kept' : 'items dropped there'}`);
+      }
+      if (event.type === 'bot.respawned') {
+        this.awaitingRespawn = false;
+        this.processQueue().catch(e => this.diagnostic(e)); this.schedule();
+      }
+      if (event.type === 'moment' && event.kind === 'danger_failed' && this.goal && !this.paused && !this.ended) {
+        this.cancel(false);
+        this.queue.push({ autoplay: true, from: 'Body', text: this.goal });
+        this.processQueue().catch(e => this.diagnostic(e));
+      }
       return;
     }
     const order = this.router.route(event.text, event.from, this.body.hello?.bots ?? [this.bot]);
@@ -173,10 +190,10 @@ export class BrainSession {
     }).catch(e => this.diagnostic(e));
   }
   async processQueue() {
-    if (this.busy || this.closed) return;
+    if (this.busy || this.closed || this.awaitingRespawn) return;
     this.busy = true;
     try {
-      while (this.queue.length && !this.closed) {
+      while (this.queue.length && !this.closed && !this.awaitingRespawn) {
         const message = this.queue.shift();
         if (message.rule) { await this.runRule(message.rule, message.from).catch(e => this.diagnostic(e)); continue; }
         if (message.autoplay && (this.paused || this.ended)) continue;
@@ -202,13 +219,19 @@ export class BrainSession {
             ? `Session goal: ${this.goal || 'help the player'}. Give 3-5 short concrete lessons: what worked, what went wrong, which tool you missed. No tools, no game actions; reflect only. Recent events: ${JSON.stringify(events)}.`
             : message.autoplay ? `Continue toward the goal: ${this.goal}; current state: ${state || JSON.stringify(this.compact.facts)}. Scene: ${scene || 'unknown; try look'}. Events: ${JSON.stringify(events)}. Pick the next action.`
               : `You are ${this.bot}. ${message.from}: ${message.text}${state}${scene ? `\nScene: ${scene}` : ''}${events.length ? `\nEvents: ${JSON.stringify(events)}` : ''}`;
-          const prompt = `Answer in the language the player last used, including autoplay chat. Latest player message: ${JSON.stringify(this.lastPlayerMessage ?? null)}.\n${content}`;
+          let rotation = '';
+          if (this.sessionTurns >= 10) {
+            this.backend.close(); this.sessionTurns = 0;
+            rotation = `Session summary: goal: ${this.goal || message.text}; inventory: ${this.compact.facts.inventory}; last 3 results: ${JSON.stringify(this.recentResults)}; current scene: ${String(scene).split('\n')[0] || 'unknown'}.\n`;
+          }
+          const prompt = rotation + `Answer in the language the player last used, including autoplay chat. Latest player message: ${JSON.stringify(this.lastPlayerMessage ?? null)}.\n${content}`;
           this.log?.write('model_message', { role: 'user', text: prompt.slice(0, 300) });
           if (this.auditFile) await writeFile(this.auditFile, '');
           if (generation !== this.generation) continue;
           called = true;
           if (!message.reflection) this.turns++;
           result = await this.backend.send(prompt);
+          this.sessionTurns++;
           if (generation !== this.generation || this.closed) continue;
           this.log?.write('model_message', { role: 'final', text: String(result.text ?? '').slice(0, 300) });
           if (message.reflection) {
@@ -266,7 +289,7 @@ export async function main() {
   const promptFile = resolve(logDir, `prompt.${bot}.md`);
   await writeFile(promptFile, prompt);
   const backend = createBackend(option('backend', process.env.BLOCKNET_BACKEND ?? 'codex'), {
-    cwd: rootDir, mcpConfig, mcpServer, prompt, promptFile, maxTurns: 30,
+    cwd: rootDir, mcpConfig, mcpServer, prompt, promptFile, maxTurns: 10,
     onMessage: text => log.write('model_message', { role: 'assistant', text: String(text ?? '').slice(0, 300) }),
   });
   const session = new BrainSession({ body, backend, bot, aliases, goal, log, auditFile, lessonsFile,

@@ -76,6 +76,42 @@ public final class BridgeGameTests {
         });
     }
 
+    @GameTest(template = "arena", timeoutTicks = 250)
+    public static void deathRespawnsAndBroadcastsLifecycle(GameTestHelper helper) throws Exception {
+        TestArena.floor(helper);
+        var bot = TestArena.spawnBot(helper, "BnReviveEvent", new Vec3(4.5, 1, 4.5));
+        bot.setRespawnPosition(helper.getLevel().dimension(), bot.blockPosition(), 0, true, false);
+        var bridge = new BridgeServer(helper.getLevel().getServer(), 0, "respawn-test");
+        var result = CompletableFuture.runAsync(() -> {
+            try (bridge; Socket socket = new Socket("127.0.0.1", bridge.port())) {
+                socket.setSoTimeout(15000);
+                var input = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
+                var output = new PrintWriter(socket.getOutputStream(), true, StandardCharsets.UTF_8);
+                output.println("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"hello\",\"params\":{\"protocol\":1,\"token\":\"respawn-test\"}}");
+                read(input);
+                helper.getLevel().getServer().execute(() -> bot.hurt(bot.damageSources().genericKill(), Float.MAX_VALUE));
+                boolean died = false;
+                while (true) {
+                    var message = read(input);
+                    if (!message.has("params")) continue;
+                    var event = message.getAsJsonObject("params");
+                    if (!event.has("bot") || !event.get("bot").getAsString().equals("BnReviveEvent")) continue;
+                    if (event.get("type").getAsString().equals("bot.died")) {
+                        check(event.has("cause") && event.has("position"), "death carries cause and position"); died = true;
+                    }
+                    if (event.get("type").getAsString().equals("bot.respawned")) {
+                        check(died, "death precedes respawn"); break;
+                    }
+                }
+            } catch (Exception exception) { throw new RuntimeException(exception); }
+        });
+        helper.succeedWhen(() -> {
+            helper.assertTrue(result.isDone(), "waiting for respawn event"); result.join();
+            helper.assertTrue(BotManager.get("BnReviveEvent") != bot && BotManager.get("BnReviveEvent").isAlive(), "new body tracked");
+            BotManager.despawn("BnReviveEvent");
+        });
+    }
+
     private static JsonObject read(BufferedReader reader) throws Exception {
         String line = reader.readLine();
         check(line != null, "socket closed unexpectedly");

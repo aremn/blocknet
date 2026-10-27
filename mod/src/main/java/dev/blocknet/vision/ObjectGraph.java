@@ -46,7 +46,7 @@ public final class ObjectGraph {
             case "ore" -> "ore:" + cell.semantic().kind();
             case "stone", "dirt" -> cell.side() ? "cliff" : "";
             case "water", "lava", "built", "dark" -> category;
-            case "station", "container", "machine" -> category + ":" + cell.semantic().kind();
+            case "crop", "station", "container", "machine" -> category + ":" + cell.semantic().kind();
             default -> "";
         };
     }

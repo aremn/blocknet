@@ -146,6 +146,132 @@ public final class BotController {
         this.scene = new dev.blocknet.vision.Scene(bot);
     }
 
+    private net.minecraft.world.entity.LivingEntity danger;
+    private int dangerTicks;
+    private int lastMobHurt;
+    private boolean dangerWarned;
+    private boolean explicitAttack;
+    private final java.util.Map<java.util.UUID, Double> dangerDistances = new java.util.HashMap<>();
+
+    public boolean defending() { return danger != null; }
+
+    public void mobHurt(net.minecraft.world.damagesource.DamageSource source) {
+        if (bot.isAlive() && source.getEntity() instanceof net.minecraft.world.entity.Mob mob) {
+            lastMobHurt = bot.tickCount;
+            if (danger == null) beginDanger(mob);
+        }
+    }
+
+    /** Refs for entities are their observed UUIDs; type names also resolve only visible entities. */
+    public void attack(String query, Consumer<String> report) {
+        var seen = bot.vision().entities().stream().filter(e -> e.uuid().toString().equals(query)
+            || e.type().equals(query.replace("minecraft:", ""))).findFirst();
+        Entity entity = seen.map(e -> bot.serverLevel().getEntity(e.uuid())).orElse(null);
+        if (!(entity instanceof net.minecraft.world.entity.LivingEntity living) || !living.isAlive()
+                || !bot.hasLineOfSight(living)) { report.accept("none seen for " + query + "; try look"); return; }
+        start(Task.IDLE, bot.blockPosition(), report);
+        explicitAttack = true;
+        beginDanger(living);
+    }
+
+    private void beginDanger(net.minecraft.world.entity.LivingEntity mob) {
+        danger = mob; dangerTicks = 0; dangerWarned = false;
+        stopPathing(); abortBreaking();
+        if (task == Task.MINE_BREAK) { task = Task.MINE_APPROACH; breakProgress = 0; breakTicks = 0; }
+        bot.releaseUsingItem();
+        bot.moments().emit("danger_reflex", "paused task to defend against "
+            + BuiltInRegistries.ENTITY_TYPE.getKey(mob.getType()).getPath());
+    }
+
+    private boolean tickDanger() {
+        if (!bot.isAlive()) return true;
+        var visible = bot.level().getEntities(bot, bot.getBoundingBox().inflate(16),
+            e -> e instanceof net.minecraft.world.entity.monster.Enemy && e.isAlive() && bot.hasLineOfSight(e));
+        if (danger == null) {
+            for (Entity entity : visible) {
+                double distance = bot.distanceToSqr(entity);
+                Double previous = dangerDistances.put(entity.getUUID(), distance);
+                boolean approaching = previous != null && distance < previous - .01
+                    || entity.getDeltaMovement().dot(bot.position().subtract(entity.position())) > .01;
+                if (distance <= 36 && approaching) { beginDanger((net.minecraft.world.entity.LivingEntity) entity); break; }
+            }
+            dangerDistances.keySet().removeIf(id -> visible.stream().noneMatch(e -> e.getUUID().equals(id)));
+        }
+        if (danger == null) return false;
+        if (!danger.isAlive() || danger.isRemoved() || bot.distanceToSqr(danger) > 256) {
+            danger = null;
+            // Check the next visible threat before resuming work.
+            var next = visible.stream().filter(e -> bot.distanceToSqr(e) <= 36).findFirst();
+            if (next.isPresent()) { beginDanger((net.minecraft.world.entity.LivingEntity) next.get()); return true; }
+            if (task == Task.EAT || task == Task.PLACE) {
+                for (int slot = 0; slot < 36; slot++) {
+                    if (bot.getInventory().getItem(slot).is(actionItem.getItem())) {
+                        hold(slot);
+                        if (task == Task.EAT) bot.gameMode.useItem(bot, bot.serverLevel(), bot.getMainHandItem(), InteractionHand.MAIN_HAND);
+                        break;
+                    }
+                }
+            }
+            bot.moments().emit("danger_clear", "resuming paused task");
+            if (explicitAttack) { explicitAttack = false; finish("attacked; threat gone"); }
+            return false;
+        }
+        stopPathing();
+        bot.zza = 0; bot.xxa = 0; bot.setJumping(false);
+        boolean low = bot.getHealth() < bot.getMaxHealth() * .3f;
+        boolean retreat = low || visible.stream().filter(e -> bot.distanceToSqr(e) <= 64).count() > 1;
+        if (!dangerWarned && (low || ++dangerTicks >= 200 && bot.tickCount - lastMobHurt < 60)) {
+            dangerWarned = true;
+            bot.moments().emit("danger_failed", "defense needs help; health " + bot.getHealth());
+        }
+        if (!bot.hasLineOfSight(danger)) return true; // Never pursue hidden live coordinates.
+        if (retreat) {
+            Vec3 away = bot.position().subtract(danger.position()).multiply(1, 0, 1).normalize();
+            Vec3 goal = bot.position().add(away.scale(3));
+            BlockPos feet = BlockPos.containing(goal);
+            if (canStandOn(bot.serverLevel(), feet.below()) && isRoom(bot.serverLevel(), feet)
+                    && isRoom(bot.serverLevel(), feet.above())) walkTowards(goal);
+            return true;
+        }
+        selectWeapon();
+        double distance = bot.distanceTo(danger);
+        if (distance > 2.7) walkTowards(danger.position());
+        else {
+            lookAt(danger.getEyePosition());
+            if (distance < 1.6) bot.zza = -.5f;
+            if (isLookingAt(danger.getEyePosition()) && bot.canInteractWithEntity(danger.getBoundingBox(), 0)
+                    && bot.getAttackStrengthScale(.5f) >= .95f) {
+                bot.attack(danger);
+                bot.swing(InteractionHand.MAIN_HAND);
+            }
+        }
+        return true;
+    }
+
+    private void selectWeapon() {
+        Inventory inventory = bot.getInventory();
+        int best = inventory.selected;
+        double score = -1;
+        for (int slot = 0; slot < inventory.items.size(); slot++) {
+            ItemStack stack = inventory.getItem(slot);
+            var kinds = ToolFacts.kinds(stack);
+            int rank = kinds.contains("sword") ? 3 : kinds.contains("axe") ? 2 : kinds.contains("pickaxe") ? 1 : 0;
+            // Use vanilla item attribute modifiers to choose between weapons of the same kind.
+            double[] damage = {0};
+            stack.forEachModifier(net.minecraft.world.entity.EquipmentSlot.MAINHAND, (attribute, modifier) -> {
+                if (attribute.equals(net.minecraft.world.entity.ai.attributes.Attributes.ATTACK_DAMAGE)) damage[0] += modifier.amount();
+            });
+            double candidate = rank * 1000 + damage[0];
+            if (candidate > score) { score = candidate; best = slot; }
+        }
+        if (best >= Inventory.getSelectionSize()) {
+            ItemStack held = inventory.getItem(inventory.selected);
+            inventory.setItem(inventory.selected, inventory.getItem(best)); inventory.setItem(best, held);
+        } else inventory.selected = best;
+    }
+
+    void resumeCraftCleanup() { abortBreaking(); stopPathing(); task = Task.CRAFT; }
+
     /** The pathfinder owns movement only while this controller has a navigation leg. */
     public boolean isNavigating() {
         return pathGoal != null;
@@ -249,13 +375,15 @@ public final class BotController {
     }
 
     public void gather(String target, int count, Consumer<String> reporter) {
+        target = dev.blocknet.bridge.BridgeTools.normalizeRef(target);
         start(Task.GATHER, bot.blockPosition(), reporter);
         scene.goal(target);
         gathering = new GatherTask(bot, this, target, count);
     }
 
     public void goTo(String ref, Consumer<String> reporter) {
-        var object = bot.vision().objects().stream().filter(o -> o.ref().equals(ref)).findFirst();
+        final String normalizedRef = dev.blocknet.bridge.BridgeTools.normalizeRef(ref);
+        var object = bot.vision().objects().stream().filter(o -> o.ref().equals(normalizedRef)).findFirst();
         if (object.isEmpty()) { reporter.accept("none seen for " + ref + "; try look or explore"); return; }
         start(Task.GOTO, object.get().nearest(), reporter);
         navigationGoal = new GoalGetToBlock(object.get().nearest());
@@ -563,6 +691,7 @@ public final class BotController {
     }
 
     public void stop() {
+        danger = null; explicitAttack = false;
         if (excavating != null) { excavating = null; reporter.accept("failed: cancelled"); }
         exploring = null;
         exploreBefore = null;
@@ -641,6 +770,7 @@ public final class BotController {
 
     /** Called from {@link BotPlayer#tick()} before physics: sets this tick's inputs. */
     public void tick() {
+        if (tickDanger()) return;
         if (usedContainerMenu != null) {
             if (bot.containerMenu == usedContainerMenu && usedContainerMenu.stillValid(bot)) {
                 bot.containerMemory().observe(bot, usedContainerPos);

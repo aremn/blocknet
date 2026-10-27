@@ -152,10 +152,12 @@ public final class FollowGameTests {
         follower.controller().follow(leader, reports::add);
         helper.startSequence()
             .thenExecuteAfter(10, () -> follower.hurt(follower.damageSources().genericKill(), Float.MAX_VALUE))
-            .thenExecuteAfter(20, () -> {
-                helper.assertTrue(BotManager.get("BnFollowDeath") == null, "follower died");
+            .thenExecuteAfter(25, () -> {
+                helper.assertTrue(BotManager.get("BnFollowDeath") != null && BotManager.get("BnFollowDeath") != follower
+                    && BotManager.get("BnFollowDeath").isAlive(), "follower respawned and remains tracked");
                 helper.assertTrue(reports.equals(List.of("stopped")), "one follow report on death: " + reports);
                 BotManager.despawn("BnDeathLead");
+                BotManager.despawn("BnFollowDeath");
             })
             .thenSucceed();
     }

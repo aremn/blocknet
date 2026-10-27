@@ -21,7 +21,7 @@ export class ClaudeBackend {
     this.options = options;
     this.model = options.model ?? 'haiku';
     this.turns = 0;
-    this.maxTurns = options.maxTurns ?? 30;
+    this.maxTurns = options.maxTurns ?? 10;
     this.spawnProcess = options.spawnProcess ?? spawn;
   }
 

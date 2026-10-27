@@ -33,4 +33,15 @@ public abstract class PlayerListMixin {
         }
         return original.call(server, connection, player, cookie);
     }
+    @WrapOperation(method = "respawn",
+        at = @At(value = "NEW", target = "net/minecraft/server/level/ServerPlayer"))
+    private ServerPlayer blocknet$respawnBot(MinecraftServer server, net.minecraft.server.level.ServerLevel level,
+            com.mojang.authlib.GameProfile profile, net.minecraft.server.level.ClientInformation info,
+            Operation<ServerPlayer> original, ServerPlayer oldPlayer) {
+        if (!(oldPlayer instanceof BotPlayer)) return original.call(server, level, profile, info);
+        BotPlayer bot = new BotPlayer(server, level, profile);
+        // Vanilla's packet handler normally rebinds this after respawn; our inert listener has no handler.
+        oldPlayer.connection.player = bot;
+        return bot;
+    }
 }

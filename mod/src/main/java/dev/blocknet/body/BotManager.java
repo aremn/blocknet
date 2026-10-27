@@ -100,10 +100,15 @@ public final class BotManager {
         return Collections.unmodifiableCollection(BOTS.values());
     }
 
-    /** Stops tracking a bot that is leaving (for example after dying), so no command reaches it. */
-    static void forget(BotPlayer bot) {
-        BOTS.values().remove(bot);
-        dev.blocknet.bridge.BridgeServer.botsChanged();
+    static void respawn(BotPlayer dead) {
+        if (get(dead.getGameProfile().getName()) != dead) return;
+        IBaritone.KEY.remove(dead);
+        IInteractionController.KEY.remove(dead);
+        BotPlayer alive = (BotPlayer) dead.getServer().getPlayerList().respawn(dead, false,
+            net.minecraft.world.entity.Entity.RemovalReason.KILLED);
+        PathingDefaults.apply(IBaritone.KEY.get(alive).settings());
+        BOTS.put(key(alive.getGameProfile().getName()), alive);
+        dev.blocknet.bridge.BridgeServer.botRespawned(alive);
     }
 
     public static void onPlayerLoggedOut(PlayerEvent.PlayerLoggedOutEvent event) {
