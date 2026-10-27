@@ -2,6 +2,8 @@ package dev.blocknet.body;
 
 import com.mojang.authlib.GameProfile;
 import dev.blocknet.Blocknet;
+import dev.blocknet.pathing.api.IBaritone;
+import dev.blocknet.pathing.api.utils.IInteractionController;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -91,6 +93,9 @@ public final class BotManager {
     public static void onPlayerLoggedOut(PlayerEvent.PlayerLoggedOutEvent event) {
         if (event.getEntity() instanceof BotPlayer bot) {
             BOTS.values().remove(bot);
+            // The pathfinder keeps per-entity state by UUID; a bot spawned again starts fresh.
+            IBaritone.KEY.remove(bot);
+            IInteractionController.KEY.remove(bot);
         }
     }
 

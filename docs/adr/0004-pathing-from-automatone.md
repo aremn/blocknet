@@ -20,6 +20,18 @@ Automatone (Ladysnake) — серверный форк Baritone, но офици
 - Заменить абстракции моба (`LivingEntityInventory`, `LivingEntityInteractionManager`) интерфейсом
   `BotHands` поверх настоящего игрока.
 
+## Как сделано (2026-10-27)
+
+- `pathing/` — библиотека (`FMLModType: GAMELIBRARY`), вложена в jar мода через jarJar; в dev-запусках
+  её классы подключаются к моду через блок `mods`.
+- Миксины PlayerEngine не нужны. Единственное, что пришлось открыть, —
+  `ServerChunkCache.getVisibleChunkIfPresent` (access transformer мода): путь считается в фоновом
+  потоке, а ванильный `getChunkNow` вне серверного потока возвращает `null`.
+- Абстракции моба заменены на `BotHands` (инвентарь игрока) и `PlayerInteractionController`
+  (ломание и установка через `ServerPlayerGameMode`). Голод и усталость считает сама игра.
+- `InputOverrideHandler` применяет нажатия каждый тик: у игрока ввод затухает, а ломание блоков
+  продвигается только пока работает помощник ломания.
+
 ## Последствия
 
 - Наши изменения в `pathing/` публикуются под LGPL-3.0; остальной код мода может иметь свою лицензию.

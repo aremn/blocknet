@@ -1,6 +1,10 @@
 package dev.blocknet.control;
 
 import dev.blocknet.body.BotPlayer;
+import dev.blocknet.pathing.api.IBaritone;
+import dev.blocknet.pathing.api.pathing.goals.Goal;
+import dev.blocknet.pathing.api.pathing.goals.GoalBlock;
+import dev.blocknet.pathing.api.pathing.goals.GoalGetToBlock;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -27,7 +31,8 @@ import net.minecraft.world.phys.Vec3;
 /**
  * Drives the bot's head, legs and hands each tick for one simple task at a time.
  *
- * <p>Prototype: walking goes in a straight line with jumps (no pathfinding yet). Mining and
+ * <p>Getting somewhere goes through the pathing module (Automatone): it walks around walls, jumps,
+ * pillars up, digs through and swims as needed. Mining and
  * right-clicking go through {@code ServerPlayerGameMode} exactly like a client's packets, so break
  * speed, reach, drops and modded block behaviour (including opening their menus) follow the normal
  * survival rules.
@@ -41,6 +46,8 @@ public final class BotController {
     private static final int MAX_BREAK_TICKS = 20 * 60;
     /** How many leaves or plants the bot may clear on the way to one target. */
     private static final int MAX_CLEARED_OBSTACLES = 8;
+    /** Give up on a path that has not reached its goal after this long (5 minutes). */
+    private static final int MAX_PATH_TICKS = 20 * 60 * 5;
 
     private enum Task { IDLE, GOTO, MINE_APPROACH, MINE_BREAK, COLLECT, USE }
 
@@ -55,6 +62,10 @@ public final class BotController {
     @Nullable
     private Task resumeTask;
     private int clearedObstacles;
+    /** The goal the pathfinder is currently working on for this task, or null if it is idle. */
+    @Nullable
+    private Goal pathGoal;
+    private int pathTicks;
 
     private double bestDistanceSq;
     private int ticksWithoutProgress;
@@ -84,6 +95,7 @@ public final class BotController {
     }
 
     public void stop() {
+        stopPathing();
         abortBreaking();
         task = Task.IDLE;
         target = null;
@@ -118,9 +130,12 @@ public final class BotController {
 
     /** Called from {@link BotPlayer#tick()} before physics: sets this tick's inputs. */
     public void tick() {
-        bot.zza = 0.0F;
-        bot.xxa = 0.0F;
-        bot.setJumping(false);
+        // While the pathfinder drives, it owns the legs (it sets the inputs after this).
+        if (pathGoal == null) {
+            bot.zza = 0.0F;
+            bot.xxa = 0.0F;
+            bot.setJumping(false);
+        }
         if (target == null) {
             return;
         }
@@ -145,15 +160,56 @@ public final class BotController {
         clearedObstacles = 0;
     }
 
-    private void tickGoTo(BlockPos pos) {
-        Vec3 goal = Vec3.atBottomCenterOf(pos);
-        if (hasArrived(goal)) {
-            finish("arrived at " + pos.toShortString());
-            return;
+    private IBaritone pathing() {
+        return IBaritone.KEY.get(bot);
+    }
+
+    /**
+     * Steers toward {@code goal} with the pathfinder. Returns {@link PathState#ARRIVED} once the bot
+     * stands in the goal, {@link PathState#FAILED} if no path exists or it takes too long.
+     */
+    private PathState pathTo(Goal goal) {
+        if (goal.isInGoal(bot.blockPosition())) {
+            stopPathing();
+            return PathState.ARRIVED;
         }
-        walkTowards(goal);
-        if (isStuck(goal)) {
-            fail("stuck on the way to " + pos.toShortString());
+        IBaritone pathing = pathing();
+        if (pathGoal == null) {
+            pathGoal = goal;
+            pathTicks = 0;
+            pathing.getCustomGoalProcess().setGoalAndPath(goal);
+            return PathState.MOVING;
+        }
+        if (++pathTicks > MAX_PATH_TICKS) {
+            stopPathing();
+            return PathState.FAILED;
+        }
+        // The process goes idle when it reaches the goal or when no path can be found.
+        if (!pathing.getCustomGoalProcess().isActive()) {
+            pathGoal = null;
+            return goal.isInGoal(bot.blockPosition()) ? PathState.ARRIVED : PathState.FAILED;
+        }
+        return PathState.MOVING;
+    }
+
+    private void stopPathing() {
+        if (pathGoal != null) {
+            IBaritone pathing = IBaritone.KEY.getNullable(bot);
+            if (pathing != null) {
+                pathing.getPathingBehavior().cancelEverything();
+                pathing.getCustomGoalProcess().onLostControl();
+            }
+            pathGoal = null;
+        }
+    }
+
+    private enum PathState { MOVING, ARRIVED, FAILED }
+
+    private void tickGoTo(BlockPos pos) {
+        switch (pathTo(new GoalBlock(pos))) {
+            case ARRIVED -> finish("arrived at " + pos.toShortString());
+            case FAILED -> fail("no way to " + pos.toShortString());
+            case MOVING -> {}
         }
     }
 
@@ -249,12 +305,13 @@ public final class BotController {
         Vec3 goal = Vec3.atBottomCenterOf(pos);
         // Small margin so the server's own reach checks always pass.
         if (!bot.canInteractWithBlock(pos, -0.5)) {
-            walkTowards(goal);
-            if (isStuck(goal)) {
+            // Next to the block is always within reach; the pathfinder finds the way there.
+            if (pathTo(new GoalGetToBlock(pos)) == PathState.FAILED) {
                 fail("cannot get within reach of " + pos.toShortString());
             }
             return null;
         }
+        stopPathing();
 
         Vec3 center = Vec3.atCenterOf(pos);
         lookAt(center);

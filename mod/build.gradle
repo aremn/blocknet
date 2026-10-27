@@ -5,6 +5,9 @@ plugins {
     id 'idea'
 }
 
+// The pathing module's source set is used in the mods block below.
+evaluationDependsOn(':pathing')
+
 version = mod_version
 group = mod_group_id
 
@@ -105,6 +108,8 @@ neoForge {
         // multi mod projects should define one per mod
         "${mod_id}" {
             sourceSet(sourceSets.main)
+            // The LGPL pathing module runs as part of the mod in dev runs and GameTests.
+            sourceSet(project(':pathing').sourceSets.main)
         }
     }
 }
@@ -118,6 +123,11 @@ configurations {
 }
 
 dependencies {
+    // Pathfinding (LGPL-3.0-or-later), shipped as a separate nested jar so it stays replaceable.
+    // In dev runs its classes come from the mods block above, so here it is compile-only.
+    compileOnly project(':pathing')
+    jarJar(project(':pathing'))
+
     // Test fixture mods: real modded blocks and machines to check the mod-agnostic body against,
     // in dev runs and GameTests only. localRuntime keeps them out of the published mod.
     localRuntime "maven.modrinth:ae2:${ae2_version}"

@@ -2,6 +2,7 @@ package dev.blocknet.body;
 
 import com.mojang.authlib.GameProfile;
 import dev.blocknet.control.BotController;
+import dev.blocknet.pathing.api.IBaritone;
 import net.minecraft.network.DisconnectionDetails;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
@@ -34,6 +35,11 @@ public final class BotPlayer extends ServerPlayer {
             serverLevel().getChunkSource().move(this);
         }
         controller.tick();
+        // The pathfinder, when it has work, overrides this tick's inputs and rotation.
+        IBaritone pathing = IBaritone.KEY.getNullable(this);
+        if (pathing != null) {
+            pathing.serverTick();
+        }
         super.tick();
         doTick();
     }

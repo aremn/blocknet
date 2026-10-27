@@ -58,7 +58,15 @@ Copy, never mix: nothing from `pathing/` gets pasted into MIT files.
 `BotController` so there is one owner of the head and legs. `BotPlayer.tick()` already runs physics
 after the controller sets inputs.
 
-## Order of work
+## Status (2026-10-27)
+
+Steps 1-4 are done: extraction, `BotHands` + `PlayerInteractionController`, GameTests (around a
+wall, onto a ledge, digging through), `goto` and approach-to-reach use the pathfinder. Two surprises:
+vanilla `getChunkNow` is null off the server thread (fixed with an access transformer, see
+`LoadedChunks`), and inputs must be re-applied every tick. Still open: gap, pillar-with-blocks,
+lava and door tests; a real `BlockProtection` for player builds.
+
+## Order of work (original plan)
 
 1. `spike/automatone-extract`: copy the keep-list, make it compile in `pathing/` without
    PlayerEngine. Count what breaks before fixing, report to the user.

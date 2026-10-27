@@ -58,6 +58,12 @@ grep -a -E "GAME TESTS COMPLETE|required tests (passed|failed)|failed at" build/
 | `mixin/` | `PlayerListMixin` installs `BotPacketListener` during `placeNewPlayer` |
 | `gametest/` | GameTests on the empty `arena` template; `TestArena` helpers |
 
+The LGPL `pathing/` module (Automatone) lives next to `mod/`: `BotController` drives it through
+`IBaritone.KEY.get(bot).getCustomGoalProcess()`, `BotPlayer.tick()` ticks it, and it acts through
+`BotHands`/`PlayerInteractionController`. It is compile-only for the mod (dev runs get its classes
+from the `mods` block, the jar nests it via jarJar) — adding it as `implementation` duplicates its
+packages and the game refuses to start.
+
 ## Rules that came from real bugs
 
 These are why the code looks the way it does; keep them unless an ADR changes them.
@@ -108,11 +114,11 @@ These are why the code looks the way it does; keep them unless an ADR changes th
 - Unmerged work may be stacked (a branch based on another feature branch); check
   `git log --oneline --graph --all` and say which branch to merge first.
 
-## Next big task: pathfinding
+## Pathfinding
 
-The bot walks in straight lines; pathfinding is the next step. The plan is to extract Automatone
-(server-side Baritone) from PlayerEngine into an LGPL `pathing/` subproject (ADR-0004). Read
-`references/pathing.md` before starting it.
+Done in the basics (ADR-0004): walking around walls, ledges, digging through. `references/pathing.md`
+has the history, what was kept and dropped, and the remaining ideas (gaps, pillars with blocks,
+lava, doors, protecting player builds).
 
 ## Talking to the user
 

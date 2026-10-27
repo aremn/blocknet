@@ -2,9 +2,9 @@
 
 An AI companion that plays modded Minecraft with you, as a real player.
 
-> **Status:** early prototype. A bot joins as a real player, walks in a straight line and mines
-> blocks with survival speed and drops, driven by `/blocknet` debug commands. No pathfinding,
-> perception or brain yet.
+> **Status:** early prototype. A bot joins as a real player, finds its way (around walls, up
+> ledges, digging through when there is no way around), mines and right-clicks blocks with
+> survival rules, driven by `/blocknet` commands or a radial menu. No perception or brain yet.
 > Target: Minecraft **1.21.1**, **NeoForge 21.1** (All the Mods 10).
 
 ## Idea
@@ -26,7 +26,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and the decision records in [do
 | `mod/` | NeoForge mod: the bot's body |
 | `docs/` | Architecture, decision records (ADR), development guide |
 | `licenses/` | Licenses of third-party material |
-| `pathing/` | *(planned)* pathfinding extracted from Automatone, LGPL-3.0 |
+| `pathing/` | Pathfinding extracted from Automatone, LGPL-3.0-or-later, nested in the mod jar |
 | `brain/` | *(planned)* LLM agent process |
 | `protocol/` | *(planned)* JSON schemas of the body ↔ brain protocol |
 
@@ -43,8 +43,9 @@ More in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 ## License
 
-Blocknet's own code is under the [MIT License](LICENSE). The planned `pathing/` module is derived
-from Automatone and Baritone and stays under LGPL-3.0, with its own license files. Third-party
+Blocknet's own code is under the [MIT License](LICENSE). The `pathing/` module is derived from
+Automatone and Baritone and stays under LGPL-3.0-or-later, with its own license files; the mod jar
+carries it as a separate nested jar. Third-party
 notices are in [licenses/](licenses).
 
 ---
