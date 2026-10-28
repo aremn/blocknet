@@ -57,11 +57,15 @@ export class ClaudeBackend {
     if (!turn) return;
     if (event.type === 'stream_event' && event.event?.delta?.type === 'text_delta') {
       turn.ttftMs ??= Date.now() - turn.started;
+      turn.streamed = true;
+      this.onText?.(event.event.delta.text ?? '');
     }
     if (event.type === 'assistant') {
       for (const block of event.message?.content ?? []) {
         if (block.type === 'tool_use') turn.toolCalls++;
         if (block.type === 'text') {
+          if (!turn.streamed) this.onText?.(block.text, true);
+          else this.onText?.('', true);
           this.options.onMessage?.(block.text);
           turn.ttftMs ??= Date.now() - turn.started;
           turn.text = block.text;

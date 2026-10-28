@@ -68,7 +68,7 @@ export function summarize(entries, lastN = 10) {
     }
   }
   lines.push('', '## Tool feedback', '');
-  for (const [kind, list] of feedback) lines.push(`### ${kind}`, '', ...list.map(e => `- ${e.tool ? `${e.tool}: ` : ''}${clean(e.note)}`), '');
+  for (const [kind, list] of feedback) lines.push(`### ${kind}`, '', ...list.map(e => `- ${e.source ? `[${e.source}] ` : ''}${e.tool ? `${e.tool}: ` : ''}${clean(e.note)}`), '');
   lines.push('## Last failures', '', ...failures.slice(-lastN).map(e => `- ${clock(e.time)} ${e.tool ?? 'model'}: ${clean(e.result ?? e.error)}`), '', '## Longest gaps between progress', '', ...gaps.map(g => `- ${clock(g.from)} to ${clock(g.to)}: ${(g.ms/1000).toFixed(1)}s`), '');
   return lines.join('\n');
 }

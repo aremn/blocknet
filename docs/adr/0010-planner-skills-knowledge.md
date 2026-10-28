@@ -216,3 +216,53 @@ tables и проб ToolFacts. Неизвестные height providers дают `
 три полных прогона по 176/176 (41.53, 29.82, 31.44 с), без `failed at`. Реалистичная добыча:
 3/3 raw_iron, основной проход 3 шага, ветка 1 шаг, два обхода; 2778–2790 игровых тиков.
 Закладка источника и обе полные ветки отдельно подтверждены теми же прогонами.
+
+## Live-run 3 follow-up: survival strategy and model speech (2026-10-28)
+
+The planner now has a short stable survival playbook: wood, table, wooden pickaxe, stone tools,
+coal and food, torches, cave ores, furnace and smelting, then iron tools. Fuel is a separate
+requirement. Ore finding starts with look/scene and visible ore, then seen cliffs/cave mouths,
+then bounded cave exploration. Branch mining at the knowledge peak is the fallback. Unfamiliar
+items use knowledge/wiki rather than guessed recipes or acquisition methods.
+
+A plan step can include both a budget and a fallback:
+
+```json
+{"do":"explore_caves iron_ore 3","budget_min":5,"else":"mine_ore iron_ore 3","done":"inv raw_iron >= 3"}
+```
+
+The critic runs `else` once after failure, unverified completion or timeout, without calling the
+planner. It stops any old action, refreshes state and verifies the same `done` condition. The
+fallback gets a fresh step budget, bounded by the original plan deadline. Only its failure calls
+the planner again; existing failure limits still apply. A cached plan retains these fields.
+
+`explore_caves <target> <count>` is a body skill over ordinary player actions. It selects an
+observed cave-mouth frontier or dark opening, tries one fresh look when absent and otherwise
+reports `no cave seen`. Walking uses only observed free cells and sturdy floors, with at most
+one block of elevation change and observed natural ceilings inside the cave. Unknown floors,
+fluids, observed lava and nearby hostiles are rejected. Periodic fresh looks and local frontiers
+extend the route. Reachable wall ore uses the existing gather/vein-following machinery in a
+stationary mode; it never walks across a drop to chase loot. Owned torches are placed through
+normal player placement below light 7. The five-minute budget reserves return time (up to two
+minutes); enough target drops also start return. The return follows checked breadcrumbs, with
+one terminal report containing distance, actual item gains and torch count. A changed or blocked
+return route reports failure. External stop/death cancels immediately. Progress is emitted every
+200 ticks. Neither target selection nor route scoring reads hidden world states (ADR-0002/0009).
+
+Optional plan `tool_gaps: [{"want":"missing action","why":"needed for this goal"}]` is validated
+with the plan: at most 32 entries, nonempty strings of at most 200/500 characters. Each entry goes
+to `brain/logs/tool-feedback.jsonl` with `source: planner` and to the session log, so `report.js`
+shows it in Tool feedback alongside actor feedback.
+
+`brain/persona.md` replaces local phrase pools and is the stable prefix of both role prompts.
+It defines the player's casual Minecraft buddy and asks for one short intent line before tools
+or planning JSON. Codex agent-message deltas/completed items and Claude stream-json text deltas
+send this preamble to chat as soon as its first line is complete. The line is removed from the
+remaining output; JSON and final actor text follow the existing paths. Stop/death suppress stale
+speech. Trivial rules have no model preamble or canned ack. Player hints are acknowledged by the
+tool-free classifier's model-written `reply`. Only the default language remains in persona.json.
+
+For this iteration the user verifies new behavior live: no new tests or bench rules. Existing
+phrase tests are adapted to streaming speech, and gathered-count checks accept incidental extra
+drops while verifying actual report counts. Completion requires the offline build with deploy
+excluded, one passing full existing GameTest run and existing Node tests.

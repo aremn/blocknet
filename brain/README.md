@@ -92,7 +92,8 @@ the model. Reactive messages queue during a call; messages during a plan use a s
 actor session so the body can keep working. `стоп`/`stop` acts immediately, closes the model process
 and clears queued requests; death also resets the session. A dead process restarts on the next
 request; an interrupted request is never replayed. Reactive conversations rotate every 10 turns.
-Model replies are sent after completion, allowing empty answers and `<silent>` to stay silent.
+The first preamble line streams immediately; remaining replies arrive after completion. Empty
+answers and `<silent>` stay silent.
 Each user message includes a compact inventory, held item and low-health line only when changed;
 a fresh session gets the current line again. The English prompt asks for one casual sentence in
 the player's language; delivery caps replies at 12 words / 200 characters.
@@ -114,7 +115,7 @@ node --test brain/test/ brain/bench/test/
 ```
 
 Tests cover rules, MCP framing/task outcomes, persistent Claude stream-json and Codex JSON-RPC
-with fake children, usage, restarts, and slow/fast acknowledgements. No tests call a model.
+with fake children, usage, restarts, and streaming/cancelled preambles. No tests call a model.
 Real authentication, end-to-end latency and model behavior require a connected live test.
 
 ## Planner, executor, critic and plan library (ADR-0010 steps 2–3)
@@ -126,13 +127,15 @@ MCP config and can call only `knowledge` and `wiki`; its system prompt is `plann
 Codex planner arguments set `web_search="live"`; the actor keeps `web_search="disabled"`.
 The planner prefers local `wiki`/`knowledge` and may search Minecraft wiki/mod docs for unfamiliar goals.
 
-`persona.json` holds editable RU/EN phrase pools for crafting, finding, thinking/building and
-immediate player-message acknowledgements (`ack`). Its `defaultLanguage: "ru"` controls speech
-before the first player message, even when the autoplay goal is English.
-Slow model calls get one local phrase after a 700 ms grace period; fast calls stay quiet.
-The shared cooldown is 8 seconds, and the last three phrases are excluded. Stop/death cancel
-pending speech. One non-moving `scene` call runs alongside planner backend preparation and its
-result is appended before the planning prompt is sent. No model is used to choose filler text.
+`persona.md` is the shared stable character prefix for actor and planner. It describes the
+player's Minecraft buddy, casual language and brief speech without numbers unless asked.
+`persona.json` keeps only the default language. There are no phrase pools or timer fillers.
+Both roles emit one short intent line before thinking/tools; the planner follows it with JSON.
+The brain sends that first line immediately from Codex agent-message deltas/completed items or
+Claude stream-json text deltas, and strips it from the remaining result. Stop/death suppress stale
+speech. Trivial rule orders stay model-free and have no preamble. One non-moving `scene` call runs
+alongside planner preparation and is appended to its input. Hint acknowledgements come from the
+tool-free classifier's `reply`, including what it understood from the player's hint.
 
 `wiki {query: "ME controller"}` reads loaded GuideME Markdown, Patchouli JSON entries, FTB Quests
 SNBT under `config/ftbquests/quests`, and English item/block names and tooltip/description lines.
@@ -149,7 +152,7 @@ previous failures, and the two nearest library examples. Invalid JSON/schema/con
 correction attempt; a second invalid response is reported to the player.
 
 ```json
-{"goal":"железная кирка с нуля","steps":[{"id":1,"do":"obtain stone_pickaxe 1","done":"inv stone_pickaxe >= 1"},{"id":2,"do":"obtain iron_ingot 3","done":"inv iron_ingot >= 3"},{"id":3,"do":"craft iron_pickaxe 1","done":"inv iron_pickaxe >= 1"}],"budget_min":20}
+{"goal":"find iron after preparing tools, coal, food and torches","steps":[{"id":1,"do":"explore_caves iron_ore 3","budget_min":5,"else":"mine_ore iron_ore 3","done":"inv raw_iron >= 3"}],"budget_min":15,"tool_gaps":[]}
 ```
 
 Steps execute in order. Registered commands accept positional arguments (`obtain iron_ingot 3`)
@@ -163,11 +166,13 @@ rejected, including claims that a house exists: position proves arrival only.
 
 The plan has 1–32 steps and `budget_min` in (0,120]. Each step gets an equal share unless it has
 its own positive `budget_min`; the original plan deadline also applies across replans. A body
-failure, unverified completion or budget expiry replans with the reason. After three failed steps
+failure, unverified completion or budget expiry runs the optional step `else` first, with the same
+`done` condition and a fresh step budget inside the original plan deadline. Only failure of that
+fallback (or a step without one) calls the planner again. After three failed steps
 in total (initial attempt plus at most two failure replans), the bot briefly tells the player.
 Budget expiry stops the body and actor. Stop/death cancel the plan; continue/respawn can pursue
 the autoplay goal again. Every actor message carries a one-line status; bare chat `план?` reads
-it immediately, even while a step is running, e.g. `план: шаг 2/3 obtain iron_ingot 3 — 1/3`.
+it through a short tool-free model reply even while a step is running. Internal context looks like `план: шаг 2/3 obtain iron_ingot 3 — 1/3`.
 
 Successful plans append to ignored `brain/logs/plans.jsonl`: goal, normalized `goal_key`, steps,
 budget and `duration_ms`. Matching lowercases, removes punctuation/politeness and sorts words.
@@ -190,16 +195,15 @@ node brain/report.js brain/logs/session-<date>-Kirill.jsonl 10
 ```
 
 Autoplay executes the goal plan, checking body state after each step. You can steer the bot while
-it works: say `железо глубже, на y=16` or `сундук с углём слева`. It immediately acknowledges
-with a local phrase such as `ок, понял` (at most once per 8 seconds). An ack also suppresses
-fillers for the next 8 seconds; a recent filler does not delay the first player-message ack.
+it works: say `железо глубже, на y=16` or `сундук с углём слева`. It acknowledges
+through the classifier's model-written reply, without a local phrase or cooldown.
 One cheap actor call classifies each message as a hint, new goal, question or small talk.
 Hints go to the planner with the current plan, step, state and scene, and remain in memory for
 later replans. A `keep` response continues the body task; revised remaining steps replace the
 plan, cancelling the body task only if the current step changes. Questions get a short answer
 without replanning; small talk gets a short reply or silence. A different request, such as
 `сначала добудь уголь`, gets a one-line confirmation and a new plan; the long-term autoplay goal
-resumes afterwards. `план?` reports progress immediately. Bare `стоп`/`stop`
+resumes afterwards. `план?` asks the model for a short progress reply without interrupting the body. Bare `стоп`/`stop`
 pauses and cancels the current action; `продолжай`/`continue` resumes. The defaults are hard limits
 of 200 model turns (including chat while autoplay is active) and 60 wall-clock minutes, including
 paused/disconnected time. Reaching either limit ends autoplay; one final reflection asks for
@@ -224,7 +228,9 @@ player use until consumption, chooses safe food by default, and refuses ordinary
   snapshots. Each segment is at most 5 MB; continuation files use `.jsonl.1`, `.jsonl.2`, etc.
   The last 20 sessions are retained, including their segments.
 - `brain/logs/tool-feedback.jsonl`: the brain-only `tool_feedback {kind,tool?,note}` MCP tool
-  records missing/confusing/redundant/bug feedback in one concrete sentence. Never sent to the body.
+  records missing/confusing/redundant/bug feedback in one concrete sentence. Validated planner
+  `tool_gaps: [{want, why}]` append to the same file with `source: planner` and to the session log;
+  reports label their source under Tool feedback. Never sent to the body.
 - `brain/logs/report-<session>.md`: `report.js` prints and writes a compact Markdown report with
   goal, duration, turns, tokens, calls/failures per tool, key moments, deaths and their preceding
   30 seconds, grouped feedback, last failures (optional final number, default 10), and longest
@@ -239,3 +245,30 @@ hostile sightings and full inventory. Snapshots include task/report, last three 
 nearby entities (cap 8), light, biome, held item, ground/front blocks and nearby hazards.
 Human-only facts that were outside the bot's sight are labeled `unseen`; these fields are removed
 before an event reaches the model. Routine state/tool results stay compact; no raw backend dumps.
+
+## Survival playbook and cave exploration
+
+The stable planner playbook prepares wood, table, wooden pickaxe, stone tools, coal and food,
+then torches, cave ores, furnace/smelting and iron tools. Fuel and food are explicit preparations.
+Ore search uses visible ore from look/scene first, then seen cliffs/cave mouths, bounded
+`explore_caves`, and only then `mine_ore` at a knowledge peak. Unfamiliar items use knowledge/wiki.
+
+```json
+{"id":1,"do":"explore_caves iron_ore 3","budget_min":5,"else":"mine_ore iron_ore 3","done":"inv raw_iron >= 3"}
+```
+
+`/blocknet explore_caves [name] <target> [count]` (bridge `explore_caves {item,count}`) chooses
+an observed cave-mouth frontier or dark opening, looking fresh once if needed. It reports
+`no cave seen` if neither exists. It walks only observed free cells with an observed solid floor,
+including one-block steps, stays under observed natural ceilings once inside, and avoids observed
+lava and hostiles. It periodically looks, follows local cave frontiers, gathers reachable wall
+ore through gather/vein following without wandering off its walking route, and places owned
+torches through normal player placement when local light is below 7. It never scans hidden blocks.
+The five-minute body budget reserves up to two minutes for returning along checked breadcrumbs;
+reaching the count also starts the return. External stop/death cancels immediately; a blocked
+return reports the problem. Progress events arrive every 200 ticks and there is one terminal
+report, e.g. `explored cave 40 blocks; got 3 raw_iron, 5 coal; placed 4 torches`.
+
+Planner `tool_gaps` is optional: at most 32 nonempty `{want, why}` strings, bounded to 200/500
+characters. Invalid gaps/fallbacks are rejected with the rest of the plan. No new bench rules
+or tests were added for this live-play iteration; existing speech tests follow the new contract.

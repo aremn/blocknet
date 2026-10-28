@@ -1,44 +1,37 @@
 import { readFile } from 'node:fs/promises';
 
 export const persona = JSON.parse(await readFile(new URL('./persona.json', import.meta.url), 'utf8'));
+export const personaPrompt = await readFile(new URL('./persona.md', import.meta.url), 'utf8');
 
-/** One local, cancellable acknowledgement per slow call; shared cooldown across all roles. */
+/** Deliver the first model-written line, while the turn is still streaming. */
 export class Thinking {
-  constructor({ say, active = () => true, pool = persona, now = Date.now, random = Math.random } = {}) {
-    Object.assign(this, { say, active, pool, now, random });
-    this.recent = []; this.last = -Infinity; this.lastAck = -Infinity;
+  constructor({ say, active = () => true, pool = persona } = {}) {
+    Object.assign(this, { say, active, pool });
   }
-  phrase(text, languageText, kind) {
-    const language = languageText ? (/[а-яё]/iu.test(languageText) ? 'ru' : 'en') : this.pool.defaultLanguage ?? 'ru';
-    const situation = kind ?? (/стро|\bbuild|\bhouse|shelter|дом/iu.test(text) ? 'thinking'
-      : /крафт|рецепт|сдела|кирк|\bcraft|\bmake|recipe/iu.test(text) ? 'crafting'
-      : /най[дт]|ищ|поиск|\bfind|\bsearch|\blocat/iu.test(text) ? 'finding' : 'thinking');
-    const phrases = this.pool[language]?.[situation] ?? persona[language][situation];
-    let available = phrases.filter(p => !this.recent.includes(p));
-    // The short ack pool must keep working after all three phrases have been used.
-    if (!available.length && kind === 'ack') available = phrases.filter(p => p !== this.recent.at(-1));
-    if (!available.length) return ''; // A user-edited tiny pool may need to stay quiet.
-    const phrase = available[Math.floor(this.random() * available.length)];
-    this.recent = [...this.recent, phrase].slice(-(this.pool.recentCount ?? 3));
-    return phrase;
-  }
-  async ack(languageText, player) {
-    if (!this.active() || this.now() - this.lastAck < Math.max(8000, this.pool.intervalMs ?? 8000)) return;
-    const phrase = this.phrase('', languageText, 'ack');
-    if (!phrase) return;
-    this.lastAck = this.last = this.now();
-    await this.say(phrase, player);
-  }
-  async run(work, { text = '', languageText = '', player, isActive = () => true } = {}) {
-    let speech;
-    const timer = setTimeout(() => {
-      if (!this.active() || !isActive() || this.now() - this.last < Math.max(8000, this.pool.intervalMs ?? 8000)) return;
-      const phrase = this.phrase(text, languageText);
-      if (!phrase) return;
-      this.last = this.now();
-      speech = Promise.resolve().then(() => this.say(phrase, player)).catch(() => {});
-    }, this.pool.delayMs ?? 700);
-    try { return await work(); }
-    finally { clearTimeout(timer); await speech; }
+  async run(work, { backend, player, isActive = () => true } = {}) {
+    let buffer = '', first = '', delivered = false, speech;
+    const previous = backend?.onText;
+    const receive = (delta, complete = false) => {
+      if (delivered) return;
+      buffer += delta;
+      if (!buffer.includes('\n') && !complete) return;
+      delivered = true;
+      first = buffer.split('\n')[0].trim();
+      if (!first || /^[{`[]/u.test(first) || first === '<silent>' || first === 'needs_plan') { first = ''; return; }
+      if (this.active() && isActive()) speech = Promise.resolve(this.say(first.replace(/\s+/gu, ' ').split(' ').slice(0, 12).join(' ').slice(0, 200), player)).catch(() => {});
+    };
+    if (backend) backend.onText = receive;
+    try {
+      const result = await work();
+      // Fake/non-streaming transports still handle the same wire format at completion.
+      if (!delivered && String(result.text).includes('\n')) receive(String(result.text), true);
+      await speech;
+      let text = String(result.text ?? '');
+      if (first && text.trimStart().startsWith(first)) text = text.trimStart().slice(first.length).trimStart();
+      return { ...result, text };
+    } finally {
+      if (backend) backend.onText = previous;
+      await speech;
+    }
   }
 }

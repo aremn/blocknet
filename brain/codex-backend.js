@@ -106,9 +106,13 @@ export class CodexBackend {
     if (event.method === 'item/agentMessage/delta') {
       turn.ttftMs ??= Date.now() - turn.started;
       turn.deltas += p.delta;
+      this.onText?.(p.delta);
     }
     if (event.method === 'item/completed') {
-      if (p.item?.type === 'agentMessage') this.options.onMessage?.(p.item.text);
+      if (p.item?.type === 'agentMessage') {
+        this.onText?.(turn.deltas ? '' : p.item.text, true);
+        this.options.onMessage?.(p.item.text);
+      }
 
       if (p.item.type === 'agentMessage' && p.item.phase !== 'commentary') turn.text = p.item.text;
       if (p.item.type === 'mcpToolCall') turn.toolIds.add(p.item.id);

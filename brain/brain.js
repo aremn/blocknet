@@ -1,4 +1,4 @@
-import { appendFile, readFile, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Body, configPath, option } from './body.js';
@@ -6,7 +6,7 @@ import { ChatRouter, routeRule } from './rules.js';
 import { SessionLog, ResultSummary, perception, failed, lastLessons } from './session-log.js';
 import { ClaudeBackend } from './claude-backend.js';
 import { CodexBackend } from './codex-backend.js';
-import { Thinking } from './thinking.js';
+import { Thinking, personaPrompt } from './thinking.js';
 import { parseRole, parseTool, needsPlan, PlanRunner, PlanLibrary, plannerPrompt } from './plans.js';
 export { buildClaudeArgs } from './claude-backend.js';
 
@@ -19,14 +19,9 @@ export function createBackend(name, options) {
   throw new Error('--backend must be claude or codex');
 }
 
-/** Acknowledge only turns which are still waiting after the short grace period. */
-export async function sendWithAck(backend, text, say, { delayMs = 700, ack = 'On it.' } = {}) {
-  let acknowledgement;
-  const timer = setTimeout(() => {
-    acknowledgement = Promise.resolve().then(() => say(ack)).catch(error => process.stderr.write(`${error.message}\n`));
-  }, delayMs);
-  try { return await backend.send(text); }
-  finally { clearTimeout(timer); await acknowledgement; }
+/** Stream a model-written preamble; no timer-generated speech. */
+export async function sendWithAck(backend, text, say) {
+  return new Thinking({ say }).run(() => backend.send(text), { backend });
 }
 
 /** Keep inventory/held/low-health facts from the revision-based changes tool. */
@@ -91,6 +86,7 @@ export class BrainSession {
       resetActor: () => { backend.close(); this.sessionTurns = 0; this.compact.reset(); },
       actorPrefix: () => this.languageRule(), say: (text, player) => this.say(text, player),
       log: (type, data) => this.log?.write(type, data),
+      feedback: gaps => this.plannerFeedback(gaps),
       isActive: () => !this.closed && !this.paused && !this.awaitingRespawn,
     });
     this.onEvent = event => this.event(event);
@@ -111,8 +107,8 @@ export class BrainSession {
   }
   async sendRole(role, backend, text) {
     const generation = this.generation;
-    return this.thinking.run(() => this.sendRoleWithScene(role, backend, text, generation), {
-      text: /^Goal: (.*)/mu.exec(text)?.[1] ?? text,
+    return this.thinking.run(() => this.sendRoleWithScene(role, backend, this.languageRule() + text, generation), {
+      backend,
       languageText: this.lastPlayerMessage?.text, player: this.lastPlayerMessage?.from,
       isActive: () => generation === this.generation,
     });
@@ -143,6 +139,23 @@ export class BrainSession {
         tool_calls: audit.trim() ? audit.trim().split('\n').length : result?.toolCalls ?? 0, error: failure ?? null };
       this.log?.write('turn', entry);
       if (this.usageFile) await appendFile(this.usageFile, `${JSON.stringify({ time: new Date(started).toISOString(), ...entry })}\n`);
+    }
+  }
+  sendChat(text, generation) {
+    const pending = (this.chatRequests ?? Promise.resolve()).then(() =>
+      this.sendRoleWithScene('chat', this.chatBackend, text, generation));
+    this.chatRequests = pending.catch(() => {});
+    return pending;
+  }
+  async plannerFeedback(gaps) {
+    if (!gaps?.length) return;
+    const file = resolve(brainDir, 'logs/tool-feedback.jsonl');
+    await mkdir(dirname(file), { recursive: true });
+    for (const gap of gaps) {
+      const entry = { time: new Date().toISOString(), bot: this.bot, session: this.log?.id,
+        source: 'planner', kind: 'missing', want: gap.want, why: gap.why, tool: gap.want, note: gap.why };
+      await appendFile(file, `${JSON.stringify(entry)}\n`);
+      this.log?.write('tool_feedback', entry);
     }
   }
   async call(tool, args = {}) {
@@ -232,7 +245,10 @@ export class BrainSession {
     if (/^(?:план|plan)\?$/iu.test(order.trim())) {
       const status = async () => {
         if (this.plans?.step) await this.plans.snapshot();
-        await this.say(this.plans?.status() ?? 'план: нет', event.from);
+        const generation = this.generation;
+        const result = await this.sendChat(this.languageRule()
+          + `Return ONLY JSON with a reply field: a brief in-character answer about plan progress. Context: ${this.plans?.status() ?? 'plan: none'}`, generation);
+        if (generation === this.generation) await this.say(shortReply(JSON.parse(result.text).reply), event.from);
       };
       status().catch(e => this.diagnostic(e)); return;
     }
@@ -247,20 +263,23 @@ export class BrainSession {
     }
     if (this.plans?.running) {
       const generation = this.generation;
-      this.thinking.ack(event.text, event.from).catch(e => this.diagnostic(e));
       this.plans.interact(async () => {
         const context = await this.plans.context();
-        const result = await this.sendRoleWithScene('chat', this.chatBackend,
+        const result = await this.sendChat(
           this.languageRule() + `Classify this player message during the current plan. Do not call tools or act in the world.\n`
           + `Return ONLY JSON: {"kind":"hint|new_goal|question|chat","reply":"one short sentence or empty","goal":"only for new_goal"}.\n`
+          + `For a hint, reply briefly acknowledging what you understood; the planner reviews it next.\n`
           + `hint = information relevant to the current goal/step; new_goal = asks to do something else; question = answer using the context; chat = brief small talk or silence.\n`
           + `${context}\nPlayer ${JSON.stringify(event.from)} message: ${JSON.stringify(order)}`, generation);
         if (generation !== this.generation || this.closed) return;
         this.plans.assertActive();
         const classified = JSON.parse(result.text);
-        if (classified.kind === 'hint') await this.plans.hint(order, event.from);
+        if (classified.kind === 'hint') {
+          await this.say(shortReply(classified.reply), event.from);
+          await this.plans.hint(order, event.from);
+        }
         else if (classified.kind === 'new_goal') {
-          await this.say(shortReply(classified.reply) || (/[а-яё]/iu.test(order) ? 'Хорошо, займусь этим.' : 'Okay, on it.'), event.from);
+          await this.say(shortReply(classified.reply), event.from);
           this.queue = this.queue.filter(m => !m.autoplay);
           this.queue.unshift({ from: event.from, text: classified.goal?.trim() || order, needsPlan: true });
           this.plans.cancel(); this.backend.close();
@@ -277,7 +296,7 @@ export class BrainSession {
   }
   async runRule(rule, player) {
     const result = await this.call(rule.tool, rule.args);
-    await this.say(result.result && /failed|blocked/iu.test(result.result) ? result.result : rule.ack, player);
+    await this.say(result.result && /failed|blocked/iu.test(result.result) ? result.result : '', player);
     if (result.outcome) result.outcome.then(text => {
       if (/failed|blocked/iu.test(text)) return this.say(text, player);
     }).catch(e => this.diagnostic(e));
@@ -299,7 +318,7 @@ export class BrainSession {
           let direct;
           try { direct = !message.autoplay && !message.needsPlan && parseTool(message.text, this.plans.tools); }
           catch { /* A tool verb followed by natural language belongs to the planner. */ }
-          if (direct) { await this.runRule({ ...direct, ack: 'Готово.' }, message.from); continue; }
+          if (direct) { await this.runRule(direct, message.from); continue; }
           if (message.needsPlan || message.autoplay || needsPlan(message.text, this.plans.tools)) {
             const completed = await this.plans.run(message.autoplay ? this.goal : message.text, message.autoplay ? undefined : message.from);
             if (message.autoplay && completed !== null) this.endAutoplay('plan finished');
@@ -336,8 +355,8 @@ export class BrainSession {
           if (generation !== this.generation) continue;
           called = true;
           if (!message.reflection) this.turns++;
-          result = await this.thinking.run(() => this.backend.send(prompt), {
-            text: message.text ?? this.goal, languageText: this.lastPlayerMessage?.text, player: message.from,
+          result = message.reflection ? await this.backend.send(prompt) : await this.thinking.run(() => this.backend.send(prompt), {
+            backend: message.reflection ? undefined : this.backend, languageText: this.lastPlayerMessage?.text, player: message.from,
             isActive: () => generation === this.generation && !message.reflection,
           });
           this.sessionTurns++;
@@ -397,7 +416,7 @@ export async function main() {
     env: { BLOCKNET_CONFIG: config, BLOCKNET_BOT: bot, BLOCKNET_AUDIT: auditFile,
       BLOCKNET_SESSION: log.file, BLOCKNET_SESSION_ID: log.id } };
   await writeFile(resolve(rootDir, mcpConfig), `${JSON.stringify({ mcpServers: { blocknet: { type: 'stdio', ...mcpServer } } }, null, 2)}\n`);
-  const prompt = await readFile(resolve(brainDir, 'prompt.md'), 'utf8') + lastLessons(lessonsFile, Number(option('lessons', '0')));
+  const prompt = personaPrompt + '\n' + await readFile(resolve(brainDir, 'prompt.md'), 'utf8') + lastLessons(lessonsFile, Number(option('lessons', '0')));
   const promptFile = resolve(logDir, `prompt.${bot}.md`);
   await writeFile(promptFile, prompt);
   const legacyBackend = option('backend', process.env.BLOCKNET_BACKEND);

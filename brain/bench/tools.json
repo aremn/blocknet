@@ -136,6 +136,28 @@
     }
   },
   {
+    "name": "explore_caves",
+    "description": "Explore a seen cave mouth or dark opening, follow safe observed frontiers, gather target wall ore and place owned torches in darkness; return along breadcrumbs after five minutes or enough drops. Reports no cave seen if a fresh look finds none.",
+    "task": true,
+    "params": {
+      "type": "object",
+      "properties": {
+        "item": {
+          "type": "string"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        }
+      },
+      "required": [
+        "item"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "mine_ore",
     "description": "Descend to a known ore peak, bypass observed fluids, then mine a main tunnel and side branches until count or a ten minute budget; progress reports depth and actual drops.",
     "task": true,

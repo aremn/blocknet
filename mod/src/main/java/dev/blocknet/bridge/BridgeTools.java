@@ -28,6 +28,7 @@ public final class BridgeTools {
         add("explore", "Walk through observed safe space toward a frontier, then look and report new objects.", true, "direction?", "distance?");
         add("knowledge", "Read ore heights, frequency, biome restrictions, harvest tool and loot from server data.", false, "item");
         add("wiki", "Read in-game guides/quests/tooltips; use before crafting unfamiliar modded items.", false, "query");
+        add("explore_caves", "Explore a seen cave mouth or dark opening, follow safe observed frontiers, gather target wall ore and place owned torches in darkness; return along breadcrumbs after five minutes or enough drops. Reports no cave seen if a fresh look finds none.", true, "item", "count?");
         add("mine_ore", "Descend to a known ore peak, bypass observed fluids, then mine a main tunnel and side branches until count or a ten minute budget; progress reports depth and actual drops.", true, "item", "count?");
         add("obtain", "Obtain at least count items recursively from inventory, remembered containers, crafting and observed survival sources.", true, "item", "count?");
         add("plan", "Plan recipes without acting; mode craft makes new items, get counts owned items.", false,

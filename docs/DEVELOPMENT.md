@@ -352,7 +352,7 @@ The brain receives scene deltas; MCP allows eight tool calls per model turn. Sel
 
 Every own break queues occlusion-honest eye rays to the six exposed neighbours. `gather coal 3` follows newly seen connected ore; bridge gather accepts refs in `item`, `ref` or `target`. Nearby `look` reuses a panorama for 30 seconds within 6 blocks, takes one frontal 128x72 frame and appends `(looked Ns ago)`; `look fresh` (bridge `fresh: true`) forces the full turn. Background coverage is about 160 x 90 degrees at the existing 64x36 ray budget.
 
-The brain keeps the latest player's message in prompts, answers in that language even during autoplay, and limits autonomous speech to meaningful events at most once every three turns. Prefer descend/tunnel for underground ores and gather for veins.
+The brain keeps the latest player's message in prompts, answers in that language even during autoplay, and limits autonomous speech to meaningful events at most once every three turns. Prefer observed ores and bounded explore_caves before mine_ore at a knowledge peak; gather follows veins.
 
 When Prism is running, preserve its deployed jar: `./gradlew build --offline -x deployJar -x removeOldDeployedJars`. Set `JAVA_HOME` to JDK 21 and, if the shell selects another user home, `GRADLE_USER_HOME=C:/Users/ncpaa/.gradle`. A busy default bridge port is logged and does not stop GameTests; bridge tests bind a separate free port.
 
@@ -401,3 +401,34 @@ When Prism is running, preserve its deployed jar: `./gradlew build --offline -x 
 освещения. Полный набор запускать один раз в конце и проверять `required tests`, `failed at`,
 исключения в `build/gametest.log`. Занятый порт живого моста не мешает GameTests; socket-тесты
 используют порт 0.
+
+### Planner playbook, cave skill and streamed speech (2026-10-28)
+
+`brain/planner-prompt.md` keeps a stable progression playbook: wood/table/wooden pickaxe, stone
+tools, coal and food, torches, cave ore, furnace/fuel/smelting, iron tools. Search visible ore and
+seen cliffs/cave mouths first; use bounded `explore_caves` before the `mine_ore` fallback. Consult
+knowledge/wiki for unfamiliar items. Steps may carry `budget_min` and `else`; the critic tries the
+fallback once with a fresh step budget inside the plan deadline, verifying the original `done`,
+before asking the planner again. Optional validated `tool_gaps: [{want,why}]` are logged with
+`source: planner` in tool-feedback.jsonl and the session report.
+
+`/blocknet explore_caves [name] <target> [count]` uses only observed cave/dark frontiers (fresh look
+once if absent), checked air and solid floor cells, natural ceilings and single-block elevation
+changes. It avoids lava/drops/nearby hostiles, gathers reachable wall veins without chasing loot
+off the walking route and places inventory torches below light 7. Its five-minute budget reserves
+return time; the count also triggers return along checked breadcrumbs. Failure to return safely
+is reported. External stop/death cancels immediately. Progress every 200 ticks and one report
+include explored distance, actual gains and torches. No hidden-world resource search is allowed.
+
+Edit `brain/persona.md` for character/style; it prefixes actor and planner prompts identically.
+`persona.json` holds only defaultLanguage. The first in-character intent line streams to chat
+from Codex agent messages or Claude text deltas before tools/JSON, then is stripped from the
+result. No timer fillers, phrase pools or canned rule acks. Hint acks are model replies from the
+classifier. Reflection/classification retain their own formats. Stop/death suppress stale speech.
+
+This live-play iteration adds no tests or bench rules; existing speech checks and count assertions
+are updated. Verify `./gradlew build --offline -x deployJar -x removeOldDeployedJars`, one passing
+full `:mod:runGameTestServer --offline --console=plain` run (inspect required tests/failed at), and
+`node --test brain/test/ brain/bench/test/`. Run `./gradlew --stop` once only if GameTest startup
+fails with BootstrapLauncher NoSuchElementException. Regenerate the registry with
+`node brain/bench/sync-tools.js`. Leave changes uncommitted.

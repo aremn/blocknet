@@ -15,7 +15,7 @@ test('rules route Russian and English short orders without the model', () => {
       const route = routeRule(order, 'Alex');
       assert.equal(route.tool, tool, order);
       assert.deepEqual(route.args, ['come', 'follow'].includes(tool) ? { player: 'Alex' } : {});
-      assert.ok(route.ack);
+      assert.equal(route.ack, undefined);
     }
   }
   assert.equal(addressed('kIrIlL, ко мне', 'Kirill'), 'ко мне');

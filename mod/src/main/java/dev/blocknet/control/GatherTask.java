@@ -47,6 +47,7 @@ final class GatherTask {
     private int emptyMines;
     private boolean revisited;
     private boolean harvesting;
+    boolean caveOnly;
 
     GatherTask(BotPlayer bot, BotController controller, String target, int count) {
         this.bot = bot;
@@ -141,7 +142,7 @@ final class GatherTask {
     }
 
     /** Headroom drops wait until the opening is clear. Never walk into an unchecked hole. */
-    boolean collectionWalk(BlockPos broken) { return step == null || broken.getY() <= step.getY(); }
+    boolean collectionWalk(BlockPos broken) { return !caveOnly && (step == null || broken.getY() <= step.getY()); }
     Vec3 collectionPoint() { return step == null ? null : Vec3.atBottomCenterOf(step); }
 
     boolean collectionSafe(BlockPos broken) {
@@ -312,11 +313,19 @@ final class GatherTask {
         if (oreKind != null) {
             var connected = bot.worldMemory().nearby(bot, 64).stream().map(e -> e.pos())
                 .filter(this::matches).filter(this::visible)
+                .filter(pos -> !caveOnly || pos.getY() >= feet.getY() && bot.canInteractWithBlock(pos, -.5))
                 .filter(pos -> bot.worldMemory().observed().cell(bot.level().dimension().location().toString(), pos).semantic().kind().equals(oreKind))
                 .filter(pos -> vein.stream().anyMatch(old -> Math.abs(pos.getX()-old.getX()) <= 1
                     && Math.abs(pos.getY()-old.getY()) <= 1 && Math.abs(pos.getZ()-old.getZ()) <= 1))
                 .min(Comparator.comparingDouble(pos -> bot.position().distanceToSqr(Vec3.atCenterOf(pos))));
             if (connected.isPresent()) { mine(connected.get()); return; }
+        }
+        if (caveOnly) {
+            var wall = bot.worldMemory().nearby(bot, 6).stream().map(e -> e.pos())
+                .filter(p -> p.getY() >= feet.getY() && bot.canInteractWithBlock(p, -.5))
+                .filter(this::matches).filter(this::visible).findFirst();
+            if (wall.isPresent()) mine(wall.get()); else noSight();
+            return;
         }
         if (tunneling) { nextStair(feet); return; }
         // Prefer exposed resources above the floor before opening a staircase.

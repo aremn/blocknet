@@ -93,6 +93,16 @@ public final class BotController {
         skill = new ObtainTask(bot, item, count, report);
     }
 
+    public void exploreCaves(net.minecraft.world.item.Item item, int count, Consumer<String> report) {
+        stop();
+        skill = new ExploreCavesTask(bot, item, count, report);
+    }
+
+    void gatherCave(String item, int count, Consumer<String> report) {
+        gather(item, count, report);
+        if (gathering != null) gathering.caveOnly = true;
+    }
+
     void skillAction(Runnable action) {
         SkillTask owner = skill;
         skill = null;

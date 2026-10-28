@@ -110,6 +110,7 @@ public final class BlocknetCommands {
                 return 1;
             }))
             .then(skillCommand("mine_ore"))
+            .then(skillCommand("explore_caves"))
             .then(skillCommand("obtain"))
             .then(miningCommand("descend"))
             .then(eatCommand(buildContext))
@@ -272,6 +273,7 @@ public final class BlocknetCommands {
                 int count = words.size() == 2 ? Integer.parseInt(words.get(1)) : 1;
                 if (count < 1 || count > 1000000) throw new IllegalArgumentException("count must be 1..1000000");
                 if (action.equals("knowledge")) report.accept(dev.blocknet.knowledge.Knowledge.get(bot.serverLevel()).text(item));
+                else if (action.equals("explore_caves")) bot.controller().exploreCaves(item, count, report);
                 else if (action.equals("mine_ore")) bot.controller().mineOre(item, count, report);
                 else bot.controller().obtain(item, count, report);
             } catch (IllegalArgumentException error) { report.accept("blocked: " + error.getMessage()); }

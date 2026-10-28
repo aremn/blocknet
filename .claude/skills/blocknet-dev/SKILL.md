@@ -267,10 +267,27 @@ English to code, commands and commit messages.
 - Bridge `wiki {query}` and `/blocknet wiki <query>` share search, up to three source-labelled
   snippets under 120 words. `/blocknet wiki-status` lists indexed/skipped formats. Missing optional
   formats stay quiet. `WikiGameTests` checks the real loaded guide fixture and nonsense queries.
-- `brain/persona.json` is the editable RU/EN phrase pool. `thinking.js` gives slow model calls one
-  filler after 700 ms, excludes the last three phrases and shares an 8-second cooldown across roles.
-  Stop/death suppress stale speech; fast calls stay quiet. One non-moving `scene` is captured in
-  parallel with planner backend preparation and appended to its prompt.
+- `brain/persona.md` is the stable character prompt shared by actor and planner; persona.json
+  keeps only defaultLanguage. No phrase pools or timer fillers. First model preamble line streams
+  immediately from Codex agent-message deltas/items or Claude text deltas, before tools/JSON;
+  strip that line before normal processing. Stop/death suppress stale speech. Trivial rules stay
+  silent/model-free. Player hint acknowledgement is the classifier's model-written reply.
+- One non-moving scene is captured alongside planner preparation. Planner playbook prepares coal,
+  food, torches and smelting fuel after stone tools, uses seen ore/cliffs/caves before bounded
+  explore_caves, and mine_ore at a knowledge peak as fallback. Use knowledge/wiki for unfamiliar items.
+- Steps accept optional budget_min and else. On failure/timeout run else once with the same done
+  condition and a fresh step budget within the original plan deadline; replan only if fallback fails.
+  Validate planner tool_gaps [{want,why}] (32 entries, nonempty <=200/500 characters), append with
+  source: planner to tool-feedback.jsonl and session log; report.js displays that source.
+- ExploreCavesTask uses observed cave/dark evidence, fresh look if absent, and reports no cave seen.
+  Walk routes use observed air + sturdy floors, single-block elevation changes and natural cave
+  ceilings, avoiding lava/hostiles. Gather wall ore stays within reach and does not walk for drops;
+  reuse GatherTask's vein following. Place owned torches at light <7 through controller.place.
+  Five-minute body budget reserves return time; replay safe breadcrumbs, report a blocked return.
+  Progress every 200 ticks, one terminal report including actual gains, distance and torches.
+- This live-play change adds no tests or bench rules. Adapt existing speech tests and gathered-count
+  assertions (at least requested, with actual count in report). Verify build with deployment excluded,
+  one passing full GameTest run and existing Node suites. This overrides the earlier three-run workflow.
 - Planner MCP permits only `wiki`/`knowledge`. Codex planner uses `web_search="live"`; actor uses
   `"disabled"`. Claude planner uses only built-in `WebSearch` plus Blocknet MCP (installed CLI
   supports this with `--tools`/`--allowedTools`); actor has no built-in tools. Planner prefers local

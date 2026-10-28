@@ -47,6 +47,7 @@ async function fixture(run) {
 async function request({ body = new FakeBody(), planner, actor = backend(async () => { throw new Error('unexpected actor call'); }), dir, sessions, text = goal, persona }) {
   const events = [];
   const session = new BrainSession({ body, backend: actor, plannerBackend: planner, bot: 'Kirill',
+    chatBackend: backend(async () => ({ text: JSON.stringify({ reply: 'Working on the next step.' }) })),
     plansFile: join(dir, 'plans.jsonl'), persona, log: { write: (type, data) => events.push({ type, ...data }) } });
   sessions.push(session); await session.start();
   body.emit('event', { type: 'chat', from: 'Alex', text });
@@ -67,7 +68,7 @@ test('goal chat calls planner, retries invalid JSON once, executes through fake 
   assert.equal(session.plans.status(), 'план: выполнен');
   assert.deepEqual(body.calls.filter(c => ['obtain', 'craft'].includes(c.tool)).map(c => [c.tool, c.args.item]),
     [['obtain', 'stone_pickaxe'], ['obtain', 'iron_ingot'], ['craft', 'iron_pickaxe']]);
-  assert.ok(body.calls.some(c => c.tool === 'say' && c.args.text === 'Готово.'));
+  assert.equal(body.calls.filter(c => c.tool === 'say').length, 0);
   assert.deepEqual(inventoryCounts('main: 3 iron_ingot\n3 iron_ingot slots [0]\niron_pickaxe slots [1]\nsummary: building blocks 10'), { iron_ingot: 3, iron_pickaxe: 1 });
   assert.equal(checkDone('pos 0 64 0', { position: [0, 64, 0] }).pass, true);
   assert.throws(() => validatePlan({ ...pickaxePlan, steps: [{ id: 1, do: 'obtain iron_ingot 3', done: 'looks good' }] }));
@@ -80,56 +81,47 @@ test('goal chat calls planner, retries invalid JSON once, executes through fake 
   assert.equal(english.body.inventory.iron_pickaxe, 1);
 }));
 
-test('slow planner gets one quick local filler and one parallel scene in its prompt; fast planner stays quiet', async () => fixture(async f => {
-  const { persona } = await import('../thinking.js');
-  for (const slow of [true, false]) {
-    const body = new FakeBody(), started = Date.now(); let fillerAt, preparing = false;
+test('planner preamble streams before completion with one parallel scene; absent preamble stays quiet', async () => fixture(async f => {
+  for (const streaming of [true, false]) {
+    const body = new FakeBody(); let preparing = false, finished = false;
     const call = body.call.bind(body);
     body.call = async (bot, tool, args) => {
-      if (tool === 'say' && args.text !== 'Готово.') fillerAt = Date.now() - started;
-      if (tool === 'scene') {
-        await new Promise(resolve => setImmediate(resolve));
-        assert.ok(preparing, 'scene runs while the planner backend prepares');
-      }
+      if (tool === 'say') assert.equal(finished, false);
+      if (tool === 'scene') { await new Promise(resolve => setImmediate(resolve)); assert.ok(preparing); }
       return call(bot, tool, args);
     };
     const planner = backend(async text => {
       assert.match(text, /Scene observed while preparing this plan: forest/u);
       assert.equal(body.calls.filter(c => c.tool === 'scene').length, 1);
-      if (slow) await new Promise(resolve => setTimeout(resolve, 60));
+      if (streaming) {
+        planner.onText('I will check '); planner.onText('the caves.\n');
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(body.calls.filter(c => c.tool === 'say').length, 1);
+      }
+      finished = true;
       return { text: JSON.stringify(pickaxePlan) };
     });
-    planner.prepare = async () => {
-      preparing = true;
-      await new Promise(resolve => setImmediate(resolve));
-      preparing = false;
-    };
-    await request({ ...f, body, text: slow ? 'make an iron pickaxe' : 'make iron tools',
-      persona: { ...persona, delayMs: 10 }, planner });
-    const fillers = body.calls.filter(c => c.tool === 'say' && c.args.text !== 'Готово.');
-    assert.equal(fillers.length, slow ? 1 : 0);
-    if (slow) { assert.ok(fillerAt < 60); assert.ok(persona.en.crafting.includes(fillers[0].args.text)); }
+    planner.prepare = async () => { preparing = true; await new Promise(resolve => setImmediate(resolve)); preparing = false; };
+    await request({ ...f, body, text: streaming ? 'make an iron pickaxe' : 'make iron tools', planner });
+    assert.equal(body.calls.filter(c => c.tool === 'say').length, streaming ? 1 : 0);
   }
 }));
 
-test('thinking phrases avoid recent repeats, respect language, eight second cooldown and cancellation', async () => {
-  const { Thinking, persona } = await import('../thinking.js');
-  const said = []; let time = 0;
-  const thinking = new Thinking({ say: text => said.push(text), now: () => time,
-    random: () => 0, pool: { ...persona, delayMs: 1 } });
-  const slow = options => thinking.run(() => new Promise(resolve => setTimeout(resolve, 8)), options);
-  await slow({ text: 'найди железо' });
-  await slow({ text: 'найди железо' });
+test('model preambles preserve text, deliver once and suppress cancelled speech', async () => {
+  const { Thinking } = await import('../thinking.js');
+  const said = [], transport = {};
+  const thinking = new Thinking({ say: text => said.push(text) });
+  const work = async () => {
+    transport.onText('Checking '); transport.onText('the cave.\n'); transport.onText('more text', true);
+    return { text: 'Checking the cave.\n{"goal":"iron"}' };
+  };
+  const result = await thinking.run(work, { backend: transport });
+  assert.deepEqual(said, ['Checking the cave.']);
+  assert.equal(result.text, '{"goal":"iron"}');
+  await thinking.run(work, { backend: transport, isActive: () => false });
   assert.equal(said.length, 1);
-  for (let i = 0; i < 3; i++) { time += 8000; await slow({ text: 'найди железо' }); }
-  assert.equal(new Set(said).size, 4);
-  assert.ok(said.every(s => persona.ru.finding.includes(s)));
-  time += 8000;
-  await slow({ text: 'build a house', isActive: () => false });
-  assert.equal(said.length, 4);
-  await assert.rejects(thinking.run(() => Promise.reject(new Error('cancelled'))), /cancelled/u);
-  await new Promise(resolve => setTimeout(resolve, 8));
-  assert.equal(said.length, 4);
+  await assert.rejects(thinking.run(() => Promise.reject(new Error('cancelled')), { backend: transport }), /cancelled/u);
+  assert.equal(transport.onText, undefined);
 });
 
 test('only planner backend args enable live web search, with the same role restriction for Claude', () => {
@@ -205,7 +197,7 @@ test('tool steps never call actor; free text restarts actor per step with tiny c
   direct.session.close();
   await request({ ...f, body, actor, text: 'сделай железная кирка из материалов', planner: backend(async () => ({ text: JSON.stringify(plan) })) });
   assert.equal(actorCalls, 2);
-  assert.ok(body.calls.some(c => c.tool === 'say' && /^план: шаг/u.test(c.args.text)));
+  assert.ok(body.calls.some(c => c.tool === 'say' && c.args.text === 'Working on the next step.'));
   assert.deepEqual(parseTool('goto 2 64 -3'), { tool: 'goto', args: { x: 2, y: 64, z: -3 } });
   assert.deepEqual(parseTool('gather cobblestone 3').args, { item: 'cobblestone', count: 3 });
   assert.deepEqual(parseRole('codex:gpt-6-luna:priority'), { backend: 'codex', model: 'gpt-6-luna', serviceTier: 'priority' });
@@ -222,7 +214,7 @@ async function until(predicate) {
     await new Promise(resolve => setImmediate(resolve));
   }
 }
-async function runningPlan(f, { review, classify = () => ({ kind: 'hint' }), autoplay = false } = {}) {
+async function runningPlan(f, { review, classify = () => ({ kind: 'hint', reply: 'I will check that.' }), autoplay = false } = {}) {
   const body = new FakeBody(), prompts = [], chatPrompts = [], events = [];
   const call = body.call.bind(body);
   let finish;
@@ -255,10 +247,10 @@ async function runningPlan(f, { review, classify = () => ({ kind: 'hint' }), aut
     chat: text => body.emit('event', { type: 'chat', from: 'Alex', text }) };
 }
 
-test('hint during running task immediately acks once, reviews once, and keep never cancels the body', async () => fixture(async f => {
+test('hint classifier acknowledges once, reviews once, and keep never cancels the body', async () => fixture(async f => {
   const r = await runningPlan(f, { review: { action: 'keep' } });
   r.chat('железо глубже, на y=16');
-  assert.equal(r.body.calls.filter(c => c.tool === 'say').length, 1, 'ack is immediate');
+  assert.equal(r.body.calls.filter(c => c.tool === 'say').length, 0, 'no local phrase before classification');
   await r.session.plans.interactions;
   assert.equal(r.prompts.length, 2, 'one initial plan and exactly one hint review');
   assert.match(r.prompts[1], /железо глубже, на y=16/u);
@@ -296,15 +288,14 @@ test('revising later steps preserves the running step and remembers hints on fai
   r.finish(); await until(() => !r.session.busy);
 }));
 
-test('question is answered while working without replanning; burst chat shares ack cooldown', async () => fixture(async f => {
+test('question is answered while working without replanning or local acks', async () => fixture(async f => {
   const r = await runningPlan(f, { classify: () => ({ kind: 'question', reply: 'Сейчас добываю железо.' }) });
   r.chat('что ты делаешь?'); r.chat('и где ты?');
   await r.session.plans.interactions;
   assert.equal(r.prompts.length, 1);
   assert.equal(r.chatPrompts.length, 2);
   assert.ok(r.chatPrompts.every(p => p.includes('Current plan:') && p.includes('Scene: forest')));
-  const { persona } = await import('../thinking.js');
-  assert.equal(r.body.calls.filter(c => c.tool === 'say' && persona.ru.ack.includes(c.args.text)).length, 1);
+  assert.equal(r.body.calls.filter(c => c.tool === 'say').length, 2);
   assert.equal(r.body.calls.filter(c => c.tool === 'say' && c.args.text === 'Сейчас добываю железо.').length, 2);
   assert.equal(r.body.calls.filter(c => c.tool === 'stop').length, 0);
   r.finish(); await until(() => !r.session.busy);
@@ -326,40 +317,38 @@ test('new player goal replans immediately, then resumes the unchanged long-term 
 }));
 
 test('before player chat an English autoplay goal still uses persona default ru for speech', async () => fixture(async f => {
-  const { persona, Thinking } = await import('../thinking.js');
-  const thinking = new Thinking({ random: () => 0 });
-  assert.ok(persona.ru.finding.includes(thinking.phrase('find iron')));
+  const { persona, personaPrompt } = await import('../thinking.js');
+  assert.equal(persona.defaultLanguage, 'ru');
+  assert.match(personaPrompt, /default to Russian/u);
   const r = await runningPlan(f, { autoplay: true });
   assert.match(r.session.languageRule(), /Before any player message, use ru/u);
   assert.equal(r.session.lastPlayerMessage, undefined);
-  assert.ok(persona.ru.thinking.includes(r.session.thinking.phrase('survive and progress', r.session.lastPlayerMessage?.text)));
   r.session.cancel();
 }));
 
-test('acks remain available beyond three messages, respecting the eight-second cooldown', async () => {
-  const { persona, Thinking } = await import('../thinking.js');
-  const said = []; let time = 0;
-  const thinking = new Thinking({ say: text => said.push(text), now: () => time, random: () => 0 });
-  for (let i = 0; i < 6; i++) {
-    await thinking.ack(); await thinking.ack();
-    time += 8000;
-  }
+test('each turn can stream its own preamble without phrase pools or cooldown', async () => {
+  const { Thinking, persona } = await import('../thinking.js');
+  const said = [], transport = {};
+  const thinking = new Thinking({ say: text => said.push(text) });
+  for (let i = 0; i < 6; i++) await thinking.run(async () => {
+    transport.onText(`Checking cave ${i}.\n`);
+    return { text: '<silent>' };
+  }, { backend: transport });
   assert.equal(said.length, 6);
-  assert.ok(said.every(s => persona.ru.ack.includes(s)));
+  assert.deepEqual(Object.keys(persona), ['defaultLanguage']);
 });
 
-test('slow initial autoplay planning sends a Russian filler before any player message', async () => fixture(async f => {
-  const { persona } = await import('../thinking.js');
+test('initial autoplay planning streams model speech before any player message', async () => fixture(async f => {
   const body = new FakeBody(); let finish;
-  const planner = backend(() => new Promise(resolve => { finish = () => resolve({ text: JSON.stringify(oneStep('find coal', 'coal')) }); }));
+  const planner = backend(() => new Promise(resolve => {
+    planner.onText('Let me check the cave.\n');
+    finish = () => resolve({ text: JSON.stringify(oneStep('find coal', 'coal')) });
+  }));
   const session = new BrainSession({ body, backend: backend(async () => ({ text: '<silent>' })), plannerBackend: planner,
-    chatBackend: backend(async () => ({ text: JSON.stringify({ kind: 'question', reply: 'Да, я тут.' }) })),
-    bot: 'Kirill', goal: 'find coal', pauseMs: 1, persona: { ...persona, delayMs: 1 }, plansFile: join(f.dir, 'default.jsonl') });
+    chatBackend: backend(async () => ({ text: JSON.stringify({ kind: 'question', reply: 'Still here.' }) })),
+    bot: 'Kirill', goal: 'find coal', pauseMs: 1, plansFile: join(f.dir, 'default.jsonl') });
   f.sessions.push(session); await session.start();
   await until(() => body.calls.some(c => c.tool === 'say'));
-  assert.ok(persona.ru.finding.includes(body.calls.find(c => c.tool === 'say').args.text));
-  body.emit('event', { type: 'chat', from: 'Alex', text: 'ты тут?' });
-  assert.equal(body.calls.filter(c => c.tool === 'say' && persona.ru.ack.includes(c.args.text)).length, 1,
-    'a recent filler must not suppress the immediate player-message ack');
+  assert.equal(body.calls.find(c => c.tool === 'say').args.text, 'Let me check the cave.');
   finish(); await until(() => session.ended && !session.busy);
 }));

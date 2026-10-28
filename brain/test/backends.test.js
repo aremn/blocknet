@@ -26,7 +26,7 @@ function fakeProcess(receive) {
 
 test('gather rules parse only unambiguous quantities and items', () => {
   assert.deepEqual(routeRule('накопай 10 булыжника', 'Alex'), {
-    tool: 'gather', args: { item: 'cobblestone', count: 10 }, ack: 'Делаю.',
+    tool: 'gather', args: { item: 'cobblestone', count: 10 },
   });
   assert.equal(routeRule('добудь 4 земли', 'Alex').args.item, 'dirt');
   assert.equal(routeRule('накопай 0 булыжника', 'Alex'), null);
@@ -123,15 +123,16 @@ for (const Backend of [ClaudeBackend, CodexBackend]) {
   });
 }
 
-test('ack is sent for a slow fake child and omitted for a fast fake child', async () => {
-  for (const delay of [0, 750]) {
+test('preamble streams from a fake child before the final result; absent text stays quiet', async () => {
+  for (const streaming of [false, true]) {
     const said = [];
     const backend = new ClaudeBackend({ spawnProcess: () => fakeProcess((message, send) => {
-      setTimeout(() => send({ type: 'result', result: 'Done.', usage: {} }), delay);
+      if (streaming) send({ type: 'stream_event', event: { delta: { type: 'text_delta', text: 'Checking the cave.\n' } } });
+      setTimeout(() => { assert.equal(said.length, streaming ? 1 : 0); send({ type: 'result', result: 'Done.', usage: {} }); }, 10);
     }) });
     try {
       assert.equal((await sendWithAck(backend, 'Dig', text => said.push(text))).text, 'Done.');
-      assert.deepEqual(said, delay ? ['On it.'] : []);
+      assert.deepEqual(said, streaming ? ['Checking the cave.'] : []);
     } finally { backend.close(); }
   }
 });

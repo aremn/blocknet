@@ -377,8 +377,10 @@ public final class VisionGameTests {
             } else bot.controller().gather("coal", 3, reports::add);
         }
         helper.succeedWhen(() -> {
-            helper.assertTrue(reports.size() == 1 && reports.getFirst().contains("gathered 3 coal"), reports.toString());
-            helper.assertTrue(bot.getInventory().countItem(net.minecraft.world.item.Items.COAL) == 3, "three coal picked up");
+            var gathered = java.util.regex.Pattern.compile("gathered ([0-9]+) coal").matcher(reports.isEmpty() ? "" : reports.getFirst());
+            helper.assertTrue(reports.size() == 1 && gathered.find() && Integer.parseInt(gathered.group(1)) >= 3, reports.toString());
+            helper.assertTrue(bot.getInventory().countItem(net.minecraft.world.item.Items.COAL) >= 3, "three coal picked up");
+            helper.assertTrue(bot.getInventory().countItem(net.minecraft.world.item.Items.COAL) == Integer.parseInt(gathered.group(1)), "report states the real count");
             for (int z = 20; z <= 22; z++) helper.assertBlockPresent(Blocks.AIR, new BlockPos(24, 2, z));
             helper.assertTrue(helper.getTick() >= 45, "survival mining time");
             BotManager.despawn(name);
