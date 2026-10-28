@@ -37,6 +37,13 @@ public final class ObjectGraph {
     private final Long2ObjectOpenHashMap<Node> nodes = new Long2ObjectOpenHashMap<>();
     private final Map<Long, String> refs = new HashMap<>();
     private final Map<String, Integer> counters = new HashMap<>();
+    // Recently issued refs survive component merges/splits long enough to revisit their evidence.
+    private final Map<String, ObjectView> issued = new LinkedHashMap<>();
+
+    public ObjectView resolve(String ref, Vec3 eye, long since) {
+        var current = objects(eye, since).stream().filter(o -> o.ref().equals(ref)).findFirst();
+        return current.orElse(issued.get(ref));
+    }
     private final Set<Node> invalid = Collections.newSetFromMap(new IdentityHashMap<>());
 
     private static String group(ObservedMap.Cell cell) {
@@ -170,6 +177,8 @@ public final class ObjectGraph {
                 new AABB(minX, minY, minZ, maxX + 1, maxY + 1, maxZ + 1), lastSeen,
                 visible > 0 ? Provenance.VISIBLE_NOW : Provenance.REMEMBERED));
         }
+        for (var view : result) issued.put(view.ref(), view);
+        while (issued.size() > 512) issued.remove(issued.keySet().iterator().next());
         return result.stream().sorted(Comparator.comparing(ObjectView::ref)).toList();
     }
 

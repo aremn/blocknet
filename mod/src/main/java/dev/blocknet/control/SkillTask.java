@@ -24,6 +24,7 @@ abstract class SkillTask {
     }
     abstract void work();
     abstract String describe();
+    String depthContext() { return ""; }
     final void action(Consumer<Consumer<String>> start, Consumer<String> after) {
         busy = true;
         controller.skillAction(() -> start.accept(message -> {

@@ -31,14 +31,15 @@ export async function sendWithAck(backend, text, say, { delayMs = 700, ack = 'On
 
 /** Keep inventory/held/low-health facts from the revision-based changes tool. */
 export class CompactState {
-  facts = { inventory: 'unknown', held: 'empty', health: '' };
+  facts = { inventory: 'unknown', held: 'empty', health: '', depth: '' };
   previous = '';
   update(delta) {
     const text = String(delta ?? '');
-    const body = text.match(/body r\d+: ([^\n]*)/u)?.[1];
+    const body = text.split(/body r\d+: /u).slice(1).at(-1)?.split('\n')[0];
     if (body) {
       const health = body.match(/health ([\d.]+)\/([\d.]+)/u);
       this.facts.health = health && +health[1] / +health[2] < 0.4 ? `health low (${health[1]}/${health[2]})` : '';
+      this.facts.depth = body.match(/\by=-?\d+(?:, surface y=-?\d+)?(?:, [\w:]+ best ~-?\d+, \d+ below)?/u)?.[0] ?? '';
     }
     const inventory = text.match(/inventory r\d+: ([\s\S]*?)(?=\n(?:body|task) r\d+:|$)/u)?.[1];
     if (inventory) {
@@ -48,7 +49,7 @@ export class CompactState {
         return match ? `${match[1] ?? 1} ${match[2]}` : '';
       }).filter(Boolean).join(', ') || 'empty';
     }
-    const current = `inventory: ${this.facts.inventory}; held: ${this.facts.held}${this.facts.health ? `; ${this.facts.health}` : ''}`;
+    const current = `inventory: ${this.facts.inventory}; held: ${this.facts.held}${this.facts.health ? `; ${this.facts.health}` : ''}${this.facts.depth ? `; ${this.facts.depth}` : ''}`;
     if (current === this.previous) return '';
     this.previous = current;
     return `\nState: ${current}`;

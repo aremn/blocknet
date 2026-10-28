@@ -15,16 +15,26 @@ import net.minecraft.world.phys.Vec3;
 final class MiningTask {
     private final BotPlayer bot;
     private final BotController controller;
-    private final Direction direction;
+    private final Direction forward;
+    private Direction direction;
     private final int limit;
     private final boolean descending;
+    private final boolean recover;
     private final Set<Long> knownOres = new HashSet<>();
     private BlockPos feet, step;
     private int completed, ticks;
+    private int detourSteps, diversions, sealed;
+    private final Set<String> rejected = new HashSet<>();
+    private final Set<Long> visited = new HashSet<>();
 
     MiningTask(BotPlayer bot, BotController controller, Direction direction, int limit, boolean descending) {
-        this.bot = bot; this.controller = controller; this.direction = direction;
+        this(bot, controller, direction, limit, descending, false);
+    }
+    MiningTask(BotPlayer bot, BotController controller, Direction direction, int limit, boolean descending, boolean recover) {
+        this.bot = bot; this.controller = controller; this.direction = direction; forward = direction;
+        this.recover = recover;
         this.limit = limit; this.descending = descending; feet = bot.blockPosition();
+        visited.add(feet.asLong());
         bot.worldMemory().observed().forEach(dimension(), (pos, cell) -> {
             if (cell.semantic().category().equals("ore")) knownOres.add(pos.asLong());
         });
@@ -48,7 +58,34 @@ final class MiningTask {
                 return count[0] == 0 ? "" : o.kind() + " x" + count[0] + " " + o.ref();
             }).filter(s -> !s.isEmpty()).collect(Collectors.joining(", "));
         controller.miningFinished((descending ? "descended to " + feet.getY() : "tunneled " + completed + " " + direction.getName().substring(0, 1).toUpperCase(java.util.Locale.ROOT))
-            + (reason.isEmpty() ? "" : "; " + reason) + "; uncovered: " + (uncovered.isEmpty() ? "none" : uncovered));
+            + (reason.isEmpty() ? "" : "; " + reason) + "; uncovered: " + (uncovered.isEmpty() ? "none" : uncovered)
+            + (diversions == 0 && sealed == 0 ? "" : "; reroutes " + diversions + ", sealed " + sealed));
+    }
+
+    private String edge(Direction side) { return feet.asLong() + ":" + side; }
+
+    /** Deterministic local geometry recovery. Hidden ore never participates in lane selection. */
+    private void avoid(String reason, BlockPos hazard) {
+        if (!recover) { done("stopped before " + reason); return; }
+        if (hazard != null && fluid(hazard).equals("water")) {
+            var seal = controller.sealWater(hazard);
+            if (seal != BotController.FluidSeal.NONE) {
+                if (seal == BotController.FluidSeal.SEALED) sealed++;
+                controller.replanExcavation();
+                return;
+            }
+        }
+        rejected.add(edge(direction));
+        if (++diversions <= 64) {
+            for (Direction side : new Direction[] { forward.getClockWise(), forward.getCounterClockWise(), forward.getOpposite(), forward }) {
+                BlockPos next = descending ? feet.relative(side).below() : feet.relative(side);
+                if (rejected.contains(edge(side)) || visited.contains(next.asLong())) continue;
+                direction = side; detourSteps = 3; step = null;
+                controller.replanExcavation();
+                return;
+            }
+        }
+        done("stopped: no safe route around " + reason);
     }
 
     private String fluid(BlockPos pos) {
@@ -61,6 +98,7 @@ final class MiningTask {
 
     /** Pickup must not walk into a hole before its newly visible support has been checked. */
     boolean collectionWalk(BlockPos broken) { return broken.getY() <= step.getY(); }
+    Vec3 collectionPoint() { return Vec3.atBottomCenterOf(step); }
 
     boolean collectionSafe(BlockPos broken) {
         if (!collectionWalk(broken)) return true;
@@ -68,19 +106,21 @@ final class MiningTask {
         BlockPos support = broken.below();
         var hit = bot.vision().observe(Vec3.atCenterOf(support).add(0, .499, 0));
         String danger = fluid(support);
-        if (!danger.isEmpty()) { done("stopped before " + danger); return false; }
+        if (!danger.isEmpty()) { avoid(danger, support); return false; }
         if (hit.end() == VoxelRay.End.UNKNOWN) return false;
         if (hit.end() == VoxelRay.End.HIT && !support.equals(hit.pos())) {
             controller.exploreWalk(feet); return false;
         }
         if (hit.end() != VoxelRay.End.HIT || !support.equals(hit.pos()) || hit.state() == null
             || !hit.state().isFaceSturdy(bot.level(), support, Direction.UP)) {
-            done("stopped before large drop or void"); return false;
+            avoid("large drop or void", null); return false;
         }
         return true;
     }
 
     void tick() {
+        // Pickup can jump against a stair lip. Do not select the next cell from a rising eye.
+        if (!bot.onGround()) return;
         if (descending && limit >= feet.getY()) { done(""); return; }
         if (!descending && completed >= limit) { done(""); return; }
         if (step == null) step = descending ? feet.relative(direction).below() : feet.relative(direction);
@@ -91,17 +131,20 @@ final class MiningTask {
             if (!bot.vision().canObserve()) return;
             var hit = bot.vision().observe(Vec3.atCenterOf(pos));
             String danger = fluid(pos);
-            if (!danger.isEmpty()) { done("stopped before " + danger); return; }
+            if (!danger.isEmpty()) { avoid(danger, pos); return; }
             for (Direction side : Direction.values()) {
                 if (!bot.vision().canObserve()) return;
                 bot.vision().observe(Vec3.atCenterOf(pos.relative(side)));
                 danger = fluid(pos.relative(side));
-                if (!danger.isEmpty()) { done("stopped before " + danger); return; }
+                if (!danger.isEmpty()) { avoid(danger, pos.relative(side)); return; }
             }
             if (hit.end() == VoxelRay.End.UNKNOWN) return;
             if (hit.end() == VoxelRay.End.HIT) {
                 BlockPos seen = hit.pos();
-                if (!seen.equals(pos)) { done("stopped: opening is obstructed"); return; }
+                if (!seen.equals(pos)) {
+                    done("stopped: opening is obstructed by " + seen.toShortString() + " while aiming at " + pos.toShortString()
+                        + " from " + bot.position() + ", stair " + feet.toShortString()); return;
+                }
                 if (hit.state() == null) { done("stopped: too dark"); return; }
                 String hint = controller.toolHint(hit.state());
                 if (!hint.isEmpty()) { done(hint); return; }
@@ -114,16 +157,17 @@ final class MiningTask {
         BlockPos support = step.below();
         var hit = bot.vision().observe(Vec3.atCenterOf(support).add(0, .499, 0));
         String danger = fluid(support);
-        if (!danger.isEmpty()) { done("stopped before " + danger); return; }
+        if (!danger.isEmpty()) { avoid(danger, support); return; }
         if (hit.end() == VoxelRay.End.UNKNOWN) return;
         if (hit.end() == VoxelRay.End.HIT && !support.equals(hit.pos())) {
             controller.exploreWalk(feet); return;
         }
         if (hit.end() != VoxelRay.End.HIT || !support.equals(hit.pos()) || hit.state() == null
             || !hit.state().isFaceSturdy(bot.level(), support, Direction.UP)) {
-            done("stopped before large drop or void"); return;
+            avoid("large drop or void", null); return;
         }
-        if (!controller.exploreWalk(step) || Math.abs(bot.getY() - step.getY()) > .25) return;
-        feet = step; step = null; completed++;
+        if (!controller.exploreWalk(step) || !bot.onGround() || Math.abs(bot.getY() - step.getY()) > .25) return;
+        feet = step; visited.add(feet.asLong()); step = null; completed++;
+        if (detourSteps > 0 && --detourSteps == 0) direction = forward;
     }
 }

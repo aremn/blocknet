@@ -28,7 +28,7 @@ public final class BridgeTools {
         add("explore", "Walk through observed safe space toward a frontier, then look and report new objects.", true, "direction?", "distance?");
         add("knowledge", "Read ore heights, frequency, biome restrictions, harvest tool and loot from server data.", false, "item");
         add("wiki", "Read in-game guides/quests/tooltips; use before crafting unfamiliar modded items.", false, "query");
-        add("mine_ore", "Mine an ore item or block using known heights and honest branch mining until count or a ten minute budget.", true, "item", "count?");
+        add("mine_ore", "Descend to a known ore peak, bypass observed fluids, then mine a main tunnel and side branches until count or a ten minute budget; progress reports depth and actual drops.", true, "item", "count?");
         add("obtain", "Obtain at least count items recursively from inventory, remembered containers, crafting and observed survival sources.", true, "item", "count?");
         add("plan", "Plan recipes without acting; mode craft makes new items, get counts owned items.", false,
             "item", "count?", "mode?");
@@ -45,7 +45,7 @@ public final class BridgeTools {
         add("descend", "Dig a safe 1-wide, 2-high staircase down to y; optional cardinal direction, otherwise facing. Requires a pickaxe for stone.", true, "y", "direction?");
         add("tunnel", "Dig a safe 1x2 tunnel at this level and report uncovered ores with refs. Requires a pickaxe for stone.", true, "direction", "length");
         add("mine", "Walk to and mine one block, then collect its drops; needs a suitable tool.", true, "x", "y", "z");
-        add("gather", "Gather MORE items from an observed ref or logs/wood, stone/cobblestone, coal, iron, dirt, sand or exact item id; requires the right tool.", true, "item?", "ref?", "target?", "count?");
+        add("gather", "Gather MORE items from an observed ref or logs/wood, stone/cobblestone, coal, iron, dirt, sand or exact item id; remembered refs are revisited and reobserved, soil is cleared by a safe staircase; requires the right tool.", true, "item?", "ref?", "target?", "count?");
         add("use", "Walk to and right-click one block; sneak bypasses block interactions.", true, "x", "y", "z", "sneak?");
         add("attack", "Attack an observed entity ref or type with the best weapon; retreat when overwhelmed.", true, "target");
         add("eat", "Eat one inventory food through player use; omitted item selects safe nutritious food.", true, "item?");

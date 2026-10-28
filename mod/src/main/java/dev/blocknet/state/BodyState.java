@@ -39,6 +39,7 @@ public record BodyState(Map<String, Section> sections) {
         if (bot.experienceLevel != 0) facts.add("xp " + bot.experienceLevel);
         facts.add("dimension " + ItemDescriber.shortId(bot.level().dimension().location()));
         facts.add("pos " + bot.blockPosition().toShortString());
+        facts.add(bot.controller().depthContext());
         if (!bot.onGround()) facts.add("airborne");
         if (bot.isInWater()) facts.add("in_water");
         if (bot.isInLava()) facts.add("in_lava");

@@ -5,6 +5,7 @@ import dev.blocknet.body.BotPlayer;
 import dev.blocknet.knowledge.Knowledge;
 import java.util.*;
 import java.util.function.Consumer;
+import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.world.item.Item;
@@ -17,15 +18,23 @@ final class MineOreTask extends SkillTask {
     private final Direction forward;
     private final int y;
     private int mainSteps, phase, branch;
+    private int branchSteps, dugBranchSteps;
+    private int reroutes, sealed;
+    private final int surfaceY;
+    private BlockPos junction;
     private boolean descended;
     private final Set<Long> exhausted = new HashSet<>();
 
     MineOreTask(BotPlayer bot, Item item, int count, int budget, Consumer<String> report) {
+        this(bot, item, count, budget, null, report);
+    }
+    MineOreTask(BotPlayer bot, Item item, int count, int budget, Integer targetY, Consumer<String> report) {
         super(bot, report, budget);
         this.count = count; ore = Knowledge.get(bot.serverLevel()).ore(item); forward = bot.getDirection();
+        surfaceY = controller.miningSurfaceY();
         initial = ore == null ? 0 : held();
         String dimension = Knowledge.shortId(bot.level().dimension().location());
-        y = ore == null ? bot.getBlockY() : ore.ranges().stream()
+        y = targetY != null ? targetY : ore == null ? bot.getBlockY() : ore.ranges().stream()
             .filter(r -> r.dimension().equals(dimension) && r.min() != null && r.peak() <= bot.getBlockY()
                 && r.peak() > bot.level().getMinBuildHeight())
             .sorted(Comparator.comparingDouble(Knowledge.Range::frequency).reversed()
@@ -34,17 +43,41 @@ final class MineOreTask extends SkillTask {
     }
     private int held() { return bot.getInventory().countItem(ore.drop()); }
     private String name() { return ore == null ? "ore" : Knowledge.shortId(BuiltInRegistries.ITEM.getKey(ore.drop())); }
-    @Override String describe() { return "mining " + name() + " depth y=" + bot.getBlockY() + ", found " + (ore == null ? 0 : held()-initial) + "/" + count; }
+    @Override String depthContext() {
+        return y == Integer.MIN_VALUE ? "" : ", " + name().replace("raw_", "") + " best ~" + y + ", "
+            + Math.max(0, bot.getBlockY()-y) + " below";
+    }
+    @Override String describe() { return "mining " + name() + " depth y=" + bot.getBlockY() + ", surface y=" + surfaceY
+        + depthContext() + ", found " + (ore == null ? 0 : held()-initial) + "/" + count
+        + ", main " + mainSteps + ", branches " + dugBranchSteps + ", reroutes " + reroutes + ", sealed " + sealed; }
+    private void recordLeg(String message) {
+        var match = java.util.regex.Pattern.compile("reroutes (\\d+), sealed (\\d+)").matcher(message);
+        if (match.find()) { reroutes += Integer.parseInt(match.group(1)); sealed += Integer.parseInt(match.group(2)); }
+    }
     @Override void work() {
         if (busy) return;
         if (ore == null) { complete("unsupported: no ore generation for this item"); return; }
-        if (held()-initial >= count) { complete("mined " + (held()-initial) + " " + name() + " at y=" + y); return; }
+        if (held()-initial >= count) { complete("mined " + (held()-initial) + " " + name() + " at y=" + y + "; " + describe()); return; }
         if (y == Integer.MIN_VALUE) { complete("unsupported: no known ore peak reachable below the bot (unknown range or another dimension)"); return; }
         if (!descended) {
-            descended = true;
             if (bot.getBlockY() > y) {
-                action(cb -> controller.descend(y, forward, cb), this::check); return;
+                action(cb -> controller.miningLeg(forward, y, true, cb), message -> {
+                    recordLeg(message);
+                    if (failed(message)) check(message);
+                    else if (bot.getBlockY() <= y) descended = true;
+                    else complete("stopped: descent ended above target y=" + y + "; " + describe());
+                }); return;
             }
+            descended = true;
+        }
+        if (phase == 2) {
+            action(cb -> controller.goTo(junction, cb), message -> {
+                if (failed(message)) { check(message); return; }
+                branchSteps = 0;
+                phase = branch == 0 ? 1 : 0;
+                branch = 1-branch;
+            });
+            return;
         }
         bot.worldMemory().glance(bot, 4);
         // This is an observed-map query, never a scan of live world states.
@@ -64,25 +97,20 @@ final class MineOreTask extends SkillTask {
             return;
         }
         Direction direction = forward;
-        int length = 1;
         if (phase != 0) {
             Direction side = branch == 0 ? forward.getClockWise() : forward.getCounterClockWise();
-            direction = phase == 1 ? side : side.getOpposite();
-            length = 12;
+            direction = side;
         }
         final Direction leg = direction;
-        final int distance = length;
-        action(cb -> controller.tunnel(leg, distance, cb), message -> {
+        action(cb -> controller.miningLeg(leg, 1, false, cb), message -> {
+            recordLeg(message);
             if (failed(message)) {
-                if ((message.contains("lava") || message.contains("water")) && phase == 0) {
-                    // A deterministic parallel lane around the observed fluid; never inspect hidden cells.
-                    action(cb -> controller.tunnel(forward.getClockWise(), 3, cb), this::check);
-                } else complete(message + "; " + describe());
+                complete(message + "; " + describe());
                 return;
             }
-            if (phase == 0) { if (++mainSteps % 3 == 0) phase = 1; }
-            else if (phase == 1) phase = 2;
-            else { phase = branch == 0 ? 1 : 0; branch = 1-branch; }
+            if (phase == 0) {
+                if (++mainSteps % 3 == 0) { junction = bot.blockPosition(); phase = 1; }
+            } else { dugBranchSteps++; if (++branchSteps >= 12) phase = 2; }
         });
     }
     private void check(String message) { if (failed(message)) complete(message + "; " + describe()); }

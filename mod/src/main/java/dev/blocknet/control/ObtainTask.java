@@ -27,6 +27,7 @@ final class ObtainTask extends SkillTask {
     private MineOreTask mining;
     private int operations;
     private boolean surveyed;
+    @Override String depthContext() { return mining == null ? "" : mining.depthContext(); }
 
     ObtainTask(BotPlayer bot, Item item, int count, Consumer<String> report) {
         super(bot, report, 20*60*10);
@@ -170,7 +171,8 @@ final class ObtainTask extends SkillTask {
             }
         });
         return java.util.stream.StreamSupport.stream(BuiltInRegistries.ITEM.getTagOrEmpty(tag).spliterator(), false).map(h -> h.value())
-                .sorted(Comparator.<Item>comparingInt(i -> seen.contains(i) ? 0 : held(i) > 0 ? 1 : 2).thenComparing(i -> BuiltInRegistries.ITEM.getKey(i).toString()))
+                .sorted(Comparator.<Item>comparingInt(i -> seen.contains(i) ? 0 : held(i) > 0 ? 1
+                    : i == Items.COBBLESTONE ? 2 : 3).thenComparing(i -> BuiltInRegistries.ITEM.getKey(i).toString()))
                 .findFirst().orElse(null);
     }
 }

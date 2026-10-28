@@ -45,15 +45,17 @@ final class GatherTask {
     private int ticks;
     private int lastCount;
     private int emptyMines;
+    private boolean revisited;
+    private boolean harvesting;
 
     GatherTask(BotPlayer bot, BotController controller, String target, int count) {
         this.bot = bot;
         this.controller = controller;
         this.target = target.replace("minecraft:", "");
         this.count = count;
-        object = bot.vision().objects().stream().filter(o -> o.ref().equals(target)).findFirst().orElse(null);
+        object = bot.vision().resolve(target);
         logs = this.target.equals("logs") || this.target.equals("wood") || object != null && object.category().equals("tree");
-        item = logs ? Items.OAK_LOG : object != null && object.category().equals("ore") ? (object.kind().equals("iron") ? Items.RAW_IRON : BuiltInRegistries.ITEM.get(ResourceLocation.withDefaultNamespace(object.kind()))) : switch (this.target) {
+        item = logs ? Items.OAK_LOG : object != null && object.category().equals("cliff") ? Items.COBBLESTONE : object != null && object.category().equals("ore") ? (object.kind().equals("iron") ? Items.RAW_IRON : BuiltInRegistries.ITEM.get(ResourceLocation.withDefaultNamespace(object.kind()))) : switch (this.target) {
             case "stone", "cobblestone" -> Items.COBBLESTONE;
             case "coal" -> Items.COAL;
             case "iron" -> Items.RAW_IRON;
@@ -140,6 +142,7 @@ final class GatherTask {
 
     /** Headroom drops wait until the opening is clear. Never walk into an unchecked hole. */
     boolean collectionWalk(BlockPos broken) { return step == null || broken.getY() <= step.getY(); }
+    Vec3 collectionPoint() { return step == null ? null : Vec3.atBottomCenterOf(step); }
 
     boolean collectionSafe(BlockPos broken) {
         return step == null || !collectionWalk(broken) || supportSafe();
@@ -164,6 +167,7 @@ final class GatherTask {
     }
 
     private void nextStair(BlockPos feet) {
+        controller.miningSurfaceY();
         tunneling = true;
         stairFeet = feet.immutable();
         step = feet.relative(forward).below();
@@ -172,7 +176,8 @@ final class GatherTask {
 
     void collected() {
         int now = held();
-        emptyMines = now > lastCount ? 0 : emptyMines + 1;
+        if (now > lastCount) emptyMines = 0;
+        else if (harvesting) emptyMines++;
         lastCount = now;
     }
 
@@ -186,7 +191,7 @@ final class GatherTask {
         if (object != null) {
             if (logs && !object.bounds().contains(Vec3.atCenterOf(pos))) return false;
             if (logs && !columns.contains(BlockPos.asLong(pos.getX(), 0, pos.getZ()))) return false;
-            if (!logs && (!Semantics.state(state).kind().equals(object.kind())
+            if (!logs && ((!object.category().equals("cliff") && !Semantics.state(state).kind().equals(object.kind()))
                 || vein.isEmpty() && !object.bounds().contains(Vec3.atCenterOf(pos)))) return false;
         }
         if (logs) return state.is(BlockTags.LOGS);
@@ -206,6 +211,7 @@ final class GatherTask {
     }
 
     private boolean mine(BlockPos pos) {
+        harvesting = matches(pos);
         var cell = bot.worldMemory().observed().cell(bot.level().dimension().location().toString(), pos);
         if (cell != null && cell.stateId() >= 0) {
             String hint = controller.toolHint(Block.stateById(cell.stateId()));
@@ -240,6 +246,13 @@ final class GatherTask {
         if (held() - initial >= count) {
             controller.gatherFinished("gathered " + (held() - initial) + " " + name());
             return;
+        }
+        if (object != null && !revisited) {
+            if (!visible(object.nearest()) && !controller.gatherRevisit(object.nearest())) return;
+            controller.endGatherRevisit();
+            // The ref is a destination, not permission to mine a stale block state.
+            if (!finishSurvey()) return;
+            revisited = true;
         }
         if (!checked) {
             // Close-range rays are observations too; preserve direct gather on ground underfoot.
@@ -316,7 +329,11 @@ final class GatherTask {
             return;
         }
         BlockPos ground = feet.below();
-        if (object == null && groundHit.end() == VoxelRay.End.HIT && ground.equals(groundHit.pos()) && matches(ground)) {
+        var groundCell = bot.worldMemory().observed().cell(bot.level().dimension().location().toString(), ground);
+        boolean cover = item == Items.COBBLESTONE && groundCell != null && groundCell.stateId() >= 0
+            && (Block.stateById(groundCell.stateId()).is(BlockTags.DIRT) || Block.stateById(groundCell.stateId()).is(BlockTags.SAND)
+                || Block.stateById(groundCell.stateId()).getBlock() instanceof net.minecraft.world.level.block.FallingBlock);
+        if (object == null && groundHit.end() == VoxelRay.End.HIT && ground.equals(groundHit.pos()) && (matches(ground) || cover)) {
             // Physics runs after the controller: wait for a real landing before fixing the
             // next stair's origin, otherwise floor(blockY) can still be a falling cell.
             if (!bot.onGround()) return;

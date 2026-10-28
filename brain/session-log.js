@@ -2,7 +2,7 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statS
 import { dirname, join, basename } from 'node:path';
 
 export const oneLine = value => String(value ?? '').replace(/\s+/gu, ' ').trim();
-export const failed = value => /^(?:\[[^\]]+\] )?(?:failed|blocked|cancelled|not hungry)\b/iu.test(String(value));
+export const failed = value => /^(?:\[[^\]]+\] )?(?:failed|blocked|cancelled|not hungry|stopped|unsupported|none seen)\b|; stopped(?: before|:)/iu.test(String(value));
 
 /** Remove human-only diagnostic facts before passing an event to any model. */
 export function perception(value) {

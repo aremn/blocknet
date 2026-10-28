@@ -66,10 +66,26 @@ public final class BotController {
     private enum Task { IDLE, GOTO, FOLLOW, MINE_APPROACH, MINE_BREAK, COLLECT, USE, EAT, PLACE, CRAFT, GATHER, CONTAINER, LOOK, EXPLORE, EXCAVATE }
 
     private SkillTask skill;
+    private Integer surfaceY;
+    int miningSurfaceY() {
+        if (surfaceY == null || bot.getBlockY() > surfaceY) surfaceY = bot.getBlockY();
+        return surfaceY;
+    }
 
     public void mineOre(net.minecraft.world.item.Item item, int count, Consumer<String> report) {
         stop();
         skill = new MineOreTask(bot, item, count, 20*60*10, report);
+    }
+
+    /** Explicit depth also permits scaled terrain fixtures without changing worldgen knowledge. */
+    public void mineOre(net.minecraft.world.item.Item item, int count, int y, Consumer<String> report) {
+        stop();
+        skill = new MineOreTask(bot, item, count, 20*60*10, y, report);
+    }
+
+    public String depthContext() {
+        return "y=" + bot.getBlockY() + (surfaceY == null ? "" : ", surface y=" + surfaceY)
+            + (skill == null ? "" : skill.depthContext());
     }
 
     public void obtain(net.minecraft.world.item.Item item, int count, Consumer<String> report) {
@@ -411,10 +427,10 @@ public final class BotController {
 
     public void goTo(String ref, Consumer<String> reporter) {
         final String normalizedRef = dev.blocknet.bridge.BridgeTools.normalizeRef(ref);
-        var object = bot.vision().objects().stream().filter(o -> o.ref().equals(normalizedRef)).findFirst();
-        if (object.isEmpty()) { reporter.accept("none seen for " + ref + "; try look or explore"); return; }
-        start(Task.GOTO, object.get().nearest(), reporter);
-        navigationGoal = new GoalGetToBlock(object.get().nearest());
+        var object = bot.vision().resolve(normalizedRef);
+        if (object == null) { reporter.accept("none seen for " + ref + "; try look or explore"); return; }
+        start(Task.GOTO, object.nearest(), reporter);
+        navigationGoal = new GoalGetToBlock(object.nearest());
     }
 
     public void tunnel(Direction direction, int length, Consumer<String> reporter) {
@@ -423,8 +439,14 @@ public final class BotController {
     }
 
     public void descend(int y, Direction direction, Consumer<String> reporter) {
+        miningSurfaceY();
         start(Task.EXCAVATE, bot.blockPosition(), reporter);
         excavating = new MiningTask(bot, this, direction, y, true);
+    }
+
+    void miningLeg(Direction direction, int limit, boolean descending, Consumer<String> reporter) {
+        start(Task.EXCAVATE, bot.blockPosition(), reporter);
+        excavating = new MiningTask(bot, this, direction, limit, descending, true);
     }
 
     void miningFinished(String message) { excavating = null; finish(message); }
@@ -712,6 +734,52 @@ public final class BotController {
         if (bot.position().subtract(point).horizontalDistanceSqr() <= .09) return true;
         walkTowards(point);
         return false;
+    }
+
+    boolean gatherRevisit(BlockPos pos) {
+        if (++navigationTicks > MAX_PATH_TICKS) { fail("cannot revisit remembered resource"); return false; }
+        PathState state = pathTo(new GoalGetToBlock(pos));
+        if (state == PathState.FAILED) { fail("cannot reach remembered resource"); return false; }
+        return state == PathState.ARRIVED;
+    }
+
+    void endGatherRevisit() { stopPathing(); }
+
+    void replanExcavation() { task = Task.EXCAVATE; }
+
+    /** Plug a seen source by clicking an actually visible solid face, like a player. */
+    enum FluidSeal { NONE, AIMING, SEALED }
+    FluidSeal sealWater(BlockPos pos) {
+        var cell = bot.worldMemory().observed().cell(bot.level().dimension().location().toString(), pos);
+        if (cell == null || cell.stateId() < 0) return FluidSeal.NONE;
+        var fluid = net.minecraft.world.level.block.Block.stateById(cell.stateId()).getFluidState();
+        if (!fluid.is(net.minecraft.tags.FluidTags.WATER) || !fluid.isSource()) return FluidSeal.NONE;
+        for (int slot = 0; slot < 36; slot++) {
+            var stack = bot.getInventory().getItem(slot);
+            if (!(stack.getItem() instanceof net.minecraft.world.item.BlockItem block)
+                || !block.getBlock().defaultBlockState().isCollisionShapeFullBlock(bot.level(), pos)
+                || block.getBlock() instanceof net.minecraft.world.level.block.FallingBlock
+                || !InventoryBehavior.isAcceptableThrowaway(stack, pathing().settings())) continue;
+            for (Direction side : Direction.values()) {
+                BlockPos anchor = pos.relative(side);
+                Vec3 face = Vec3.atCenterOf(anchor).add(Vec3.atLowerCornerOf(side.getOpposite().getNormal()).scale(.499));
+                var hit = WorldMemory.clip(bot, face, ClipContext.Block.OUTLINE);
+                if (hit.getType() != HitResult.Type.BLOCK || !hit.getBlockPos().relative(hit.getDirection()).equals(pos)
+                    || !bot.canInteractWithBlock(anchor, -.5)) continue;
+                lookAt(face);
+                if (!isLookingAt(face)) return FluidSeal.AIMING;
+                boolean sneaking = bot.isShiftKeyDown();
+                hold(slot);
+                try {
+                    bot.setShiftKeyDown(true);
+                    bot.gameMode.useItemOn(bot, bot.level(), bot.getMainHandItem(), InteractionHand.MAIN_HAND, hit);
+                    bot.swing(InteractionHand.MAIN_HAND);
+                } finally { bot.setShiftKeyDown(sneaking); hold(slot); }
+                bot.vision().observe(Vec3.atCenterOf(pos));
+                return bot.level().getFluidState(pos).isEmpty() ? FluidSeal.SEALED : FluidSeal.NONE;
+            }
+        }
+        return FluidSeal.NONE;
     }
 
     void craftMine(BlockPos pos) {
@@ -1102,6 +1170,10 @@ public final class BotController {
             item -> item.isAlive() && bot.hasLineOfSight(item));
         var nearest = drops.stream().min(java.util.Comparator.comparingDouble(bot::distanceToSqr));
         Vec3 goal = nearest.map(ItemEntity::position).orElseGet(() -> Vec3.atBottomCenterOf(pos));
+        // A bouncing drop may be over the next, still unchecked cave/drop. Stay on the
+        // verified stair; pickup reach is enough for drops from its own three cells.
+        if (excavating != null) goal = excavating.collectionPoint();
+        else if (gathering != null && gathering.collectionPoint() != null) goal = gathering.collectionPoint();
         if (!hasArrived(goal) && (excavating == null || excavating.collectionWalk(pos))
                 && (gathering == null || gathering.collectionWalk(pos))) {
             // Open a walkable entry into an ore pocket when its drops are beyond pickup reach.

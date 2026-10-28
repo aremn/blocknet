@@ -137,7 +137,7 @@
   },
   {
     "name": "mine_ore",
-    "description": "Mine an ore item or block using known heights and honest branch mining until count or a ten minute budget.",
+    "description": "Descend to a known ore peak, bypass observed fluids, then mine a main tunnel and side branches until count or a ten minute budget; progress reports depth and actual drops.",
     "task": true,
     "params": {
       "type": "object",
@@ -348,7 +348,7 @@
   },
   {
     "name": "gather",
-    "description": "Gather MORE items from an observed ref or logs/wood, stone/cobblestone, coal, iron, dirt, sand or exact item id; requires the right tool.",
+    "description": "Gather MORE items from an observed ref or logs/wood, stone/cobblestone, coal, iron, dirt, sand or exact item id; remembered refs are revisited and reobserved, soil is cleared by a safe staircase; requires the right tool.",
     "task": true,
     "params": {
       "type": "object",

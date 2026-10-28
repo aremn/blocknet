@@ -11,10 +11,17 @@ import { Body } from '../body.js';
 import { BrainSession } from '../brain.js';
 import { ChatRouter } from '../rules.js';
 import { serveMcp } from '../mcp-server.js';
-import { SessionLog, readSession, perception } from '../session-log.js';
+import { SessionLog, readSession, perception, failed } from '../session-log.js';
 import { summarize, mergeDamageMoments } from '../report.js';
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+test('partial mining reports are failures for MCP and the planner', () => {
+  assert.equal(failed('[Kirill] descended to 50; stopped before water; uncovered: none; found 0/3'), true);
+  assert.equal(failed('stopped: budget ended; mining raw_iron depth y=16, found 1/3'), true);
+  assert.equal(failed('[Kirill] none seen for s105; try explore'), true);
+  assert.equal(failed('unsupported: no ore generation for this item'), true);
+  assert.equal(failed('[Kirill] mined 3 raw_iron at y=16; found 3/3'), false);
+});
 async function until(predicate, timeout = 3000) {
   const start = Date.now();
   while (!predicate()) { if (Date.now()-start > timeout) throw new Error('condition timed out'); await sleep(5); }

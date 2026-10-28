@@ -183,6 +183,11 @@ public final class VisionSensor {
         return depth > 0 && Math.abs(delta.dot(right)) <= depth * Math.tan(Math.toRadians(panorama || frontal ? 45 : 80)) && Math.abs(delta.dot(up)) <= depth * Math.tan(Math.toRadians(panorama || frontal ? 29.5 : 45));
     }
 
+    public ObjectGraph.ObjectView resolve(String ref) {
+        return bot.worldMemory().observed().graph(bot.level().dimension().location().toString())
+            .resolve(ref, bot.getEyePosition(), bot.serverLevel().getGameTime() - 4);
+    }
+
     public List<ObjectGraph.ObjectView> objects() {
         String dimension = bot.level().dimension().location().toString();
         ObservedMap map = bot.worldMemory().observed();

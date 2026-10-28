@@ -194,7 +194,7 @@ English to code, commands and commit messages.
   Scene output caps at 12 lines and two representatives per class, including structures.
 - After BridgeTools changes run `node brain/bench/sync-tools.js`; tools.json is generated.
   Socket GameTests use port zero; an occupied live bridge port warns without failing the server.
-  Run the full GameTest suite once at the end; inspect required tests, failed at and exceptions in
+  Run the full GameTest suite at the end (use the requested stability count); inspect required tests, failed at and exceptions in
   build/gametest.log. Node: `node --test brain/test/`. Leave changes uncommitted when requested.
 
 
@@ -222,7 +222,40 @@ English to code, commands and commit messages.
   pickup does not walk and must not mistake an empty head cell for missing floor support.
 - `KnowledgeSkillGameTests` contains the six step-1 checks (including paired hidden-ore scenes).
   Wait for light for the tree. Run only requested targeted tests while iterating; the full suite once
-  at the end. Regenerate tools.json with `node brain/bench/sync-tools.js` after registry edits.
+  at the end unless a stability count is requested. Regenerate tools.json with `node brain/bench/sync-tools.js` after registry edits.
+
+## Natural terrain regression checks (third live run)
+
+- Flat stone arenas do not prove access through soil or recovery around water/caves. Use
+  `NaturalTerrain` (32x48x32) and the `natural_column` / paired `natural_pair` templates. Local
+  y=26 scales iron's low peak; pass the target absolute y through the controller overload in
+  fixtures rather than changing worldgen knowledge. Keep coal, four dirt layers and deepslate.
+- `NaturalMiningGameTests` checks soil-to-stone acquisition, water/cave descent to peak, identical
+  first 45 real break events with/without hidden iron, a remembered cliff revisit, depth hints,
+  observer-received swing/crack packets, both full 12-block branches and a real water-source plug.
+  Test event listeners observe actions only; never feed hidden test world states into decisions.
+- Gather refs are destinations for re-observation, including recent refs retired by object merges.
+  Cliff refs yield cobblestone. Cover blocks are not failed cobblestone harvests. For tagged stone
+  recipe deficits, prefer the supported cobblestone source over unseen alternative stones.
+- `mine_ore` confirms the peak was reached, uses bounded deterministic lane changes around observed
+  fluids/unsafe support, and can plug visible water sources using inventory/menu/useItemOn paths.
+  No lava plugging. Keep direct descend/tunnel stop-before-fluid behavior. Return to saved branch
+  junctions; check observed ore between tunnel steps. Count actual drops and report partial progress.
+- Pickup must stay on the verified stair, even when a drop bounces over a cave. Wait for onGround
+  before selecting the next stair: a jumping eye can falsely see a ceiling obstruction. Check
+  support at the top face. Never step down into unknown air or liquids.
+- Keep vanilla swing broadcasts and gameMode destroy progress at survival speed. Packet tests
+  must observe them on another player's connection, including crack reset; do not invent progress.
+- Propagate y, source surface y, active ore peak and distance into body/scene/CompactState. For
+  status replacements, use the newest body revision. MCP must classify stopped/unsupported/none
+  seen and partial `; stopped` reports as failures, so incomplete mining cannot pass a plan step.
+- Build: `./gradlew build --offline -x deployJar -x removeOldDeployedJars`. If GameTest launch
+  throws BootstrapLauncher NoSuchElementException, run `./gradlew --stop` once, then retry.
+  After registry edits run `node brain/bench/sync-tools.js`; Node checks include brain/test/ and
+  brain/bench/test/. Iterate on selected tests; finish this regression workflow with THREE full
+  GameTest runs and inspect each required-tests summary, failed-at lines and exceptions.
+- Camera rays may defer under load. For repeated fixture observations use `helper.onEachTick`
+  and an explicit stage; never interpret a budget-deferred ray as an absent object.
 
 ## In-game wiki and planner speech
 

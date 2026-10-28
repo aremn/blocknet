@@ -146,3 +146,12 @@ test('compact state emits inventory/held and low health only when meaningful sta
   state.reset();
   assert.match(state.update('no changes'), /inventory:/);
 });
+
+test('compact state preserves mining depth on inventory-only deltas and clears the ore hint when idle', () => {
+  const state = new CompactState();
+  assert.match(state.update('body r1: health 20/20, pos 2, 72, 3, y=72, surface y=72, iron best ~16, 56 below; task r1: mining'), /y=72, surface y=72, iron best ~16, 56 below/);
+  assert.match(state.update('inventory r2: selected 0; main: stone_pickaxe; 3 cobblestone slots [1]'), /iron best ~16, 56 below/);
+  assert.match(state.update('body r2: health 20/20, pos 2, 16, 3, y=16, surface y=72; task r2: idle'), /y=16, surface y=72/);
+  assert.doesNotMatch(state.previous, /iron best/);
+  assert.match(state.update('- body r2: health 20/20, y=16, surface y=72; + body r3: health 20/20, y=12, surface y=72, iron best ~-16, 28 below'), /y=12, surface y=72, iron best ~-16, 28 below/);
+});

@@ -23,7 +23,8 @@ public final class Scene {
             .getPath().replace("_block", "");
         return biome + ", " + (level.isDay() ? "day" : "night") + ", " + (level.isThundering() ? "thunder" : level.isRaining() ? "rain" : "clear")
             + ". you: on " + under + ", facing " + Frontiers.direction(bot.getViewVector(1)) + ", holding "
-            + (bot.getMainHandItem().isEmpty() ? "nothing" : BuiltInRegistries.ITEM.getKey(bot.getMainHandItem().getItem()).getPath());
+            + (bot.getMainHandItem().isEmpty() ? "nothing" : BuiltInRegistries.ITEM.getKey(bot.getMainHandItem().getItem()).getPath())
+            + "; " + bot.controller().depthContext();
     }
     private String group(ObjectGraph.ObjectView o) {
         return switch (o.category()) {
