@@ -34,6 +34,10 @@ final class ExploreTask {
             .max(Comparator.comparingDouble(f -> f.knownDistance() * .5 - risk(Vec3.atCenterOf(f.unknownStart())))).orElse(null);
         toward = frontier == null ? Vec3.ZERO : Vec3.atCenterOf(frontier.unknownStart())
             .subtract(bot.position()).multiply(1, 0, 1).normalize();
+        controller.trace("explore", frontier == null ? "no open frontier " + (direction.equalsIgnoreCase("auto") ? "anywhere" : "to the " + direction)
+            + " in what I have seen; nothing to walk toward"
+            : "heading " + frontier.direction() + " toward the edge of what I know at " + frontier.unknownStart().toShortString()
+                + " (" + Math.round(frontier.knownDistance()) + "m of known ground" + (frontier.blocked() ? ", partly blocked" : "") + ")");
     }
 
     private double score(BlockPos pos) {
@@ -53,8 +57,12 @@ final class ExploreTask {
             double score = score(pos);
             if (score > bestScore) { best = pos; bestScore = score; }
             for (Direction side : List.of(Direction.NORTH, Direction.EAST, Direction.SOUTH, Direction.WEST)) {
-                BlockPos next = pos.relative(side);
-                if (!parents.containsKey(next) && next.distSqr(origin) <= distance * distance && safe(next)) {
+                // One-block steps up and down, as in cave walking: natural ground is rarely flat.
+                for (int dy : new int[] {0, -1, 1}) {
+                    BlockPos next = pos.relative(side).above(dy);
+                    if (parents.containsKey(next) || next.distSqr(origin) > distance * distance || !safe(next)) continue;
+                    if (dy > 0 && !empty(pos.above(2))) continue;
+                    if (dy < 0 && !empty(next.above(2))) continue;
                     parents.put(next, pos); queue.add(next);
                 }
             }
@@ -62,6 +70,12 @@ final class ExploreTask {
         List<BlockPos> reverse = new ArrayList<>();
         for (BlockPos pos = best; !pos.equals(start); pos = parents.get(pos)) reverse.add(pos);
         Collections.reverse(reverse); route = List.copyOf(reverse); index = 0;
+        controller.trace("explore", route.isEmpty() ? "no safe observed step from " + start.toShortString()
+            + " (every neighbour is unknown, unsafe or a drop)" : "route of " + route.size() + " observed safe cells to " + best.toShortString());
+    }
+
+    private boolean empty(BlockPos pos) {
+        return bot.worldMemory().observed().empty(bot.level().dimension().location().toString(), pos);
     }
     private double risk(Vec3 point) {
         double risk = 0;
@@ -81,11 +95,14 @@ final class ExploreTask {
     /** Fill camera sampling gaps with nearby eye rays before selecting a walking cell. */
     private void surveyStep() {
         BlockPos feet = bot.blockPosition();
+        if (!bot.vision().canObserve()) return;
+        bot.vision().observe(Vec3.atCenterOf(feet.above(2)));
         for (Direction side : List.of(Direction.NORTH, Direction.EAST, Direction.SOUTH, Direction.WEST)) {
             BlockPos next = feet.relative(side);
-            for (BlockPos pos : List.of(next, next.above(), next.below())) {
+            // Two below for a step down's floor, two above for a step up's headroom.
+            for (int dy = -2; dy <= 2; dy++) {
                 if (!bot.vision().canObserve()) return;
-                bot.vision().observe(Vec3.atCenterOf(pos));
+                bot.vision().observe(Vec3.atCenterOf(next.above(dy)).add(0, dy < 0 ? .499 : 0, 0));
             }
         }
     }
@@ -98,7 +115,12 @@ final class ExploreTask {
             plan();
             if (route.isEmpty()) { controller.explored(before); return; }
         }
-        if (!safe(route.get(index))) { controller.explored(before); return; }
-        if (controller.exploreWalk(route.get(index))) index++;
+        BlockPos next = route.get(index);
+        if (!safe(next)) {
+            controller.trace("explore", "next cell " + next.toShortString() + " no longer looks safe; stopping here");
+            controller.explored(before);
+            return;
+        }
+        if (controller.exploreWalk(next) && Math.abs(bot.getY() - next.getY()) < .6) index++;
     }
 }

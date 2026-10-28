@@ -66,6 +66,8 @@ final class MiningTask {
 
     /** Deterministic local geometry recovery. Hidden ore never participates in lane selection. */
     private void avoid(String reason, BlockPos hazard) {
+        controller.trace("dig", "stopping at " + feet.toShortString() + " heading " + direction.getName() + ": " + reason
+            + (hazard == null ? "" : " at " + hazard.toShortString()));
         if (!recover) { done("stopped before " + reason); return; }
         if (hazard != null && fluid(hazard).equals("water")) {
             var seal = controller.sealWater(hazard);
@@ -81,6 +83,7 @@ final class MiningTask {
                 BlockPos next = descending ? feet.relative(side).below() : feet.relative(side);
                 if (rejected.contains(edge(side)) || visited.contains(next.asLong())) continue;
                 direction = side; detourSteps = 3; step = null;
+                controller.trace("dig", "detour: digging " + side.getName() + " for 3 steps, then back to " + forward.getName());
                 controller.replanExcavation();
                 return;
             }

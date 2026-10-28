@@ -107,6 +107,7 @@ final class CraftExecutor {
         // A station within arm's reach is noticed without a full look around.
         bot.worldMemory().glance(bot, GLANCE_RADIUS);
         replan();
+        controller.trace("craft", "plan for " + count + " " + new ItemKey(target) + ": " + plan.text().replace('\n', ' '));
         if (plan.status() == CraftPlan.Status.NO_RECIPE) {
             complete("blocked: no recipe for " + plan.target()
                 + (plan.hints().isEmpty() ? "" : "; " + String.join("; ", plan.hints()))
@@ -259,6 +260,11 @@ final class CraftExecutor {
     }
 
     private void next(Phase next) {
+        if (next != phase) {
+            controller.trace("craft", (plan != null && stepIndex < plan.steps().size()
+                ? "step " + (stepIndex + 1) + "/" + plan.steps().size() + " " + step().recipeId() + ": " : "") + phase.name().toLowerCase(java.util.Locale.ROOT)
+                + " -> " + next.name().toLowerCase(java.util.Locale.ROOT));
+        }
         phase = next;
         phaseTicks = 0;
         delay = CLICK_DELAY - 1;

@@ -46,8 +46,11 @@ final class GatherTask {
     private int lastCount;
     private int emptyMines;
     private boolean revisited;
+    private boolean revisiting;
     private boolean harvesting;
     boolean caveOnly;
+    private final java.util.Map<BlockState, Boolean> dropMemo = new java.util.HashMap<>();
+    private long dropMemoTick = Long.MIN_VALUE;
 
     GatherTask(BotPlayer bot, BotController controller, String target, int count) {
         this.bot = bot;
@@ -203,15 +206,29 @@ final class GatherTask {
         if (target.equals("dirt")) return state.is(BlockTags.DIRT);
         if (target.equals("sand")) return state.is(BlockTags.SAND);
         if (state.getBlock().asItem() == item) return true;
-        ItemStack tool = bot.getMainHandItem();
-        for (Item probe : new Item[] {Items.WOODEN_PICKAXE, Items.STONE_PICKAXE, Items.IRON_PICKAXE, Items.DIAMOND_PICKAXE}) {
-            ItemStack candidate = new ItemStack(probe);
-            if (candidate.isCorrectToolForDrops(state)) { tool = candidate; break; }
+        long tick = bot.serverLevel().getGameTime();
+        if (tick != dropMemoTick) {
+            dropMemo.clear();
+            dropMemoTick = tick;
         }
-        return Block.getDrops(state, bot.serverLevel(), pos, null, bot, tool).stream().anyMatch(stack -> stack.is(item));
+        // A loot roll is the expensive part, and thousands of remembered stone cells share one state:
+        // roll once per state per tick instead of once per cell (which lagged the whole server).
+        return dropMemo.computeIfAbsent(state, ignored -> {
+            ItemStack tool = bot.getMainHandItem();
+            for (Item probe : new Item[] {Items.WOODEN_PICKAXE, Items.STONE_PICKAXE, Items.IRON_PICKAXE, Items.DIAMOND_PICKAXE}) {
+                ItemStack candidate = new ItemStack(probe);
+                if (candidate.isCorrectToolForDrops(state)) { tool = candidate; break; }
+            }
+            return Block.getDrops(state, bot.serverLevel(), pos, null, bot, tool).stream().anyMatch(stack -> stack.is(item));
+        });
     }
 
-    private boolean mine(BlockPos pos) {
+    private boolean mine(BlockPos pos, String why) {
+        var seen = bot.worldMemory().observed().cell(bot.level().dimension().location().toString(), pos);
+        controller.trace("gather", "mining " + (seen == null || seen.stateId() < 0 ? "block"
+            : BuiltInRegistries.BLOCK.getKey(Block.stateById(seen.stateId()).getBlock()).getPath()) + " at " + pos.toShortString()
+            + String.format(java.util.Locale.ROOT, " (%.1fm): ", Math.sqrt(bot.position().distanceToSqr(Vec3.atCenterOf(pos)))) + why
+            + "; have " + (held() - initial) + "/" + count + " " + name());
         harvesting = matches(pos);
         var cell = bot.worldMemory().observed().cell(bot.level().dimension().location().toString(), pos);
         if (cell != null && cell.stateId() >= 0) {
@@ -249,6 +266,10 @@ final class GatherTask {
             return;
         }
         if (object != null && !revisited) {
+            if (!visible(object.nearest()) && !revisiting) {
+                revisiting = true;
+                controller.trace("gather", target + " is remembered, not visible now: walking back to " + object.nearest().toShortString() + " to look again");
+            }
             if (!visible(object.nearest()) && !controller.gatherRevisit(object.nearest())) return;
             controller.endGatherRevisit();
             // The ref is a destination, not permission to mine a stale block state.
@@ -293,7 +314,7 @@ final class GatherTask {
                         return;
                     }
                     bot.worldMemory().glance(bot, 4);
-                    mine(seen);
+                    mine(seen, "digging the next stair (headroom, feet, then floor)");
                     return;
                 }
                 if (!bot.level().getFluidState(pos).isEmpty()) { noSight(); return; }
@@ -318,13 +339,13 @@ final class GatherTask {
                 .filter(pos -> vein.stream().anyMatch(old -> Math.abs(pos.getX()-old.getX()) <= 1
                     && Math.abs(pos.getY()-old.getY()) <= 1 && Math.abs(pos.getZ()-old.getZ()) <= 1))
                 .min(Comparator.comparingDouble(pos -> bot.position().distanceToSqr(Vec3.atCenterOf(pos))));
-            if (connected.isPresent()) { mine(connected.get()); return; }
+            if (connected.isPresent()) { mine(connected.get(), "next block of the " + oreKind + " vein I am following"); return; }
         }
         if (caveOnly) {
             var wall = bot.worldMemory().nearby(bot, 6).stream().map(e -> e.pos())
                 .filter(p -> p.getY() >= feet.getY() && bot.canInteractWithBlock(p, -.5))
                 .filter(this::matches).filter(this::visible).findFirst();
-            if (wall.isPresent()) mine(wall.get()); else noSight();
+            if (wall.isPresent()) mine(wall.get(), "visible wall ore within reach of the cave route"); else noSight();
             return;
         }
         if (tunneling) { nextStair(feet); return; }
@@ -334,7 +355,7 @@ final class GatherTask {
             .filter(this::matches).filter(this::visible)
             .min(Comparator.comparingDouble(pos -> bot.position().distanceToSqr(Vec3.atCenterOf(pos))));
         if (candidate.isPresent() && bot.canInteractWithBlock(candidate.get(), -.5)) {
-            mine(candidate.get());
+            mine(candidate.get(), "nearest visible match at or above my feet, already in reach");
             return;
         }
         BlockPos ground = feet.below();
@@ -346,18 +367,23 @@ final class GatherTask {
             // Physics runs after the controller: wait for a real landing before fixing the
             // next stair's origin, otherwise floor(blockY) can still be a falling cell.
             if (!bot.onGround()) return;
+            controller.trace("gather", "nothing matching in reach; the ground under me is "
+                + BuiltInRegistries.BLOCK.getKey(Block.stateById(groundCell.stateId()).getBlock()).getPath()
+                + (cover ? " (cover over stone)" : "") + ", so I dig a staircase down");
             nextStair(feet);
             return;
         }
-        if (candidate.isPresent()) { mine(candidate.get()); return; }
+        if (candidate.isPresent()) { mine(candidate.get(), "nearest visible match at or above my feet; walking there"); return; }
         // A visible surface below the feet can still supply the resource without a tunnel.
         var surface = bot.worldMemory().nearby(bot, 64).stream().map(entry -> entry.pos())
             .filter(this::matches).filter(this::visible).findFirst();
-        if (surface.isPresent()) mine(surface.get());
+        if (surface.isPresent()) mine(surface.get(), "a visible match below my feet");
         else noSight();
     }
 
     private void noSight() {
+        controller.trace("gather", "no visible " + name() + " I can safely reach from " + bot.blockPosition().toShortString()
+            + " (only blocks a ray from my eyes reaches count; " + bot.worldMemory().observed().cellCount() + " cells remembered)");
         controller.gatherFinished("none seen for " + target + (held() > initial ? "; gathered " + (held() - initial) + "/" + count : "") + "; " + controller.scene().unexplored() + "; try explore");
     }
 }

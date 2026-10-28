@@ -40,6 +40,10 @@ final class MineOreTask extends SkillTask {
             .sorted(Comparator.comparingDouble(Knowledge.Range::frequency).reversed()
                 .thenComparing(Comparator.comparingInt(Knowledge.Range::peak).reversed()))
             .mapToInt(Knowledge.Range::peak).findFirst().orElse(Integer.MIN_VALUE);
+        controller.trace("mine_ore", ore == null ? "no ore generation known for this item"
+            : y == Integer.MIN_VALUE ? "no known " + name() + " peak below y=" + bot.getBlockY() + " in this dimension"
+            : "best depth for " + name() + " is y=" + y + (targetY != null ? " (given)" : " (most frequent ore peak at or below me)")
+                + "; I am at y=" + bot.getBlockY() + ", digging " + forward.getName());
     }
     private int held() { return bot.getInventory().countItem(ore.drop()); }
     private String name() { return ore == null ? "ore" : Knowledge.shortId(BuiltInRegistries.ITEM.getKey(ore.drop())); }
@@ -89,6 +93,7 @@ final class MineOreTask extends SkillTask {
         if (seen.isPresent()) {
             // Gather follows newly exposed connected ore through the existing vision path.
             var pos = seen.get().pos();
+            controller.trace("mine_ore", "saw " + name() + " ore at " + pos.toShortString() + "; collecting the vein before tunneling on");
             int before = held();
             action(cb -> controller.gather(BuiltInRegistries.ITEM.getKey(ore.drop()).toString(), count-(held()-initial), cb), message -> {
                 if (held() == before) exhausted.add(pos.asLong());

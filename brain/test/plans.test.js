@@ -352,3 +352,28 @@ test('initial autoplay planning streams model speech before any player message',
   assert.equal(body.calls.find(c => c.tool === 'say').args.text, 'Let me check the cave.');
   finish(); await until(() => session.ended && !session.busy);
 }));
+
+test('debug trace: full model I/O, reasoning and in-turn tools reach the session log and the body overlay', async () => fixture(async f => {
+  const body = new FakeBody();
+  body.notes = [];
+  body.note = (bot, source, text) => body.notes.push({ bot, source, text });
+  const longScene = 'x'.repeat(1000);
+  const planner = backend(async text => {
+    planner.onTrace?.('reasoning', { text: 'need stone tools before iron' });
+    planner.onTrace?.('tool', { tool: 'knowledge', arguments: { item: 'iron_ore' }, result: { content: [{ type: 'text', text: 'peak 16' }] } });
+    return { text: JSON.stringify({ ...pickaxePlan, goal: `${pickaxePlan.goal} ${longScene}`.slice(0, 900) }) };
+  });
+  const { events } = await request({ ...f, body, planner });
+  const traces = events.filter(e => e.type === 'model_trace');
+  const input = traces.find(e => e.model_role === 'planner' && e.kind === 'input');
+  assert.ok(input && input.text.length > 300, 'planner input is logged in full, not cut at 300 characters');
+  assert.ok(traces.some(e => e.kind === 'output' && e.text.length > 300), 'planner output is logged in full');
+  assert.ok(traces.some(e => e.kind === 'reasoning' && e.text === 'need stone tools before iron'));
+  assert.ok(traces.some(e => e.kind === 'tool' && e.tool === 'knowledge'));
+  assert.ok(body.notes.every(n => n.bot === 'Kirill' && n.text.length <= 600));
+  assert.ok(body.notes.some(n => n.source === 'planner' && /thinks: need stone tools/u.test(n.text)));
+  assert.ok(body.notes.some(n => n.source === 'planner' && /calls knowledge .*-> peak 16/u.test(n.text)));
+  assert.ok(body.notes.some(n => n.source === 'plan' && /obtain stone_pickaxe/u.test(n.text)));
+  assert.equal(body.notes.filter(n => n.source === 'step').length, pickaxePlan.steps.length);
+  assert.equal(body.notes.filter(n => n.source === 'critic' && /verified/u.test(n.text)).length, pickaxePlan.steps.length);
+}));

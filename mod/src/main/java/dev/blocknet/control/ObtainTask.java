@@ -44,6 +44,8 @@ final class ObtainTask extends SkillTask {
         if (goals.size() >= 16 || goals.stream().anyMatch(g -> g.item == item)) {
             complete("unsupported: acquisition cycle/depth for " + name(item)); return true;
         }
+        controller.trace("obtain", "to get " + (goals.isEmpty() ? "" : goals.peek().count + " " + name(goals.peek().item))
+            + " I first need " + count + " " + name(item) + " (have " + held(item) + ")");
         goals.push(new Goal(item, count)); return true;
     }
     @Override void work() {
@@ -61,6 +63,7 @@ final class ObtainTask extends SkillTask {
             long available = source.contents().entrySet().stream().filter(e -> e.getKey().stack().is(goal.item)).mapToLong(Map.Entry::getValue).sum();
             if (available == 0 || !triedSources.add(key)) continue;
             int before = held(goal.item);
+            controller.trace("obtain", "a remembered container at " + BlockPos.of(source.position()).toShortString() + " holds " + available + " " + name(goal.item) + "; taking from it");
             action(cb -> controller.withdraw(BlockPos.of(source.position()), BuiltInRegistries.ITEM.getKey(goal.item).toString(), goal.count-before, cb), message -> {
                 if (held(goal.item) > before) actions.add("withdrew " + (held(goal.item)-before) + " " + name(goal.item));
             }); return;
@@ -80,6 +83,7 @@ final class ObtainTask extends SkillTask {
             }
             int before = held(goal.item);
             if (ore != null) {
+                controller.trace("obtain", name(goal.item) + " comes from ore; mining it at its known depth");
                 mining = new MineOreTask(bot, goal.item, goal.count-before, budget-ticks, message -> {
                     mining = null; actions.add(message);
                     if (failed(message)) complete(message);
@@ -87,8 +91,10 @@ final class ObtainTask extends SkillTask {
             }
             if (logs && !explored.contains(goal.item)) {
                 explored.add(goal.item);
+                controller.trace("obtain", "need logs; looking around for trees first");
                 action(cb -> controller.look("trees", true, cb), message -> {}); return;
             }
+            controller.trace("obtain", "gathering " + (goal.count - before) + " " + name(goal.item) + " from what I can see");
             action(cb -> controller.gather(BuiltInRegistries.ITEM.getKey(goal.item).toString(), goal.count-before, cb), message -> {
                 if (held(goal.item) > before) actions.add("gathered " + (held(goal.item)-before) + " " + name(goal.item));
                 if (held(goal.item) >= goal.count) return;
@@ -102,6 +108,7 @@ final class ObtainTask extends SkillTask {
                 new ArrayList<>(bot.getInventory().items), CraftStations.remembered(bot).keySet(), bot.containerMemory().sources(bot), CraftPlan.Mode.OBTAIN);
         if (plan.status() == CraftPlan.Status.OK) {
             int before = held(goal.item);
+            controller.trace("obtain", "can craft " + goal.count + " " + name(goal.item) + " now: " + plan.text().replace('\n', ' '));
             action(cb -> controller.get(new ItemStack(goal.item), goal.count, cb), message -> {
                 if (held(goal.item) > before) {
                     boolean cooked = plan.steps().stream().anyMatch(step -> bot.getServer().getRecipeManager().byKey(step.recipeId())
@@ -150,6 +157,7 @@ final class ObtainTask extends SkillTask {
                 if (item != null && need(item, held(item) + Math.toIntExact(missing.getValue()))) return;
             }
         }
+        controller.trace("obtain", "no way I know to get " + name(goal.item) + "; plan was " + plan.status());
         complete(knowledge.unsupported(goal.item));
     }
     private Item resolve(String label) {

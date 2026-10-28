@@ -60,8 +60,16 @@ export class ClaudeBackend {
       turn.streamed = true;
       this.onText?.(event.event.delta.text ?? '');
     }
+    if (event.type === 'user') {
+      for (const block of event.message?.content ?? []) {
+        if (block?.type === 'tool_result') this.onTrace?.('tool_result', { result: block.content ?? null });
+      }
+    }
     if (event.type === 'assistant') {
       for (const block of event.message?.content ?? []) {
+        if (block.type === 'thinking' && block.thinking) this.onTrace?.('reasoning', { text: block.thinking });
+        if (block.type === 'tool_use') this.onTrace?.('tool', { tool: block.name, arguments: block.input ?? null });
+        if (block.type === 'text') this.onTrace?.('message', { text: block.text ?? '' });
         if (block.type === 'tool_use') turn.toolCalls++;
         if (block.type === 'text') {
           if (!turn.streamed) this.onText?.(block.text, true);

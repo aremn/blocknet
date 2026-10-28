@@ -133,6 +133,7 @@ public class Baritone implements IBaritone {
    @Override
    public void logDebug(String message) {
       Pathing.LOGGER.debug(message);
+      Pathing.trace(this.playerContext.entity(), message);
    }
 
    @Override

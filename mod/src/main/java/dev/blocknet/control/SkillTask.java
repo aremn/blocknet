@@ -27,14 +27,20 @@ abstract class SkillTask {
     String depthContext() { return ""; }
     final void action(Consumer<Consumer<String>> start, Consumer<String> after) {
         busy = true;
-        controller.skillAction(() -> start.accept(message -> {
-            if (done) return;
-            busy = false;
-            after.accept(message);
-        }));
+        controller.skillAction(() -> {
+            start.accept(message -> {
+                if (done) return;
+                busy = false;
+                controller.trace("skill", "step result: " + message);
+                after.accept(message);
+            });
+            // Inside skillAction the controller describes the step it just started, not the skill.
+            if (busy) controller.trace("skill", "next step of " + describe() + ": " + controller.describe());
+        });
     }
     final void complete(String message) {
         if (done) return;
+        controller.trace("skill", "finished after " + ticks / 20 + " s: " + message);
         done = true;
         controller.skillFinished(this, message, report);
     }

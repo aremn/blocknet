@@ -86,6 +86,24 @@ public final class BlocknetCommands {
                     .executes(BlocknetCommands::despawn)))
             .then(Commands.literal("list")
                 .executes(BlocknetCommands::list))
+            .then(Commands.literal("debug")
+                .executes(c -> debug(c, nearestBot(c.getSource())))
+                .then(Commands.literal("off").executes(c -> {
+                    boolean stopped = dev.blocknet.debug.DebugWatch.stop(c.getSource().getPlayerOrException());
+                    c.getSource().sendSuccess(() -> Component.literal(stopped ? "debug overlay off" : "not watching any bot"), false);
+                    return 1;
+                }))
+                .then(Commands.argument("name", StringArgumentType.word()).suggests(BOT_NAMES)
+                    .executes(c -> debug(c, bot(c)))))
+            .then(withBot("trace", false, (context, bot) -> {
+                for (var entry : bot.trace().last(20)) {
+                    String line = "[" + entry.source() + "] " + entry.text() + (entry.repeats() > 1 ? " (x" + entry.repeats() + ")" : "");
+                    context.getSource().sendSuccess(() -> Component.literal(line), false);
+                }
+                String file = dev.blocknet.debug.TraceFiles.file(bot.getGameProfile().getName()).toString();
+                context.getSource().sendSuccess(() -> Component.literal("full trace: " + file), false);
+                return 1;
+            }))
             .then(planCommand(buildContext))
             .then(craftCommand(buildContext, CraftPlan.Mode.CRAFT))
             .then(craftCommand(buildContext, CraftPlan.Mode.OBTAIN))
@@ -519,6 +537,18 @@ public final class BlocknetCommands {
 
     private static int sneakUse(CommandContext<CommandSourceStack> c, BotPlayer bot) throws CommandSyntaxException {
         bot.controller().use(BlockPosArgument.getLoadedBlockPos(c, "pos"), true, reporter(c.getSource(), bot));
+        return 1;
+    }
+
+    /** Toggles the caller's debug overlay for one bot. */
+    private static int debug(CommandContext<CommandSourceStack> context, BotPlayer bot) throws CommandSyntaxException {
+        var player = context.getSource().getPlayerOrException();
+        String watched = dev.blocknet.debug.DebugWatch.toggle(player, bot);
+        String how = dev.blocknet.debug.DebugWatch.hasOverlay(player) ? "overlay on"
+            : "this client has no Blocknet mod, so only particles and the action bar";
+        String file = dev.blocknet.debug.TraceFiles.file(bot.getGameProfile().getName()).toString();
+        context.getSource().sendSuccess(() -> Component.literal(watched == null ? "debug overlay off"
+            : "watching " + watched + " (" + how + "); full trace: " + file), false);
         return 1;
     }
 

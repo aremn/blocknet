@@ -137,6 +137,29 @@ public final class ObservedMap {
             .forEach(entry -> consumer.accept(position(key, entry.getIntKey()), entry.getValue())));
     }
 
+    /**
+     * Like {@link #forEach} but only visits sections that can hold cells within {@code radius} of
+     * {@code center}. Callers still filter by exact distance. Does not change the eviction order.
+     */
+    public void forEachNear(String dimension, BlockPos center, int radius, BiConsumer<BlockPos, Cell> consumer) {
+        var values = dimensions.get(dimension);
+        if (values == null) return;
+        int minX = (center.getX() - radius) >> 4, maxX = (center.getX() + radius) >> 4;
+        int minY = (center.getY() - radius) >> 4, maxY = (center.getY() + radius) >> 4;
+        int minZ = (center.getZ() - radius) >> 4, maxZ = (center.getZ() + radius) >> 4;
+        long span = (long) (maxX - minX + 1) * (maxY - minY + 1) * (maxZ - minZ + 1);
+        if (span >= values.size()) {
+            forEach(dimension, consumer);
+            return;
+        }
+        for (int x = minX; x <= maxX; x++) for (int y = minY; y <= maxY; y++) for (int z = minZ; z <= maxZ; z++) {
+            long key = SectionPos.asLong(x, y, z);
+            Section section = values.get(key);
+            if (section != null) section.cells.int2ObjectEntrySet()
+                .forEach(entry -> consumer.accept(position(key, entry.getIntKey()), entry.getValue()));
+        }
+    }
+
     private static BlockPos position(long key, int index) {
         return new BlockPos((SectionPos.x(key) << 4) + (index & 15),
             (SectionPos.y(key) << 4) + (index >> 8), (SectionPos.z(key) << 4) + ((index >> 4) & 15));

@@ -49,7 +49,8 @@ public final class WorldMemory extends SavedData {
     public List<Entry> nearby(BotPlayer bot, double radius) {
         String dimension = bot.level().dimension().location().toString();
         ArrayList<Entry> result = new ArrayList<>();
-        observed.forEach(dimension, (pos, cell) -> {
+        // Skills ask for this every tick; visit only the sections in range, not the whole map.
+        observed.forEachNear(dimension, bot.blockPosition(), (int) Math.ceil(radius) + 1, (pos, cell) -> {
             if (cell.stateId() < 0 || bot.position().distanceToSqr(Vec3.atCenterOf(pos)) > radius * radius) return;
             var state = Block.stateById(cell.stateId());
             String category = cell.semantic().category();

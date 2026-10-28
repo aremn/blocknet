@@ -227,6 +227,13 @@ player use until consumption, chooses safe food by default, and refuses ordinary
   tool arguments/results/timings, changed state as line diffs, chat, and key body moments with
   snapshots. Each segment is at most 5 MB; continuation files use `.jsonl.1`, `.jsonl.2`, etc.
   The last 20 sessions are retained, including their segments.
+- The session log also keeps `model_trace` entries: every model input and output in full (up to
+  20 000 characters, unlike the 300-character `model_message`), Codex reasoning summaries and Claude
+  thinking blocks, and the MCP tool calls a model made inside its turn with arguments and results.
+  Plan, step start, critic verdicts and short model notes also go to the body as `debug.note`
+  (JSON-RPC notification, no reply), so `/blocknet debug` shows them in game and they land in the
+  body trace `logs/blocknet/<bot>-trace.log`. `node brain/timeline.js [session] [--config ...]`
+  merges both into `brain/logs/timeline-<session>.txt`.
 - `brain/logs/tool-feedback.jsonl`: the brain-only `tool_feedback {kind,tool?,note}` MCP tool
   records missing/confusing/redundant/bug feedback in one concrete sentence. Validated planner
   `tool_gaps: [{want, why}]` append to the same file with `source: planner` and to the session log;

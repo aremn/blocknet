@@ -63,6 +63,9 @@ public interface IBaritone {
    default void logDirect(Component... components) {
       IEntityContext playerContext = this.getEntityContext();
       LivingEntity entity = playerContext.entity();
+      StringBuilder text = new StringBuilder();
+      Arrays.asList(components).forEach(part -> text.append(part.getString()));
+      dev.blocknet.pathing.Pathing.trace(entity, text.toString());
       if (entity instanceof Player) {
          MutableComponent component = Component.literal("");
          component.append(BaritoneAPI.getPrefix());

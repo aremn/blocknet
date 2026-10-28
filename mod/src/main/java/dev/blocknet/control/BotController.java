@@ -166,6 +166,7 @@ public final class BotController {
     private Vec3 followLegPosition;
     private int followRetryTicks;
     private boolean followAllowSprint;
+    private boolean followVisible = true;
     private enum Strategy { NORMAL, FALL, CLOSEST }
     private Strategy strategy = Strategy.NORMAL;
     private int closestRange;
@@ -185,6 +186,10 @@ public final class BotController {
         }
     }
 
+    /** Walking a route to a block that is in reach but hidden; {@link #hiddenFor} tries once per target. */
+    private boolean hiddenApproach;
+    @Nullable
+    private BlockPos hiddenFor;
     private double bestDistanceSq;
     private int ticksWithoutProgress;
     private float breakProgress;
@@ -199,12 +204,54 @@ public final class BotController {
         this.scene = new dev.blocknet.vision.Scene(bot);
     }
 
+    /** One line of the reasoning trace: what was decided and why. */
+    void trace(String source, String text) {
+        bot.trace().add(source, text);
+    }
+
+    /** What the debug overlay shows: the controller's current decision, read-only. */
+    public record DebugState(String task, @Nullable BlockPos target, @Nullable BlockPos clearing, @Nullable Goal goal,
+        String route, String danger, int dangerId) {}
+
+    public DebugState debugState() {
+        Goal goal = pathGoal != null ? pathGoal : navigationGoal;
+        String route = pathGoal != null
+            ? "walking to " + pathGoal + " (" + strategyText() + ", this leg " + pathTicks / 20 + " s)"
+            : navigationGoal != null ? "between attempts toward " + navigationGoal + " (" + strategyText() + ")" : "none";
+        String threat = "";
+        if (danger != null) {
+            threat = BuiltInRegistries.ENTITY_TYPE.getKey(danger.getType()).getPath()
+                + String.format(Locale.ROOT, " %.1fm, ", bot.distanceTo(danger))
+                + (dangerHiddenTicks > 0 ? "hidden for " + dangerHiddenTicks / 20 + " s" : dangerRetreating ? "retreating" : "fighting");
+        }
+        return new DebugState((skill != null ? "skill, " : "") + task.name().toLowerCase(Locale.ROOT), target, resumeTarget,
+            goal, route, threat, danger == null ? -1 : danger.getId());
+    }
+
+    private String strategyText() {
+        return switch (strategy) {
+            case NORMAL -> "normal: walk, dig" + (pathing().settings().allowPlace.get() ? ", build" : "");
+            case FALL -> "allowing falls up to " + pathing().settings().maxFallHeightNoWater.get() + " blocks";
+            case CLOSEST -> "closest reachable spot within " + closestRange;
+        };
+    }
+
+    /** The trace file's periodic state record. */
+    public String stateLine() {
+        return String.format(Locale.ROOT, "pos %d %d %d, hp %.0f, food %d | %s%s%s", bot.getBlockX(), bot.getBlockY(), bot.getBlockZ(),
+            bot.getHealth(), bot.getFoodData().getFoodLevel(), describe(),
+            pathGoal == null ? "" : " | route " + pathGoal + " " + strategy.name().toLowerCase(Locale.ROOT),
+            danger == null ? "" : " | danger " + BuiltInRegistries.ENTITY_TYPE.getKey(danger.getType()).getPath());
+    }
+
     private net.minecraft.world.entity.LivingEntity danger;
     private int dangerTicks;
     private int lastMobHurt;
     private boolean dangerWarned;
     private boolean explicitAttack;
     private final java.util.Map<java.util.UUID, Double> dangerDistances = new java.util.HashMap<>();
+    private int dangerHiddenTicks;
+    private boolean dangerRetreating;
 
     public boolean defending() { return danger != null; }
 
@@ -228,7 +275,9 @@ public final class BotController {
     }
 
     private void beginDanger(net.minecraft.world.entity.LivingEntity mob) {
-        danger = mob; dangerTicks = 0; dangerWarned = false;
+        trace("danger", String.format(Locale.ROOT, "%s %.1fm away%s; pausing: %s", BuiltInRegistries.ENTITY_TYPE.getKey(mob.getType()).getPath(),
+            bot.distanceTo(mob), bot.tickCount - lastMobHurt < 5 ? " hit me" : " is approaching", describe()));
+        danger = mob; dangerTicks = 0; dangerWarned = false; dangerHiddenTicks = 0; dangerRetreating = false;
         stopPathing(); abortBreaking();
         if (task == Task.MINE_BREAK) { task = Task.MINE_APPROACH; breakProgress = 0; breakTicks = 0; }
         bot.releaseUsingItem();
@@ -251,25 +300,7 @@ public final class BotController {
             dangerDistances.keySet().removeIf(id -> visible.stream().noneMatch(e -> e.getUUID().equals(id)));
         }
         if (danger == null) return false;
-        if (!danger.isAlive() || danger.isRemoved() || bot.distanceToSqr(danger) > 256) {
-            danger = null;
-            // Check the next visible threat before resuming work.
-            var next = visible.stream().filter(e -> bot.distanceToSqr(e) <= 36).findFirst();
-            if (next.isPresent()) { beginDanger((net.minecraft.world.entity.LivingEntity) next.get()); return true; }
-            if (task == Task.EAT || task == Task.PLACE) {
-                for (int slot = 0; slot < 36; slot++) {
-                    if (bot.getInventory().getItem(slot).is(actionItem.getItem())) {
-                        hold(slot);
-                        if (task == Task.EAT) bot.gameMode.useItem(bot, bot.serverLevel(), bot.getMainHandItem(), InteractionHand.MAIN_HAND);
-                        break;
-                    }
-                }
-            }
-            bot.moments().emit("danger_clear", "resuming paused task");
-            if (gathering != null && task == Task.GATHER) gathering.resumeSelection();
-            if (explicitAttack) { explicitAttack = false; finish("attacked; threat gone"); }
-            return false;
-        }
+        if (!danger.isAlive() || danger.isRemoved() || bot.distanceToSqr(danger) > 256) return clearDanger(visible);
         stopPathing();
         bot.zza = 0; bot.xxa = 0; bot.setJumping(false);
         boolean low = bot.getHealth() < bot.getMaxHealth() * .3f;
@@ -277,8 +308,24 @@ public final class BotController {
         if (!dangerWarned && (low || ++dangerTicks >= 200 && bot.tickCount - lastMobHurt < 60)) {
             dangerWarned = true;
             bot.moments().emit("danger_failed", "defense needs help; health " + bot.getHealth());
+            trace("danger", "defense is not working (health " + bot.getHealth() + "); asking the brain for help");
         }
-        if (!bot.hasLineOfSight(danger)) return true; // Never pursue hidden live coordinates.
+        if (!bot.hasLineOfSight(danger)) {
+            // Never pursue hidden live coordinates. But a threat that stays out of sight (behind a
+            // hill, in a cave below) must not freeze the task forever: after three seconds without
+            // seeing it or being hit, carry on.
+            if (++dangerHiddenTicks > 60 && bot.tickCount - lastMobHurt > 60) {
+                trace("danger", BuiltInRegistries.ENTITY_TYPE.getKey(danger.getType()).getPath()
+                    + " stayed out of sight for 3 s and did not attack");
+                return clearDanger(visible);
+            }
+            return true;
+        }
+        dangerHiddenTicks = 0;
+        if (retreat != dangerRetreating) {
+            dangerRetreating = retreat;
+            trace("danger", retreat ? (low ? "health low" : "outnumbered") + "; retreating" : "fighting back with " + describeHeld());
+        }
         if (retreat) {
             Vec3 away = bot.position().subtract(danger.position()).multiply(1, 0, 1).normalize();
             Vec3 goal = bot.position().add(away.scale(3));
@@ -300,6 +347,34 @@ public final class BotController {
             }
         }
         return true;
+    }
+
+    private String describeHeld() {
+        return bot.getMainHandItem().isEmpty() ? "bare hands" : BuiltInRegistries.ITEM.getKey(bot.getMainHandItem().getItem()).getPath();
+    }
+
+    /** The threat is over: check the next visible one, then resume the paused task. */
+    private boolean clearDanger(java.util.List<Entity> visible) {
+        danger = null;
+        dangerHiddenTicks = 0;
+        dangerRetreating = false;
+        // Check the next visible threat before resuming work.
+        var next = visible.stream().filter(e -> bot.distanceToSqr(e) <= 36).findFirst();
+        if (next.isPresent()) { beginDanger((net.minecraft.world.entity.LivingEntity) next.get()); return true; }
+        if (task == Task.EAT || task == Task.PLACE) {
+            for (int slot = 0; slot < 36; slot++) {
+                if (bot.getInventory().getItem(slot).is(actionItem.getItem())) {
+                    hold(slot);
+                    if (task == Task.EAT) bot.gameMode.useItem(bot, bot.serverLevel(), bot.getMainHandItem(), InteractionHand.MAIN_HAND);
+                    break;
+                }
+            }
+        }
+        bot.moments().emit("danger_clear", "resuming paused task");
+        trace("danger", "threat gone; resuming " + describe());
+        if (gathering != null && task == Task.GATHER) gathering.resumeSelection();
+        if (explicitAttack) { explicitAttack = false; finish("attacked; threat gone"); }
+        return false;
     }
 
     private void selectWeapon() {
@@ -795,6 +870,8 @@ public final class BotController {
     void craftMine(BlockPos pos) {
         target = pos;
         task = Task.MINE_APPROACH;
+        hiddenApproach = false;
+        hiddenFor = null;
     }
 
     void craftFinished(String message) {
@@ -804,6 +881,7 @@ public final class BotController {
     }
 
     public void stop() {
+        if (task != Task.IDLE || skill != null) trace("task", "stop while " + describe());
         if (skill != null) {
             SkillTask cancelled = skill;
             skill = null;
@@ -941,11 +1019,18 @@ public final class BotController {
         stop();
         task = newTask;
         target = pos.immutable();
-        reporter = message -> { if (skill == null) bot.moments().report(message); newReporter.accept(message); };
+        reporter = message -> {
+            trace("task", "result: " + message);
+            if (skill == null) bot.moments().report(message);
+            newReporter.accept(message);
+        };
+        trace("task", "start " + newTask.name().toLowerCase(Locale.ROOT) + " at " + pos.toShortString());
         bestDistanceSq = Double.MAX_VALUE;
         ticksWithoutProgress = 0;
         breakTicks = 0;
         clearedObstacles = 0;
+        hiddenApproach = false;
+        hiddenFor = null;
         strategy = Strategy.NORMAL;
         closestRange = 1;
         navigationTicks = 0;
@@ -976,17 +1061,22 @@ public final class BotController {
             }
             pathGoal = goal;
             pathTicks = 0;
+            trace("nav", "new leg from " + bot.blockPosition().toShortString() + " to " + goal + " (" + strategyText() + ")");
             pathing.getCustomGoalProcess().setGoalAndPath(goal);
             return PathState.MOVING;
         }
         if (++pathTicks > MAX_PATH_TICKS) {
+            trace("nav", "leg to " + goal + " gave up: still not there after 5 minutes");
             stopPathing();
             return PathState.FAILED;
         }
         // The process goes idle when it reaches the goal or when no path can be found.
         if (!pathing.getCustomGoalProcess().isActive()) {
+            boolean arrived = goal.isInGoal(bot.blockPosition());
+            trace("nav", arrived ? "leg reached " + goal + " in " + pathTicks + " ticks"
+                : "leg failed after " + pathTicks + " ticks at " + bot.blockPosition().toShortString() + ": the pathfinder has no way to " + goal);
             stopPathing();
-            return goal.isInGoal(bot.blockPosition()) ? PathState.ARRIVED : PathState.FAILED;
+            return arrived ? PathState.ARRIVED : PathState.FAILED;
         }
         return PathState.MOVING;
     }
@@ -1021,6 +1111,11 @@ public final class BotController {
             return;
         }
         boolean visible = WorldMemory.clip(bot, leader.getEyePosition(), ClipContext.Block.VISUAL).getType() == HitResult.Type.MISS;
+        if (visible != followVisible) {
+            followVisible = visible;
+            trace("follow", visible ? "sees " + followName + " again" : "lost sight of " + followName
+                + "; heading to where they were last seen, " + BlockPos.containing(lastSeenFollowPosition).toShortString());
+        }
         if (visible) {
             lastSeenFollowPosition = leader.position();
             lastSeenFollowOnGround = leader.onGround();
@@ -1076,12 +1171,15 @@ public final class BotController {
             finishNavigation(pos);
         } else if (strategy != Strategy.FALL && strategy != Strategy.CLOSEST && healthyForFall()) {
             strategy = Strategy.FALL;
+            trace("nav", "no route with normal settings; retrying with falls up to 5 blocks allowed (health is high)");
         } else {
             // Automatone executes its long partial segments already. For short rejected segments,
             // expand a nearby intermediate goal a block at a time until a reachable one is found.
             if (strategy != Strategy.CLOSEST) {
                 strategy = Strategy.CLOSEST;
+                trace("nav", "still no route; settling for the closest reachable spot near " + pos.toShortString());
             } else if (closestRange >= Math.ceil(Math.sqrt(bot.blockPosition().distSqr(pos)))) {
+                trace("nav", "no reachable spot even within " + closestRange + " blocks; giving up on " + pos.toShortString());
                 finishNavigation(pos);
             } else {
                 closestRange++;
@@ -1137,12 +1235,20 @@ public final class BotController {
         breakProgress = state.getDestroyProgress(bot, level, pos);
         breakTicks = 0;
         task = Task.MINE_BREAK;
+        float perTick = state.getDestroyProgress(bot, level, pos);
+        ItemStack held = bot.getMainHandItem();
+        trace("mine", "breaking " + BuiltInRegistries.BLOCK.getKey(state.getBlock()).getPath() + " at " + pos.toShortString()
+            + " (" + breakFace.getSerializedName() + " face) with " + (held.isEmpty() ? "bare hands" : BuiltInRegistries.ITEM.getKey(held.getItem()).getPath())
+            + (perTick > 0 ? ", ~" + (int) Math.ceil(1 / perTick) + " ticks" : ", cannot be broken")
+            + (state.requiresCorrectToolForDrops() && !held.isCorrectToolForDrops(state) ? "; WRONG TOOL: no drop" : "")
+            + (resumeTarget != null ? "; clearing the way to " + resumeTarget.toShortString() : ""));
     }
 
     private void tickMineBreak(BlockPos pos) {
         ServerLevel level = bot.serverLevel();
         BlockState state = level.getBlockState(pos);
         if (state.isAir()) {
+            trace("mine", "broke " + pos.toShortString() + " after " + breakTicks + " ticks");
             bot.worldMemory().forgetOwn(bot, pos);
             bot.vision().afterBreak(pos);
             bot.containerMemory().forget(bot, pos);
@@ -1286,13 +1392,41 @@ public final class BotController {
             return null;
         }
         Vec3 goal = Vec3.atBottomCenterOf(pos);
+        GoalGetToBlock reach = new GoalGetToBlock(pos);
         // Small margin so the server's own reach checks always pass.
         if (!bot.canInteractWithBlock(pos, -0.5)) {
+            hiddenApproach = false;
             // Next to the block is always within reach; the pathfinder finds the way there.
-            if (pathTo(new GoalGetToBlock(pos)) == PathState.FAILED) {
+            if (pathTo(reach) == PathState.FAILED) {
                 fail("cannot get within reach of " + pos.toShortString());
             }
             return null;
+        }
+        // In reach is not in view: a block behind a wall or under a ledge can be four blocks away.
+        // Keep walking a real route until it shows or the bot stands next to it, instead of pushing
+        // straight into the wall and giving up after three seconds.
+        if (!hiddenApproach && !pos.equals(hiddenFor) && !reach.isInGoal(bot.blockPosition())) {
+            BlockPos wall = solidBlocker(level, pos);
+            if (wall != null) {
+                hiddenApproach = true;
+                hiddenFor = pos.immutable();
+                trace("aim", pos.toShortString() + " is in reach but hidden behind "
+                    + BuiltInRegistries.BLOCK.getKey(level.getBlockState(wall).getBlock()).getPath() + " at "
+                    + wall.toShortString() + "; walking around to it");
+            }
+        }
+        if (hiddenApproach) {
+            if (findVisibleFace(level, pos) == null && !reach.isInGoal(bot.blockPosition())) {
+                PathState state = pathTo(reach);
+                if (state == PathState.FAILED) {
+                    hiddenApproach = false;
+                    fail("cannot see " + pos.toShortString() + " from any place I can reach");
+                    return null;
+                }
+                if (state != PathState.ARRIVED) return null;
+            }
+            hiddenApproach = false;
+            trace("aim", (reach.isInGoal(bot.blockPosition()) ? "next to " : "can see ") + pos.toShortString() + " now");
         }
         stopPathing();
 
@@ -1306,11 +1440,12 @@ public final class BotController {
             return visible;
         }
 
-        Vec3 eye = bot.getEyePosition();
         BlockPos blocker = WorldMemory.clip(bot, center, ClipContext.Block.OUTLINE).getBlockPos();
         BlockState blockerState = level.getBlockState(blocker);
         if (resumeTarget == null && isClearable(blockerState) && clearedObstacles < MAX_CLEARED_OBSTACLES
             && bot.canInteractWithBlock(blocker, -0.5)) {
+            trace("aim", "view of " + pos.toShortString() + " blocked by " + BuiltInRegistries.BLOCK.getKey(blockerState.getBlock()).getPath()
+                + " at " + blocker.toShortString() + "; clearing it first (" + (clearedObstacles + 1) + "/" + MAX_CLEARED_OBSTACLES + ")");
             resumeTarget = pos;
             resumeTask = task;
             clearedObstacles++;
@@ -1318,12 +1453,20 @@ public final class BotController {
             task = Task.MINE_APPROACH;
             return null;
         }
-        // Something solid in the way: step closer and look again.
+        // Something solid in the way right next to the block: step closer and look again.
         walkTowards(goal);
         if (isStuck(goal)) {
             fail("view of " + pos.toShortString() + " is blocked by " + blockerState.getBlock().getName().getString());
         }
         return null;
+    }
+
+    /** The solid block hiding {@code pos} from the eyes; null if a face shows or only leaves/plants are in the way. */
+    @Nullable
+    private BlockPos solidBlocker(ServerLevel level, BlockPos pos) {
+        if (findVisibleFace(level, pos) != null) return null;
+        BlockPos blocker = WorldMemory.clip(bot, Vec3.atCenterOf(pos), ClipContext.Block.OUTLINE).getBlockPos();
+        return blocker.equals(pos) || isClearable(level.getBlockState(blocker)) ? null : blocker;
     }
 
     /** A ray from the eyes to the block's center or to a face turned toward the bot that is not blocked. */

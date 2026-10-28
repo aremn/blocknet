@@ -44,9 +44,34 @@ public final class Pathing {
             return thread;
         });
 
+    /** Receives the pathfinder's own explanations (debug and chat lines) for an entity. */
+    @FunctionalInterface
+    public interface Trace {
+        void log(net.minecraft.world.entity.LivingEntity entity, String message);
+    }
+
+    private static volatile Trace trace = (entity, message) -> {};
+
     private Pathing() {}
 
     public static ThreadPoolExecutor getExecutor() {
         return EXECUTOR;
+    }
+
+    /**
+     * The host decides where explanations go. Server players without a client (the bot) cannot
+     * read chat, so without this hook every "why" of the pathfinder was lost.
+     */
+    public static void setTrace(Trace sink) {
+        trace = sink == null ? (entity, message) -> {} : sink;
+    }
+
+    /** May be called from the calculation threads; the sink must be thread-safe. */
+    public static void trace(net.minecraft.world.entity.LivingEntity entity, String message) {
+        try {
+            trace.log(entity, message);
+        } catch (RuntimeException exception) {
+            LOGGER.debug("Pathing trace sink failed", exception);
+        }
     }
 }

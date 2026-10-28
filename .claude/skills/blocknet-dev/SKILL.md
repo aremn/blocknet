@@ -63,6 +63,7 @@ with `--no-configuration-cache` once. Do not alter cache ACLs or stop the runnin
 | `vision/` | MIT `VoxelRay` (loaded-section DDA, air jumps, exact partial VISUAL shapes), reloadable `OpacityTable`, budgeted jittered `VisionSensor` (160x90 background/frontal/panorama/entities, budgeted exposed-neighbour rays after breaks), `ObservedMap` (512-section LRU, palette persistence), tag/property `Semantics`, incremental `ObjectGraph`, evidence-only `Frontiers`, compact ranked `Scene` (`look [focus]`, instant `scene`, deltas), rolling `VisionTiming`; `/blocknet see [name]` prints debug evidence and timings |
 | `state/` | `ItemDescriber`/`ToolFacts`: generic item facts and vanilla tool probes; `BodyState`/`BodyStateTracker`: on-demand compact sections, independent revisions, bounded inventory diff history (ADR-0006); no transport |
 | `command/` | `/blocknet` debug commands; the bot name is optional (nearest bot) |
+| `debug/` | `BotTrace`: per-bot reasoning trace (one per name, survives respawn), merged repeats, tick cost; `TraceFiles`: async `logs/blocknet/<bot>-trace.log`; `PathTrace`: pathfinder lines and route events; `DebugWatch`/`DebugFrames`/`DebugPayload`: `/blocknet debug` frames (optional payload, particle fallback); client `DebugOverlay` draws them at `AFTER_PARTICLES` (as NeoForge's own debug renderers) with an explicit model-view matrix |
 | `bridge/` | `BridgeConfig` (localhost port/token), `BridgeServer` (JSON-RPC lines, lifecycle/chat/death, server-thread dispatch), `BridgeTools` (one tool registry reusing commands and their reports; independent changes baselines) |
 | `client/` | Optional client side: radial menu on the mouse wheel; only sends `/blocknet` commands |
 | `mixin/` | `PlayerListMixin` installs `BotPacketListener` during `placeNewPlayer` |
@@ -131,6 +132,10 @@ These are why the code looks the way it does; keep them unless an ADR changes th
 - **Bots fail like players, not like scripts.** When something is in the way the bot tries other
   faces, clears leaves, steps closer; it reports `failed: ...` only when out of options. Every task
   ends with exactly one report through the command's reporter.
+
+- **Explain decisions.** A new choice in the body (which block, which route, why it gave up) gets a
+  `controller.trace(source, text)` line saying why, so `/blocknet debug` and the trace file show
+  it. The pathfinder talks through `Pathing.trace`; its chat lines never reach the bot's client.
 
 ## Writing GameTests
 

@@ -36,6 +36,11 @@ public class GoalNear implements Goal, IGoalRenderPos {
       this.rangeSq = range * range;
    }
 
+   /** Squared radius, for debug views that draw the goal. */
+   public int rangeSq() {
+      return this.rangeSq;
+   }
+
    @Override
    public boolean isInGoal(int x, int y, int z) {
       int xDiff = x - this.x;

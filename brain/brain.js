@@ -3,7 +3,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Body, configPath, option } from './body.js';
 import { ChatRouter, routeRule } from './rules.js';
-import { SessionLog, ResultSummary, perception, failed, lastLessons } from './session-log.js';
+import { SessionLog, ResultSummary, perception, failed, lastLessons, oneLine } from './session-log.js';
 import { ClaudeBackend } from './claude-backend.js';
 import { CodexBackend } from './codex-backend.js';
 import { Thinking, personaPrompt } from './thinking.js';
@@ -85,10 +85,13 @@ export class BrainSession {
       actor: text => this.sendRole('actor', backend, text),
       resetActor: () => { backend.close(); this.sessionTurns = 0; this.compact.reset(); },
       actorPrefix: () => this.languageRule(), say: (text, player) => this.say(text, player),
-      log: (type, data) => this.log?.write(type, data),
+      log: (type, data) => { this.log?.write(type, data); this.notePlan(type, data); },
       feedback: gaps => this.plannerFeedback(gaps),
       isActive: () => !this.closed && !this.paused && !this.awaitingRespawn,
     });
+    this.traceBackend('actor', backend);
+    this.traceBackend('planner', plannerBackend);
+    this.traceBackend('chat', this.chatBackend);
     this.onEvent = event => this.event(event);
     this.onReady = () => this.schedule();
     this.onDisconnect = () => { clearTimeout(this.nextTimer); this.log?.write('connection', { state: 'disconnected' }); };
@@ -102,6 +105,43 @@ export class BrainSession {
     return this;
   }
   diagnostic(error) { process.stderr.write(`${error.message ?? error}\n`); }
+  /** One line of the brain's reasoning for the bot's in-game trace and overlay (never awaited). */
+  note(source, text) {
+    try { this.body.note?.(this.bot, source, oneLine(text).slice(0, 600)); } catch { /* debug only */ }
+  }
+  /** Full model inputs, outputs, reasoning and in-turn tool calls: the session log keeps them all. */
+  trace(role, kind, data) {
+    try {
+      const clip = value => typeof value === 'string' ? value.slice(0, 20_000)
+        : value && typeof value === 'object' ? JSON.parse(JSON.stringify(value, (k, v) => typeof v === 'string' ? v.slice(0, 20_000) : v)) : value;
+      this.log?.write('model_trace', { model_role: role, kind, ...Object.fromEntries(Object.entries(data).map(([k, v]) => [k, clip(v)])) });
+    } catch (error) { this.diagnostic(`trace: ${error.message}`); }
+  }
+  traceBackend(role, backend) {
+    if (!backend || backend.onTrace) return;
+    const resultText = value => typeof value === 'string' ? value
+      : Array.isArray(value?.content) ? value.content.map(c => c?.text ?? '').join(' ')
+      : Array.isArray(value) ? value.map(c => c?.text ?? (typeof c === 'string' ? c : '')).join(' ') : JSON.stringify(value ?? '');
+    backend.onTrace = (kind, data) => {
+      this.trace(role, kind, data);
+      if (kind === 'reasoning') this.note(role, `thinks: ${data.text}`);
+      else if (kind === 'tool') this.note(role, `calls ${data.tool} ${JSON.stringify(data.arguments ?? {})}${data.result ? ` -> ${resultText(data.result).slice(0, 200)}` : ''}`);
+      else if (kind === 'tool_result') this.note(role, `tool result: ${resultText(data.result).slice(0, 200)}`);
+      else if (kind === 'search') this.note(role, `searches the web: ${data.query}`);
+    };
+  }
+  notePlan(type, data = {}) {
+    const steps = plan => (plan?.steps ?? []).map(s => `${s.id}. ${s.do}${s.else ? ` (else ${s.else})` : ''}`).join('; ');
+    // Steps first: the overlay keeps 600 characters and a long goal must not hide them.
+    if (type === 'plan') this.note('plan', `${steps(data.plan)}${data.failures?.length ? ` (after ${data.failures.length} failure(s))` : ''}; goal: ${oneLine(data.plan?.goal).slice(0, 160)}`);
+    else if (type === 'plan_step_start') this.note('step', data.status);
+    else if (type === 'plan_step') this.note('critic', `step ${data.step?.id} verified: ${data.status}`);
+    else if (type === 'plan_fallback') this.note('critic', `step ${data.step?.id} failed: ${data.reason}; fallback: ${data.fallback}`);
+    else if (type === 'plan_failure') this.note('critic', `plan failed (${data.failures}/3): ${data.reason}`);
+    else if (type === 'plan_revised') this.note('plan', `revised after hint ${JSON.stringify(data.hint)}: ${steps(data.plan)}`);
+    else if (type === 'plan_reused') this.note('plan', `reusing a saved plan for: ${data.goal}`);
+    else if (type === 'plan_chat_error') this.note('plan', `chat during plan failed: ${data.error}`);
+  }
   languageRule() {
     return `Answer in the language the player last used, including autoplay chat. Before any player message, use ${this.thinking.pool.defaultLanguage ?? 'ru'}. Latest player message: ${JSON.stringify(this.lastPlayerMessage ?? null)}.\n`;
   }
@@ -125,13 +165,17 @@ export class BrainSession {
     if (generation !== this.generation || this.closed) throw new Error('Model request cancelled');
     if (scene) text += `\nScene observed while preparing this plan: ${scene}`;
     this.log?.write('model_message', { role: 'user', model_role: role, text: text.slice(0, 300) });
+    this.trace(role, 'input', { text });
+    this.note(role, `thinking about: ${text.match(/^(?:Goal|Step|Player \S+ message):[^\n]*/mu)?.[0] ?? oneLine(text).slice(0, 200)}`);
     try {
       if (this.goal && !this.ended && this.turns >= this.maxTurns) throw new Error('max turns reached');
       this.turns++;
       result = await backend.send(text);
       this.log?.write('model_message', { role: 'final', model_role: role, text: String(result.text ?? '').slice(0, 300) });
+      this.trace(role, 'output', { text: String(result.text ?? ''), ms: result.ms ?? null });
+      this.note(role, `answered in ${((result.ms ?? Date.now() - started) / 1000).toFixed(1)} s: ${String(result.text ?? '')}`);
       return result;
-    } catch (error) { failure = error.message; throw error; }
+    } catch (error) { failure = error.message; this.note(role, `failed: ${error.message}`); throw error; }
     finally {
       const audit = this.auditFile && role !== 'chat' ? await readFile(this.auditFile, 'utf8').catch(() => '') : '';
       const entry = { bot: this.bot, role, backend: backend.backend, model: backend.model,
@@ -351,6 +395,8 @@ export class BrainSession {
           }
           const prompt = rotation + this.languageRule() + `${content}\n${this.plans?.status() ?? 'план: нет'}`;
           this.log?.write('model_message', { role: 'user', text: prompt.slice(0, 300) });
+          this.trace('actor', 'input', { text: prompt });
+          this.note('actor', `thinking about: ${message.reflection ? 'session lessons' : message.autoplay ? `next action toward ${this.goal}` : `${message.from}: ${message.text}`}`);
           if (this.auditFile) await writeFile(this.auditFile, '');
           if (generation !== this.generation) continue;
           called = true;
@@ -365,6 +411,8 @@ export class BrainSession {
             this.queue.unshift({ ...message, needsPlan: true }); continue;
           }
           this.log?.write('model_message', { role: 'final', text: String(result.text ?? '').slice(0, 300) });
+          this.trace('actor', 'output', { text: String(result.text ?? ''), ms: result.ms ?? null });
+          this.note('actor', `answered: ${String(result.text ?? '')}`);
           if (message.reflection) {
             const lessons = String(result.text ?? '').trim().slice(0, 1800);
             if (lessons && this.lessonsFile) await appendFile(this.lessonsFile, `## ${this.log?.id ?? new Date().toISOString()}\n${lessons}\n\n`);

@@ -318,6 +318,7 @@ export class PlanRunner {
           const budgetMs = Math.min(deadline - Date.now(), (step.budget_min ?? this.plan.budget_min / this.plan.steps.length) * 60_000);
           try {
             if (budgetMs <= 0) throw new Error('plan budget exceeded');
+            this.log('plan_step_start', { step, status: this.status(), budget_ms: budgetMs });
             try {
               scene = await this.executeStep(step, goal, scene, budgetMs, stepController);
             } catch (error) {
@@ -331,6 +332,7 @@ export class PlanRunner {
               const fallback = { ...step, do: step.else }; delete fallback.else;
               this.log('plan_fallback', { step, reason: error.message, fallback: fallback.do });
               this.step = fallback;
+              this.log('plan_step_start', { step: fallback, status: this.status(), fallback: true });
               const remaining = Math.min(deadline - Date.now(), (step.budget_min ?? this.plan.budget_min / this.plan.steps.length) * 60_000);
               if (remaining <= 0) throw new Error('plan budget exceeded');
               scene = await this.executeStep(fallback, goal, scene, remaining, stepController);

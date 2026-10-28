@@ -131,6 +131,14 @@ export class Body extends EventEmitter {
     else pending.resolve(message.result);
   }
 
+  /** Fire-and-forget debug note for the bot's in-game trace and overlay; never throws, never waits. */
+  note(bot, source, text) {
+    if (!this.hello || !this.socket || this.socket.destroyed) return;
+    try {
+      this.socket.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'debug.note', params: { bot, source, text: String(text ?? '') } })}\n`);
+    } catch { /* A lost note must never disturb the brain. */ }
+  }
+
   async call(bot, tool, args = {}) {
     await this.ready();
     return this.request('tool.call', { bot, tool, args });

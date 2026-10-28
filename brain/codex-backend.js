@@ -109,6 +109,7 @@ export class CodexBackend {
       this.onText?.(p.delta);
     }
     if (event.method === 'item/completed') {
+      this.trace(p.item);
       if (p.item?.type === 'agentMessage') {
         this.onText?.(turn.deltas ? '' : p.item.text, true);
         this.options.onMessage?.(p.item.text);
@@ -130,6 +131,24 @@ export class CodexBackend {
       }
       turn.resolve({ text: turn.text || turn.deltas, usage: turn.usage,
         toolCalls: turn.toolIds.size, ms: Date.now() - turn.started, ttftMs: turn.ttftMs });
+    }
+  }
+
+  /** Reasoning summaries, tool calls and searches inside a turn go to the debug trace. */
+  trace(item) {
+    if (!this.onTrace || !item) return;
+    const text = value => Array.isArray(value) ? value.map(text).filter(Boolean).join(' ')
+      : typeof value === 'string' ? value : value?.text ?? '';
+    if (item.type === 'reasoning') {
+      const summary = text(item.summary) || text(item.content);
+      if (summary.trim()) this.onTrace('reasoning', { text: summary });
+    } else if (item.type === 'mcpToolCall') {
+      this.onTrace('tool', { tool: item.tool, arguments: item.arguments ?? null, status: item.status ?? null,
+        result: item.result ?? item.error ?? null, ms: item.durationMs ?? null });
+    } else if (item.type === 'webSearch') {
+      this.onTrace('search', { query: item.query ?? text(item.action) });
+    } else if (item.type === 'agentMessage') {
+      this.onTrace('message', { text: item.text ?? '', phase: item.phase ?? null });
     }
   }
 

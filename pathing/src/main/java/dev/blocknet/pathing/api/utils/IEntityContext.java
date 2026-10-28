@@ -100,6 +100,7 @@ public interface IEntityContext {
    }
 
    default void logDebug(String message) {
+      dev.blocknet.pathing.Pathing.trace(this.entity(), message);
       if (BaritoneAPI.getGlobalSettings().chatDebug.get()) {
          LivingEntity entity = this.entity();
          if (entity instanceof Player) {

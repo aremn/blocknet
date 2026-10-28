@@ -13,6 +13,7 @@ import net.minecraft.server.level.ClientInformation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.damagesource.DamageSource;
+import net.minecraft.world.entity.Entity;
 
 
 /**
@@ -36,6 +37,14 @@ public final class BotPlayer extends ServerPlayer {
 
     public BodyStateTracker bodyState() {
         return bodyState;
+    }
+
+    private dev.blocknet.debug.BotTrace trace;
+
+    /** The reasoning trace: decisions and their reasons, for the overlay and logs/blocknet. */
+    public dev.blocknet.debug.BotTrace trace() {
+        if (trace == null) trace = dev.blocknet.debug.BotTrace.of(this);
+        return trace;
     }
 
     public BotPlayer(MinecraftServer server, ServerLevel level, GameProfile profile) {
@@ -66,8 +75,11 @@ public final class BotPlayer extends ServerPlayer {
             connection.resetPosition();
             serverLevel().getChunkSource().move(this);
         }
+        long started = System.nanoTime();
         controller.tick();
+        long controlled = System.nanoTime();
         vision.tick();
+        long seen = System.nanoTime();
         // The pathfinder, when it has work, overrides this tick's inputs and rotation.
         IBaritone pathing = IBaritone.KEY.getNullable(this);
         // Even idle pathing rearranges hotbar tools; defense owns hands as well as feet.
@@ -84,9 +96,14 @@ public final class BotPlayer extends ServerPlayer {
                 setJumping(jump);
             }
         }
+        long pathed = System.nanoTime();
         super.tick();
         doTick();
+        long moved = System.nanoTime();
         if (isAlive()) moments.tick();
+        trace().tickCost(controlled - started, seen - controlled, pathed - seen, moved - pathed);
+        // The state line is throttled to one write per five seconds anyway; build it once a second.
+        if (tickCount % 20 == 0) trace().state(controller.stateLine());
     }
 
     @Override
@@ -94,6 +111,12 @@ public final class BotPlayer extends ServerPlayer {
         float before = getHealth();
         super.actuallyHurt(source, amount);
         moments.damage(source, before, getHealth());
+        if (getHealth() < before) {
+            Entity attacker = source.getEntity();
+            trace().add("body", String.format(java.util.Locale.ROOT, "hurt by %s%s: health %.1f -> %.1f", source.getMsgId(),
+                attacker == null ? "" : " (" + net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE.getKey(attacker.getType()).getPath() + ")",
+                before, getHealth()));
+        }
         if (getHealth() < before) controller.mobHurt(source);
     }
 
@@ -114,6 +137,7 @@ public final class BotPlayer extends ServerPlayer {
     public void die(DamageSource source) {
         if (isDeadOrDying() && respawnTicks > 0) return;
         moments.death(source);
+        trace().add("body", "died (" + source.getMsgId() + ") at " + blockPosition().toShortString() + " while " + controller.describe());
         controller.stop();
         super.die(source);
         BridgeServer.botDied(this, source);

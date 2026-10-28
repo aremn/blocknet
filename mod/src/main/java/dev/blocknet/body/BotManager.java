@@ -63,6 +63,8 @@ public final class BotManager {
         bot.teleportTo(level, pos.x, pos.y, pos.z, yaw, 0.0F);
         bot.setYHeadRot(yaw);
         PathingDefaults.apply(IBaritone.KEY.get(bot).settings());
+        dev.blocknet.debug.PathTrace.attach(bot);
+        bot.trace().add("body", "spawned at " + bot.blockPosition().toShortString());
         BOTS.put(key(name), bot);
         dev.blocknet.bridge.BridgeServer.botsChanged();
         Blocknet.LOGGER.info("Spawned bot {} at {}", name, pos);
@@ -107,6 +109,8 @@ public final class BotManager {
         BotPlayer alive = (BotPlayer) dead.getServer().getPlayerList().respawn(dead, false,
             net.minecraft.world.entity.Entity.RemovalReason.KILLED);
         PathingDefaults.apply(IBaritone.KEY.get(alive).settings());
+        dev.blocknet.debug.PathTrace.attach(alive);
+        alive.trace().add("body", "respawned at " + alive.blockPosition().toShortString());
         BOTS.put(key(alive.getGameProfile().getName()), alive);
         dev.blocknet.bridge.BridgeServer.botRespawned(alive);
     }

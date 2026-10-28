@@ -110,7 +110,10 @@ public class PathExecutor implements IPathExecutor {
          Tuple<Double, BlockPos> status = this.closestPathPos(this.path);
          if (this.possiblyOffPath(status, 2.0)) {
             this.ticksAway++;
-            Pathing.LOGGER.warn("FAR AWAY FROM PATH FOR " + this.ticksAway + " TICKS. Current distance: " + status.getA() + ". Threshold: 2.0");
+            // Once per episode and then every 50 ticks: a per-tick WARN flooded the game log.
+            if (this.ticksAway == 1 || this.ticksAway % 50 == 0) {
+               this.logDebug(String.format(java.util.Locale.ROOT, "Off the path for %d ticks, %.1f blocks from it (limit 2)", this.ticksAway, status.getA()));
+            }
             if (this.ticksAway > 200.0) {
                this.logDebug("Too far away from path for too long, cancelling path");
                this.cancel();

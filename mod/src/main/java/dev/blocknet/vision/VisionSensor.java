@@ -36,7 +36,41 @@ public final class VisionSensor {
     private long lookSince;
     private int entityCursor;
 
+    // Debug overlay only: the last blocks eye rays reached, recorded while a player watches.
+    private final long[] recentHits = new long[4096];
+    private final int[] recentStates = new int[4096];
+    private long recentCursor;
+    private boolean recording;
+
     public VisionSensor(BotPlayer bot) { this.bot = bot; ray = new VoxelRay(bot); }
+
+    public void recording(boolean on) { recording = on; }
+
+    private VoxelRay.Result remember(VoxelRay.Result result) {
+        if (recording && result.end() == VoxelRay.End.HIT && result.pos() != null) {
+            int index = (int) (recentCursor++ & (recentHits.length - 1));
+            recentHits[index] = result.pos().asLong();
+            recentStates[index] = result.dark() || result.state() == null ? ObservedMap.DARK_STATE
+                : net.minecraft.world.level.block.Block.getId(result.state());
+        }
+        return result;
+    }
+
+    /** Distinct blocks reached by recent eye rays, newest first, mapped to their state id (or DARK_STATE). */
+    public Map<Long, Integer> recentHits(int limit) {
+        Map<Long, Integer> result = new LinkedHashMap<>();
+        int count = (int) Math.min(recentCursor, recentHits.length);
+        for (int i = 1; i <= count && result.size() < limit; i++) {
+            int index = (int) ((recentCursor - i) & (recentHits.length - 1));
+            result.putIfAbsent(recentHits[index], recentStates[index]);
+        }
+        return result;
+    }
+
+    /** Which camera runs now: the background sweep, a frontal frame or a full turn (look). */
+    public String mode() { return panorama ? "panorama" : frontal ? "frontal" : "background"; }
+    public float halfYaw() { return panorama || frontal ? 45 : 80; }
+    public float halfPitch() { return panorama || frontal ? 29.5F : 45; }
     public VisionTiming timing() { return timing; }
     public double range() { return Math.min(64, bot.getServer().getPlayerList().getViewDistance() * 16.0); }
     public int completedFrames() { return completedFrames; }
@@ -101,7 +135,7 @@ public final class VisionSensor {
         Vec3 eye = bot.getEyePosition(), delta = end.subtract(eye);
         if (!canObserve()) return new VoxelRay.Result(VoxelRay.End.UNKNOWN, null, null, 0, null, false);
         long start = System.nanoTime();
-        VoxelRay.Result result = ray.cast(eye, delta.normalize(), Math.min(range(), delta.length()), prepare());
+        VoxelRay.Result result = remember(ray.cast(eye, delta.normalize(), Math.min(range(), delta.length()), prepare()));
         tickNanos += System.nanoTime() - start;
         return result;
     }
@@ -131,7 +165,7 @@ public final class VisionSensor {
             double u = ((pixel % frameWidth + jitterX) / frameWidth * 2 - 1) * Math.tan(Math.toRadians(panorama || frontal ? 45 : 80));
             double v = ((pixel / frameWidth + jitterY) / frameHeight * 2 - 1) * Math.tan(Math.toRadians(panorama || frontal ? 29.5 : 45));
             Vec3 direction = forward.add(right.scale(u)).add(up.scale(-v)).normalize();
-            ray.cast(eye, direction, range(), map);
+            remember(ray.cast(eye, direction, range(), map));
             cursor++;
             if (cursor == total) {
                 long now = System.nanoTime();

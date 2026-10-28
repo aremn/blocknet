@@ -206,6 +206,13 @@ public final class BridgeServer implements AutoCloseable {
                     error(id, -32001, "Valid hello required");
                     return;
                 }
+                if (method.equals("debug.note")) {
+                    // The brain's reasoning (plan, step, model thoughts) joins the bot's trace and overlay.
+                    BotPlayer noted = BotManager.get(params.get("bot").getAsString());
+                    if (noted != null) noted.trace().brainNote(params.get("source").getAsString(), params.get("text").getAsString());
+                    if (!id.isJsonNull()) reply(id, object("noted", String.valueOf(noted != null)));
+                    return;
+                }
                 if (!method.equals("tool.call")) {
                     error(id, -32601, "Unknown method");
                     return;
@@ -214,6 +221,7 @@ public final class BridgeServer implements AutoCloseable {
                 if (bot == null) throw new IllegalArgumentException("No bot with that name; spawn it with /blocknet spawn");
                 BridgeTools.Tool tool = BridgeTools.get(params.get("tool").getAsString());
                 JsonObject args = params.has("args") ? params.getAsJsonObject("args") : new JsonObject();
+                bot.trace().add("tool", tool.name() + (args.size() == 0 ? "" : " " + args));
                 if (tool.task()) {
                     String taskId = UUID.randomUUID().toString();
                     reply(id, object("task_id", taskId));
@@ -221,6 +229,7 @@ public final class BridgeServer implements AutoCloseable {
                     AtomicBoolean reported = new AtomicBoolean();
                     java.util.function.Consumer<String> finish = result -> {
                         if (reported.compareAndSet(false, true)) {
+                            bot.trace().add("tool", tool.name() + " finished: " + oneLine(result));
                             runningTasks.remove(bot.getUUID(), taskId);
                             // All authenticated connections receive outcomes (main brain and MCP process).
                             JsonObject event = object("type", "task.finished", "bot", bot.getGameProfile().getName(),
@@ -236,6 +245,7 @@ public final class BridgeServer implements AutoCloseable {
                 } else {
                     var lines = new ArrayList<String>();
                     BridgeTools.run(bot, tool, args, baselines, lines::add);
+                    bot.trace().add("tool", tool.name() + " -> " + oneLine(String.join("; ", lines)));
                     reply(id, object("result", oneLine(String.join("; ", lines))));
                 }
             } catch (RuntimeException exception) {
