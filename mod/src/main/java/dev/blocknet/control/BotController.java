@@ -240,6 +240,7 @@ public final class BotController {
                 }
             }
             bot.moments().emit("danger_clear", "resuming paused task");
+            if (gathering != null && task == Task.GATHER) gathering.resumeSelection();
             if (explicitAttack) { explicitAttack = false; finish("attacked; threat gone"); }
             return false;
         }
@@ -1094,13 +1095,15 @@ public final class BotController {
 
     private void tickCollect(BlockPos pos) {
         if (excavating != null && !excavating.collectionSafe(pos)) return;
+        if (gathering != null && !gathering.collectionSafe(pos)) return;
         // Drops can bounce away from the mined block. Follow the visible item rather than
         // declaring success at the old block center while its drop remains just out of range.
         var drops = bot.level().getEntitiesOfClass(ItemEntity.class, new AABB(pos).inflate(3),
             item -> item.isAlive() && bot.hasLineOfSight(item));
         var nearest = drops.stream().min(java.util.Comparator.comparingDouble(bot::distanceToSqr));
         Vec3 goal = nearest.map(ItemEntity::position).orElseGet(() -> Vec3.atBottomCenterOf(pos));
-        if (!hasArrived(goal) && (excavating == null || excavating.collectionWalk(pos))) {
+        if (!hasArrived(goal) && (excavating == null || excavating.collectionWalk(pos))
+                && (gathering == null || gathering.collectionWalk(pos))) {
             // Open a walkable entry into an ore pocket when its drops are beyond pickup reach.
             if (gathering != null && gathering.followsOre() && bot.horizontalCollision && resumeTarget == null) {
                 var clearance = bot.level().clip(new ClipContext(bot.getEyePosition(), new Vec3(goal.x, bot.getY() + .5, goal.z),

@@ -83,7 +83,7 @@ export function serveMcp(body, bot, input = process.stdin, output = process.stdo
         case 'tools/list': {
           if (!initialized && !version) throw new Error('Initialize first');
           const hello = await body.ready();
-          reply({ tools: hello.tools.filter(t => !plannerOnly || t.name === 'knowledge')
+          reply({ tools: hello.tools.filter(t => !plannerOnly || ['knowledge', 'wiki'].includes(t.name))
             .map(tool => ({ name: tool.name, description: tool.description, inputSchema: tool.params })).concat(plannerOnly ? [] : feedbackTool) });
           break;
         }
@@ -91,7 +91,7 @@ export function serveMcp(body, bot, input = process.stdin, output = process.stdo
           if (!initialized && !version) throw new Error('Initialize first');
           const { name, arguments: args = {} } = request.params ?? {};
           if (typeof name !== 'string') { error(-32602, 'Tool name required'); break; }
-          if (plannerOnly && name !== 'knowledge') { error(-32602, 'Planner may only call knowledge'); break; }
+          if (plannerOnly && !['knowledge', 'wiki'].includes(name)) { error(-32602, 'Planner may only call knowledge or wiki'); break; }
           if (!await reserve(name, args)) {
             reply({ content: [{ type: 'text', text: TURN_LIMIT_MESSAGE }], isError: true });
             break;

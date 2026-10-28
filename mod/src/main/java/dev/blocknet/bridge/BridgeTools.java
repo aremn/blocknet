@@ -27,6 +27,7 @@ public final class BridgeTools {
         add("scene", "Read the remembered scene instantly, without turning; delta gives one line of changes.", false, "delta?", "goal?");
         add("explore", "Walk through observed safe space toward a frontier, then look and report new objects.", true, "direction?", "distance?");
         add("knowledge", "Read ore heights, frequency, biome restrictions, harvest tool and loot from server data.", false, "item");
+        add("wiki", "Read in-game guides/quests/tooltips; use before crafting unfamiliar modded items.", false, "query");
         add("mine_ore", "Mine an ore item or block using known heights and honest branch mining until count or a ten minute budget.", true, "item", "count?");
         add("obtain", "Obtain at least count items recursively from inventory, remembered containers, crafting and observed survival sources.", true, "item", "count?");
         add("plan", "Plan recipes without acting; mode craft makes new items, get counts owned items.", false,
@@ -158,6 +159,10 @@ public final class BridgeTools {
         }
         if (tool.name().equals("scene") && args.has("goal")) bot.controller().scene().goal(args.get("goal").getAsString());
         if (tool.name().equals("attack")) { bot.controller().attack(word(args, "target", null), report); return; }
+        if (tool.name().equals("wiki")) {
+            report.accept(dev.blocknet.knowledge.Wiki.get(bot.getServer()).search(args.get("query").getAsString()));
+            return;
+        }
         String name = bot.getGameProfile().getName();
         if (tool.name().equals("say")) {
             String text = args.get("text").getAsString().replaceAll("[\\r\\n]+", " ");

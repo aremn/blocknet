@@ -6,6 +6,7 @@ import { ChatRouter, routeRule } from './rules.js';
 import { SessionLog, ResultSummary, perception, failed, lastLessons } from './session-log.js';
 import { ClaudeBackend } from './claude-backend.js';
 import { CodexBackend } from './codex-backend.js';
+import { Thinking } from './thinking.js';
 import { parseRole, parseTool, needsPlan, PlanRunner, PlanLibrary, plannerPrompt } from './plans.js';
 export { buildClaudeArgs } from './claude-backend.js';
 
@@ -64,7 +65,7 @@ export function shortReply(text) {
 /** One queue owns the model; chat always precedes the next autonomous turn. */
 export class BrainSession {
   constructor({ body, backend, bot, aliases = [], listen = 'all', goal = '', maxTurns = 200,
-    maxMinutes = 60, pauseMs = 1200, log, auditFile, lessonsFile, usageFile, plannerBackend, plansFile }) {
+    maxMinutes = 60, pauseMs = 1200, log, auditFile, lessonsFile, usageFile, plannerBackend, plansFile, persona }) {
     if (!Number.isInteger(maxTurns) || maxTurns < 1 || !Number.isFinite(maxMinutes) || maxMinutes <= 0)
       throw new Error('Limits must be positive (--max-turns integer, --max-minutes number)');
     Object.assign(this, { body, backend, bot, goal, maxTurns, maxMinutes, pauseMs, log, auditFile, lessonsFile, usageFile });
@@ -73,6 +74,8 @@ export class BrainSession {
     this.recentResults = []; this.sessionTurns = 0;
     this.queue = []; this.events = []; this.busy = false; this.generation = 0; this.turns = 0;
     this.paused = false; this.ended = false; this.closed = false;
+    this.thinking = new Thinking({ say: (text, player) => this.say(text, player), pool: persona,
+      active: () => !this.closed && !this.paused && !this.awaitingRespawn });
     this.plannerBackend = plannerBackend;
     if (plannerBackend) this.plans = new PlanRunner({
       call: (tool, args) => this.call(tool, args), tools: body.hello?.tools,
@@ -101,8 +104,24 @@ export class BrainSession {
     return `Answer in the language the player last used, including autoplay chat. Latest player message: ${JSON.stringify(this.lastPlayerMessage ?? null)}.\n`;
   }
   async sendRole(role, backend, text) {
+    const generation = this.generation;
+    return this.thinking.run(() => this.sendRoleWithScene(role, backend, text, generation), {
+      text: /^Goal: (.*)/mu.exec(text)?.[1] ?? text,
+      languageText: this.lastPlayerMessage?.text ?? this.goal, player: this.lastPlayerMessage?.from,
+      isActive: () => generation === this.generation,
+    });
+  }
+  async sendRoleWithScene(role, backend, text, generation) {
     const started = Date.now(); let result, failure;
-    if (this.auditFile) await writeFile(this.auditFile, '');
+    // Read memory once while preparing the planner request; scene never replaces a task or moves.
+    const [scene] = await Promise.all([
+      role === 'planner' && this.body.hello?.tools?.some(t => t.name === 'scene')
+        ? this.call('scene', { delta: false }).then(r => r.result).catch(() => 'unavailable') : null,
+      this.auditFile ? writeFile(this.auditFile, '') : null,
+      role === 'planner' ? backend.prepare?.() : null,
+    ]);
+    if (generation !== this.generation || this.closed) throw new Error('Model request cancelled');
+    if (scene) text += `\nScene observed while preparing this plan: ${scene}`;
     this.log?.write('model_message', { role: 'user', model_role: role, text: text.slice(0, 300) });
     try {
       if (this.goal && !this.ended && this.turns >= this.maxTurns) throw new Error('max turns reached');
@@ -286,7 +305,10 @@ export class BrainSession {
           if (generation !== this.generation) continue;
           called = true;
           if (!message.reflection) this.turns++;
-          result = await this.backend.send(prompt);
+          result = await this.thinking.run(() => this.backend.send(prompt), {
+            text: message.text ?? this.goal, languageText: this.lastPlayerMessage?.text ?? this.goal, player: message.from,
+            isActive: () => generation === this.generation && !message.reflection,
+          });
           this.sessionTurns++;
           if (generation !== this.generation || this.closed) continue;
           if (this.plans && !message.reflection && /^needs_plan\b/iu.test(String(result.text).trim())) {
@@ -361,6 +383,7 @@ export async function main() {
   const plannerConfig = resolve(logDir, `mcp.planner.${bot}.json`);
   await writeFile(plannerConfig, JSON.stringify({ mcpServers: { blocknet: { type: 'stdio', ...plannerMcp } } }));
   const plannerBackend = createBackend(plannerSpec.backend, { ...plannerSpec, cwd: rootDir,
+    role: 'planner',
     prompt: plannerPrompt, promptFile: plannerFile, mcpConfig: plannerConfig, mcpServer: plannerMcp, maxTurns: 10 });
   const session = new BrainSession({ body, backend, plannerBackend, bot, aliases, goal, log, auditFile, lessonsFile,
     usageFile: resolve(logDir, 'usage.jsonl'), listen: option('listen', 'all'),

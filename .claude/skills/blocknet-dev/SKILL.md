@@ -36,6 +36,12 @@ grep -a -E "GAME TESTS COMPLETE|required tests (passed|failed)|failed at" build/
 ./gradlew :mod:runClient --console=plain > build/client.log 2>&1   # run in background
 ```
 
+When the game may be running, build with `./gradlew build --offline -x deployJar -x removeOldDeployedJars`.
+If sandboxed Windows Java reports ZipFS `AccessDeniedException`/`toRealPath` for the user Gradle
+cache, copy the offline `caches/modules-2`, `caches/neoformruntime`, `wrapper` and user
+`gradle.properties` into ignored `build/gradle-home`, set `GRADLE_USER_HOME` there, and rebuild
+with `--no-configuration-cache` once. Do not alter cache ACLs or stop the running game.
+
 - GameTests are the main proof that something works: they run a real server and finish in seconds.
   Don't trust Gradle's exit code alone; grep the log for the summary and `failed at`, and for
   `Exception|NullPointer`. "Unable to delete file ... latest.log" is harmless (a running client
@@ -217,3 +223,22 @@ English to code, commands and commit messages.
 - `KnowledgeSkillGameTests` contains the six step-1 checks (including paired hidden-ore scenes).
   Wait for light for the tree. Run only requested targeted tests while iterating; the full suite once
   at the end. Regenerate tools.json with `node brain/bench/sync-tools.js` after registry edits.
+
+## In-game wiki and planner speech
+
+- `knowledge/Wiki` lazily caches loaded mod roots and server resource locations; startup/global
+  datapack sync invalidates it. Generic framework formats: GuideME Markdown under an arbitrary
+  `assets/<ns>/<guide folder>/` (default English pages directly in that folder, YAML `item_ids`),
+  Patchouli JSON entries in assets/data, FTB Quests SNBT in `config/ftbquests/quests`, and English
+  item/block names plus `.desc`/`.tooltip`/`.info` language lines. No content-mod names in body code.
+- Bridge `wiki {query}` and `/blocknet wiki <query>` share search, up to three source-labelled
+  snippets under 120 words. `/blocknet wiki-status` lists indexed/skipped formats. Missing optional
+  formats stay quiet. `WikiGameTests` checks the real loaded guide fixture and nonsense queries.
+- `brain/persona.json` is the editable RU/EN phrase pool. `thinking.js` gives slow model calls one
+  filler after 700 ms, excludes the last three phrases and shares an 8-second cooldown across roles.
+  Stop/death suppress stale speech; fast calls stay quiet. One non-moving `scene` is captured in
+  parallel with planner backend preparation and appended to its prompt.
+- Planner MCP permits only `wiki`/`knowledge`. Codex planner uses `web_search="live"`; actor uses
+  `"disabled"`. Claude planner uses only built-in `WebSearch` plus Blocknet MCP (installed CLI
+  supports this with `--tools`/`--allowedTools`); actor has no built-in tools. Planner prefers local
+  sources before Minecraft wiki/mod docs. No live model calls are needed for Node tests.

@@ -45,7 +45,7 @@ export class FakeBackend {
       await this.process.request('initialize', { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'bench-fake', version: '1' } });
       const registry = await this.process.request('tools/list', {});
       if (this.options.role === 'planner') {
-        if (registry.tools.length !== 1 || registry.tools[0].name !== 'knowledge') throw new Error('Planner registry must expose only knowledge');
+        if (registry.tools.map(t => t.name).sort().join(',') !== 'knowledge,wiki') throw new Error('Planner registry must expose only knowledge and wiki');
         const denied = await this.process.request('tools/call', { name: 'obtain', arguments: { item: 'iron_ingot', count: 3 } }).catch(e => e);
         if (!(denied instanceof Error)) throw new Error('Planner was allowed to act');
       } else if (!registry.tools.some(t => t.name === 'gather') || !registry.tools.some(t => t.name === 'tool_feedback')) throw new Error('MCP registry missing');

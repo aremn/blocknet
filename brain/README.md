@@ -49,7 +49,8 @@ claude -p --model haiku --mcp-config brain/mcp.json --strict-mcp-config --tools 
 
 Each player request is a `type: "user"` JSON line on the same stdin. The process stays alive;
 each `result` event finishes a call and supplies usage. There is no per-message spawn or resume.
-Built-in tools are disabled. Subscription authentication is retained (no `--bare`).
+Actor built-in tools are disabled. The planner uses `--tools WebSearch --allowedTools mcp__blocknet,WebSearch`
+(supported by the installed Claude CLI), keeping shell/file tools disabled. Subscription authentication is retained (no `--bare`).
 
 `codex-backend.js` starts `codex app-server --listen stdio://` with these `-c` overrides:
 
@@ -120,7 +121,22 @@ Real authentication, end-to-end latency and model behavior require a connected l
 `--planner backend:model[:tier|effort]` and `--actor backend:model[:tier|effort]` create separate
 backend sessions, even for the same model. Codex accepts `default`/`priority` service tier or a
 reasoning effort such as `medium`; Claude accepts effort such as `high`. The planner has its own
-MCP config and can call only `knowledge`; its system prompt is `planner-prompt.md`.
+MCP config and can call only `knowledge` and `wiki`; its system prompt is `planner-prompt.md`.
+Codex planner arguments set `web_search="live"`; the actor keeps `web_search="disabled"`.
+The planner prefers local `wiki`/`knowledge` and may search Minecraft wiki/mod docs for unfamiliar goals.
+
+`persona.json` holds editable RU/EN phrase pools for crafting, finding and thinking/building.
+Slow model calls get one local phrase after a 700 ms grace period; fast calls stay quiet.
+The shared cooldown is 8 seconds, and the last three phrases are excluded. Stop/death cancel
+pending speech. One non-moving `scene` call runs alongside planner backend preparation and its
+result is appended before the planning prompt is sent. No model is used to choose filler text.
+
+`wiki {query: "ME controller"}` reads loaded GuideME Markdown, Patchouli JSON entries, FTB Quests
+SNBT under `config/ftbquests/quests`, and English item/block names and tooltip/description lines.
+The body lazily caches its index per server, invalidates it on startup/global datapack sync,
+and ranks keywords/item IDs into at most three source-labelled snippets under 120 words.
+Use `/blocknet wiki <query>` without a bot, and `/blocknet wiki-status` to list indexed or skipped
+formats. Missing formats are skipped quietly; no external web request is made by the body.
 
 Goal words (e.g. `сделай`, `построй`, `кирка`, `дом`, `build`, `make`) select the planner;
 single registered tool commands and short rules bypass it. Ordinary chat uses the actor, which

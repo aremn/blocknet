@@ -13,6 +13,7 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.level.block.state.BlockState;
 import dev.blocknet.vision.Semantics;
 import dev.blocknet.vision.ObjectGraph;
+import dev.blocknet.vision.VoxelRay;
 import java.util.Set;
 import java.util.HashSet;
 import net.minecraft.world.item.ItemStack;
@@ -31,12 +32,15 @@ final class GatherTask {
     private final Set<Long> columns = new HashSet<>();
     private final boolean logs;
     private boolean checked;
+    private java.util.Iterator<Vec3> survey;
+    private Vec3 surveyOrigin;
     private final Set<BlockPos> vein = new HashSet<>();
     private String oreKind;
     private final int count;
     private final int initial;
     private final Direction forward;
     private BlockPos step;
+    private BlockPos stairFeet;
     private boolean tunneling;
     private int ticks;
     private int lastCount;
@@ -104,6 +108,67 @@ final class GatherTask {
     }
 
     boolean followsOre() { return oreKind != null; }
+
+    /** Defense may move us before selection has produced a mining target. Keep the goal and
+     * vein evidence, but re-observe the new position instead of trusting a partial old glance. */
+    void resumeSelection() {
+        checked = false;
+        survey = null;
+        step = null;
+        tunneling = false;
+    }
+
+    private boolean finishSurvey() {
+        // A knockback/fall is not a stable place to decide which ground resource is available.
+        if (!bot.onGround()) return false;
+        Vec3 eye = bot.getEyePosition();
+        if (survey == null || eye.distanceToSqr(surveyOrigin) > 1) {
+            surveyOrigin = eye;
+            var points = new java.util.ArrayList<Vec3>();
+            for (BlockPos pos : BlockPos.withinManhattan(BlockPos.containing(eye), 4, 4, 4)) {
+                Vec3 point = Vec3.atCenterOf(pos);
+                if (eye.distanceToSqr(point) <= 16) points.add(point);
+            }
+            survey = points.iterator();
+        }
+        while (survey.hasNext()) {
+            if (!bot.vision().canObserve()) return false;
+            bot.vision().observe(survey.next());
+        }
+        return true;
+    }
+
+    /** Headroom drops wait until the opening is clear. Never walk into an unchecked hole. */
+    boolean collectionWalk(BlockPos broken) { return step == null || broken.getY() <= step.getY(); }
+
+    boolean collectionSafe(BlockPos broken) {
+        return step == null || !collectionWalk(broken) || supportSafe();
+    }
+
+    private boolean supportSafe() {
+        if (!bot.vision().canObserve()) return false;
+        BlockPos support = step.below();
+        // Aim at the top surface: a center ray can hit the current stair's lip instead.
+        var hit = bot.vision().observe(Vec3.atCenterOf(support).add(0, .499, 0));
+        if (hit.end() == VoxelRay.End.UNKNOWN) return false;
+        if (hit.end() == VoxelRay.End.HIT && !support.equals(hit.pos())) {
+            controller.exploreWalk(stairFeet);
+            return false;
+        }
+        if (hit.end() != VoxelRay.End.HIT || hit.state() == null || !hit.state().getFluidState().isEmpty()
+                || !hit.state().isFaceSturdy(bot.level(), support, Direction.UP)) {
+            noSight();
+            return false;
+        }
+        return true;
+    }
+
+    private void nextStair(BlockPos feet) {
+        tunneling = true;
+        stairFeet = feet.immutable();
+        step = feet.relative(forward).below();
+        if (step.getY() < bot.level().getMinBuildHeight()) noSight();
+    }
 
     void collected() {
         int now = held();
@@ -178,8 +243,9 @@ final class GatherTask {
         }
         if (!checked) {
             // Close-range rays are observations too; preserve direct gather on ground underfoot.
-            bot.vision().observe(Vec3.atCenterOf(bot.blockPosition().below()));
-            bot.worldMemory().glance(bot, 4);
+            var ground = bot.vision().observe(Vec3.atCenterOf(bot.blockPosition().below()).add(0, .499, 0));
+            if (ground.end() == VoxelRay.End.UNKNOWN) return;
+            if (!finishSurvey()) return;
             checked = true;
             var first = bot.worldMemory().nearby(bot, 64).stream().map(e -> e.pos()).filter(this::matches).filter(this::visible).findFirst();
             if (first.isPresent()) {
@@ -195,6 +261,9 @@ final class GatherTask {
         if (step != null) {
             // Clear headroom, feet, then the next stair, revealing each block before choosing it.
             for (BlockPos pos : new BlockPos[] { step.above(2), step.above(), step }) {
+                // A time-sliced ray can be deferred under load; that is not an absent resource.
+                var observed = bot.vision().observe(Vec3.atCenterOf(pos));
+                if (observed.end() == VoxelRay.End.UNKNOWN) return;
                 var hit = bot.level().clip(new ClipContext(bot.getEyePosition(), Vec3.atCenterOf(pos),
                     ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, bot));
                 if (hit.getType() == HitResult.Type.BLOCK) {
@@ -215,15 +284,17 @@ final class GatherTask {
                 }
                 if (!bot.level().getFluidState(pos).isEmpty()) { noSight(); return; }
             }
-            if (!visible(step.below()) || bot.level().getBlockState(step.below()).getCollisionShape(bot.level(), step.below()).isEmpty()) {
-                noSight();
-                return;
-            }
-            if (!controller.craftWalk(Vec3.atBottomCenterOf(step))) return;
+            if (!supportSafe()) return;
+            // The interaction tolerance is too loose for a waypoint: it can accept the old
+            // column or the falling body before the feet have landed on the new stair.
+            if (!controller.exploreWalk(step) || !bot.onGround() || Math.abs(bot.getY() - step.getY()) > .25) return;
             step = null;
         }
-        bot.worldMemory().glance(bot, 4);
         BlockPos feet = bot.blockPosition();
+        // Finish observing local ground before considering a distant remembered surface.
+        var groundHit = bot.vision().observe(Vec3.atCenterOf(feet.below()).add(0, .499, 0));
+        if (groundHit.end() == VoxelRay.End.UNKNOWN) return;
+        bot.worldMemory().glance(bot, 4);
         // Newly seen connected ore wins over other remembered deposits, even below our feet.
         if (oreKind != null) {
             var connected = bot.worldMemory().nearby(bot, 64).stream().map(e -> e.pos())
@@ -234,22 +305,25 @@ final class GatherTask {
                 .min(Comparator.comparingDouble(pos -> bot.position().distanceToSqr(Vec3.atCenterOf(pos))));
             if (connected.isPresent()) { mine(connected.get()); return; }
         }
+        if (tunneling) { nextStair(feet); return; }
         // Prefer exposed resources above the floor before opening a staircase.
         var candidate = bot.worldMemory().nearby(bot, 64).stream()
             .map(entry -> entry.pos()).filter(pos -> pos.getY() >= feet.getY())
             .filter(this::matches).filter(this::visible)
             .min(Comparator.comparingDouble(pos -> bot.position().distanceToSqr(Vec3.atCenterOf(pos))));
-        if (candidate.isPresent()) {
+        if (candidate.isPresent() && bot.canInteractWithBlock(candidate.get(), -.5)) {
             mine(candidate.get());
             return;
         }
         BlockPos ground = feet.below();
-        if (object == null && (tunneling || visible(ground) && matches(ground))) {
-            tunneling = true;
-            step = feet.relative(forward).below();
-            if (step.getY() < bot.level().getMinBuildHeight()) noSight();
+        if (object == null && groundHit.end() == VoxelRay.End.HIT && ground.equals(groundHit.pos()) && matches(ground)) {
+            // Physics runs after the controller: wait for a real landing before fixing the
+            // next stair's origin, otherwise floor(blockY) can still be a falling cell.
+            if (!bot.onGround()) return;
+            nextStair(feet);
             return;
         }
+        if (candidate.isPresent()) { mine(candidate.get()); return; }
         // A visible surface below the feet can still supply the resource without a tunnel.
         var surface = bot.worldMemory().nearby(bot, 64).stream().map(entry -> entry.pos())
             .filter(this::matches).filter(this::visible).findFirst();

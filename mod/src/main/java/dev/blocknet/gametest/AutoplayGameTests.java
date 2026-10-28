@@ -47,10 +47,51 @@ public final class AutoplayGameTests {
             helper.assertTrue(paused.get() && sword.get(), "gather paused=" + paused + ", sword=" + sword
                 + ", held=" + bot.getMainHandItem() + ", events=" + bot.moments().recent());
             helper.assertTrue(!zombie.isAlive(), "zombie killed through player attacks");
-            helper.assertTrue(reports.size() == 1 && reports.getFirst().equals("gathered 2 cobblestone"), "gather resumed: " + reports);
-            helper.assertTrue(bot.getInventory().countItem(Items.COBBLESTONE) == 2, "gather finished");
+            // An extra nearby drop may be picked up; the report states the real count.
+            var gathered = java.util.regex.Pattern.compile("gathered ([0-9]+) cobblestone").matcher(reports.isEmpty() ? "" : reports.getFirst());
+            helper.assertTrue(reports.size() == 1 && gathered.matches() && Integer.parseInt(gathered.group(1)) >= 2, "gather resumed: " + reports);
+            helper.assertTrue(bot.getInventory().countItem(Items.COBBLESTONE) == Integer.parseInt(gathered.group(1)), "gather finished");
             helper.assertTrue(helper.getTick() >= 40, "attacks obey player cooldown");
             BotManager.despawn("BnGuardGather");
+        });
+    }
+
+    @GameTest(template = "arena_tall", skyAccess = true, timeoutTicks = 700)
+    public static void defenseBeforeGatherWaitsForLandingAndResurveys(GameTestHelper helper) {
+        for (int x = 0; x < 9; x++) for (int z = 0; z < 9; z++)
+            for (int y = 0; y < 4; y++) helper.setBlock(new BlockPos(x, y, z), Blocks.STONE);
+        var bot = TestArena.spawnBot(helper, "BnResumeSurvey", new Vec3(4.5, 4, 2.5));
+        bot.getInventory().clearContent();
+        bot.getInventory().setItem(0, new ItemStack(Items.IRON_PICKAXE));
+        bot.getInventory().setItem(9, new ItemStack(Items.IRON_SWORD));
+        // Remember a real source, then interrupt before gather has selected a mining target.
+        TestArena.see(helper, bot, new BlockPos(4, 3, 3));
+        var zombie = helper.spawn(EntityType.ZOMBIE, new Vec3(4.5, 4, 5));
+        zombie.setNoAi(true);
+        zombie.setHealth(1);
+        zombie.setItemSlot(EquipmentSlot.HEAD, new ItemStack(Items.IRON_HELMET));
+        var reports = new ArrayList<String>();
+        bot.controller().gather("cobblestone", 2, reports::add);
+        bot.controller().mobHurt(bot.damageSources().mobAttack(zombie));
+        AtomicBoolean displaced = new AtomicBoolean();
+        helper.succeedWhen(() -> {
+            if (!zombie.isAlive() && bot.controller().defending() && !displaced.getAndSet(true)) {
+                // Deterministically model displacement at the end of defense. Physics must
+                // settle before selection, rather than pathfinding to old ground from midair.
+                bot.teleportTo(bot.getX(), bot.getY() + 6, bot.getZ());
+                bot.setOnGround(false);
+                bot.setDeltaMovement(Vec3.ZERO);
+            }
+            if (displaced.get() && !bot.onGround()) {
+                helper.assertTrue(reports.isEmpty(), "gather stays pending during the fall: " + reports);
+                helper.assertTrue(!bot.controller().isNavigating(), "wait for landing before choosing a route to a source");
+            }
+            helper.assertTrue(displaced.get() && !bot.controller().defending(), "defense completed before gather resumed");
+            var gathered = java.util.regex.Pattern.compile("gathered ([0-9]+) cobblestone").matcher(reports.isEmpty() ? "" : reports.getFirst());
+            helper.assertTrue(reports.size() == 1 && gathered.matches() && Integer.parseInt(gathered.group(1)) >= 2,
+                "remembered source gathered after resurvey: " + reports);
+            helper.assertTrue(bot.getInventory().countItem(Items.COBBLESTONE) == Integer.parseInt(gathered.group(1)), "real count reported");
+            BotManager.despawn("BnResumeSurvey");
         });
     }
 

@@ -2,13 +2,13 @@ import { spawn } from 'node:child_process';
 import { JsonProcess, processOptions } from './json-process.js';
 
 // Values are TOML, passed as separate argv entries (JSON strings also quote TOML strings).
-export function buildCodexArgs({ mcpServer, model = 'gpt-6-luna', serviceTier = 'priority', effort = 'low' } = {}) {
+export function buildCodexArgs({ mcpServer, model = 'gpt-6-luna', serviceTier = 'priority', effort = 'low', role = 'actor' } = {}) {
   const config = {
     model: JSON.stringify(model), service_tier: JSON.stringify(serviceTier), model_reasoning_effort: JSON.stringify(effort),
     approval_policy: '"never"', sandbox_mode: '"read-only"', project_doc_max_bytes: '0',
     'features.skip_host_skill_discovery': 'true', 'features.skill_search': 'false',
     'features.plugins': 'false', 'features.apps': 'false', 'features.memories': 'false',
-    'features.shell_tool': 'false', 'features.multi_agent': 'false', web_search: '"disabled"',
+    'features.shell_tool': 'false', 'features.multi_agent': 'false', web_search: role === 'planner' ? '"live"' : '"disabled"',
   };
   if (mcpServer) {
     const env = Object.entries(mcpServer.env ?? {}).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(',');
@@ -46,6 +46,13 @@ export class CodexBackend {
       developerInstructions: 'Use only the blocknet MCP tools to act in Minecraft.', ephemeral: true,
     });
     this.threadId = result.thread.id;
+  }
+
+  async prepare() {
+    if (!this.process || this.process.error || this.turns >= this.maxTurns) {
+      this.close();
+      await this.initialize();
+    }
   }
 
   async send(text) {

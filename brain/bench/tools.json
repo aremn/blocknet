@@ -119,6 +119,23 @@
     }
   },
   {
+    "name": "wiki",
+    "description": "Read in-game guides/quests/tooltips; use before crafting unfamiliar modded items.",
+    "task": false,
+    "params": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "mine_ore",
     "description": "Mine an ore item or block using known heights and honest branch mining until count or a ten minute budget.",
     "task": true,

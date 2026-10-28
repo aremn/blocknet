@@ -99,6 +99,16 @@ public final class BlocknetCommands {
             })))
             .then(miningCommand("tunnel"))
             .then(skillCommand("knowledge"))
+            .then(Commands.literal("wiki").then(Commands.argument("query", StringArgumentType.greedyString()).executes(c -> {
+                String text = dev.blocknet.knowledge.Wiki.get(c.getSource().getServer()).search(StringArgumentType.getString(c, "query"));
+                c.getSource().sendSuccess(() -> Component.literal(text), false);
+                return 1;
+            })))
+            .then(Commands.literal("wiki-status").executes(c -> {
+                String text = dev.blocknet.knowledge.Wiki.get(c.getSource().getServer()).status();
+                c.getSource().sendSuccess(() -> Component.literal(text), false);
+                return 1;
+            }))
             .then(skillCommand("mine_ore"))
             .then(skillCommand("obtain"))
             .then(miningCommand("descend"))

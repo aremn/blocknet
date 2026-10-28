@@ -44,10 +44,10 @@ async function fixture(run) {
   try { await run({ dir, sessions }); }
   finally { for (const session of sessions) session.close(); await rm(dir, { recursive: true, force: true }); }
 }
-async function request({ body = new FakeBody(), planner, actor = backend(async () => { throw new Error('unexpected actor call'); }), dir, sessions, text = goal }) {
+async function request({ body = new FakeBody(), planner, actor = backend(async () => { throw new Error('unexpected actor call'); }), dir, sessions, text = goal, persona }) {
   const events = [];
   const session = new BrainSession({ body, backend: actor, plannerBackend: planner, bot: 'Kirill',
-    plansFile: join(dir, 'plans.jsonl'), log: { write: (type, data) => events.push({ type, ...data }) } });
+    plansFile: join(dir, 'plans.jsonl'), persona, log: { write: (type, data) => events.push({ type, ...data }) } });
   sessions.push(session); await session.start();
   body.emit('event', { type: 'chat', from: 'Alex', text });
   // event() starts processing synchronously, so joining the pending queue needs no polling timer.
@@ -79,6 +79,70 @@ test('goal chat calls planner, retries invalid JSON once, executes through fake 
     planner: backend(async () => ({ text: JSON.stringify(pickaxePlan) })) });
   assert.equal(english.body.inventory.iron_pickaxe, 1);
 }));
+
+test('slow planner gets one quick local filler and one parallel scene in its prompt; fast planner stays quiet', async () => fixture(async f => {
+  const { persona } = await import('../thinking.js');
+  for (const slow of [true, false]) {
+    const body = new FakeBody(), started = Date.now(); let fillerAt, preparing = false;
+    const call = body.call.bind(body);
+    body.call = async (bot, tool, args) => {
+      if (tool === 'say' && args.text !== 'Готово.') fillerAt = Date.now() - started;
+      if (tool === 'scene') {
+        await new Promise(resolve => setImmediate(resolve));
+        assert.ok(preparing, 'scene runs while the planner backend prepares');
+      }
+      return call(bot, tool, args);
+    };
+    const planner = backend(async text => {
+      assert.match(text, /Scene observed while preparing this plan: forest/u);
+      assert.equal(body.calls.filter(c => c.tool === 'scene').length, 1);
+      if (slow) await new Promise(resolve => setTimeout(resolve, 60));
+      return { text: JSON.stringify(pickaxePlan) };
+    });
+    planner.prepare = async () => {
+      preparing = true;
+      await new Promise(resolve => setImmediate(resolve));
+      preparing = false;
+    };
+    await request({ ...f, body, text: slow ? 'make an iron pickaxe' : 'make iron tools',
+      persona: { ...persona, delayMs: 10 }, planner });
+    const fillers = body.calls.filter(c => c.tool === 'say' && c.args.text !== 'Готово.');
+    assert.equal(fillers.length, slow ? 1 : 0);
+    if (slow) { assert.ok(fillerAt < 60); assert.ok(persona.en.crafting.includes(fillers[0].args.text)); }
+  }
+}));
+
+test('thinking phrases avoid recent repeats, respect language, eight second cooldown and cancellation', async () => {
+  const { Thinking, persona } = await import('../thinking.js');
+  const said = []; let time = 0;
+  const thinking = new Thinking({ say: text => said.push(text), now: () => time,
+    random: () => 0, pool: { ...persona, delayMs: 1 } });
+  const slow = options => thinking.run(() => new Promise(resolve => setTimeout(resolve, 8)), options);
+  await slow({ text: 'найди железо' });
+  await slow({ text: 'найди железо' });
+  assert.equal(said.length, 1);
+  for (let i = 0; i < 3; i++) { time += 8000; await slow({ text: 'найди железо' }); }
+  assert.equal(new Set(said).size, 4);
+  assert.ok(said.every(s => persona.ru.finding.includes(s)));
+  time += 8000;
+  await slow({ text: 'build a house', isActive: () => false });
+  assert.equal(said.length, 4);
+  await assert.rejects(thinking.run(() => Promise.reject(new Error('cancelled'))), /cancelled/u);
+  await new Promise(resolve => setTimeout(resolve, 8));
+  assert.equal(said.length, 4);
+});
+
+test('only planner backend args enable live web search, with the same role restriction for Claude', () => {
+  assert.deepEqual(parseTool('wiki ME controller'), { tool: 'wiki', args: { query: 'ME controller' } });
+  const actor = buildCodexArgs(), planner = buildCodexArgs({ role: 'planner' });
+  assert.ok(planner.includes('web_search="live"'));
+  assert.ok(actor.includes('web_search="disabled"'));
+  assert.ok(!actor.includes('web_search="live"'));
+  const claudeActor = buildClaudeArgs(), claudePlanner = buildClaudeArgs({ role: 'planner' });
+  assert.equal(claudePlanner[claudePlanner.indexOf('--tools') + 1], 'WebSearch');
+  assert.equal(claudePlanner[claudePlanner.indexOf('--allowedTools') + 1], 'mcp__blocknet,WebSearch');
+  assert.equal(claudeActor[claudeActor.indexOf('--tools') + 1], '');
+});
 
 test('failed steps replan with reasons, critic rejects unearned success, third failure tells player', async () => fixture(async f => {
   const prompts = [], body = new FakeBody(); body.fail = true;

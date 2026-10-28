@@ -25,7 +25,8 @@ export function parseTool(text, tools = toolCatalog) {
   const schema = tool.params ?? tool.inputSchema;
   const rest = match[2]?.trim() ?? '';
   let args = {};
-  if (rest.startsWith('{')) args = JSON.parse(rest);
+  if (tool.name === 'wiki' && !rest.startsWith('{')) args = { query: rest };
+  else if (rest.startsWith('{')) args = JSON.parse(rest);
   else {
     const values = rest ? rest.split(/\s+/u) : [];
     let keys = Object.keys(schema.properties);
@@ -201,7 +202,7 @@ export class PlanRunner {
     const started = Date.now(), failures = [], completed = [];
     try {
       await this.snapshot();
-      let scene = this.tools.some(t => t.name === 'scene') ? (await this.call('scene', { delta: true, goal })).result : 'unknown';
+      let scene = 'unknown'; // BrainSession reads one cheap scene alongside planner request preparation.
       this.plan = await this.makePlan(goal, failures, scene);
       const deadline = started + this.plan.budget_min * 60_000;
       while (true) {
@@ -253,7 +254,6 @@ export class PlanRunner {
         failures.push(reason); this.log('plan_failure', { reason, failures: failures.length });
         if (failures.length >= 3) throw new Error(reason);
         await this.snapshot(); this.assertActive();
-        scene = this.tools.some(t => t.name === 'scene') ? (await this.call('scene', { delta: true, goal })).result : scene;
         this.plan = await this.makePlan(goal, failures, scene);
       }
     } catch (error) {

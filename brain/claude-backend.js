@@ -1,9 +1,9 @@
 import { spawn } from 'node:child_process';
 import { JsonProcess, processOptions } from './json-process.js';
 
-export function buildClaudeArgs({ mcpConfig = 'brain/mcp.json', promptFile = 'brain/prompt.md', model = 'haiku', effort } = {}) {
+export function buildClaudeArgs({ mcpConfig = 'brain/mcp.json', promptFile = 'brain/prompt.md', model = 'haiku', effort, role = 'actor' } = {}) {
   return ['-p', '--model', model, '--mcp-config', mcpConfig, '--strict-mcp-config',
-    '--tools', '', '--allowedTools', 'mcp__blocknet', '--permission-mode', 'dontAsk',
+    '--tools', role === 'planner' ? 'WebSearch' : '', '--allowedTools', role === 'planner' ? 'mcp__blocknet,WebSearch' : 'mcp__blocknet', '--permission-mode', 'dontAsk',
     '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
     '--include-partial-messages', '--system-prompt-file', promptFile, ...(effort ? ['--effort', effort] : [])];
 }
@@ -25,13 +25,17 @@ export class ClaudeBackend {
     this.spawnProcess = options.spawnProcess ?? spawn;
   }
 
-  async send(text) {
-    if (this.active) throw new Error('Claude already has an active turn');
+  prepare() {
     if (!this.process || this.process.error || this.turns >= this.maxTurns) {
       this.close();
       this.process = new JsonProcess(startProcess(this.options, this.spawnProcess),
         event => this.onEvent(event), error => this.active?.reject(error));
     }
+  }
+
+  async send(text) {
+    if (this.active) throw new Error('Claude already has an active turn');
+    this.prepare();
     const started = Date.now();
     try {
       return await new Promise((resolve, reject) => {
