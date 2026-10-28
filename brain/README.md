@@ -88,7 +88,8 @@ The brain spawns the executable directly with `shell: false`. Codex must also be
 authenticated; `CODEX_BIN` and optional `CODEX_SCRIPT` provide the equivalent overrides.
 
 Short stop/come/follow/look orders in English and Russian and clean Russian gather orders bypass
-the model. Messages queue during a call. `стоп`/`stop` acts immediately, closes the model process
+the model. Reactive messages queue during a call; messages during a plan use a separate tool-free
+actor session so the body can keep working. `стоп`/`stop` acts immediately, closes the model process
 and clears queued requests; death also resets the session. A dead process restarts on the next
 request; an interrupted request is never replayed. Reactive conversations rotate every 10 turns.
 Model replies are sent after completion, allowing empty answers and `<silent>` to stay silent.
@@ -125,7 +126,9 @@ MCP config and can call only `knowledge` and `wiki`; its system prompt is `plann
 Codex planner arguments set `web_search="live"`; the actor keeps `web_search="disabled"`.
 The planner prefers local `wiki`/`knowledge` and may search Minecraft wiki/mod docs for unfamiliar goals.
 
-`persona.json` holds editable RU/EN phrase pools for crafting, finding and thinking/building.
+`persona.json` holds editable RU/EN phrase pools for crafting, finding, thinking/building and
+immediate player-message acknowledgements (`ack`). Its `defaultLanguage: "ru"` controls speech
+before the first player message, even when the autoplay goal is English.
 Slow model calls get one local phrase after a 700 ms grace period; fast calls stay quiet.
 The shared cooldown is 8 seconds, and the last three phrases are excluded. Stop/death cancel
 pending speech. One non-moving `scene` call runs alongside planner backend preparation and its
@@ -186,8 +189,17 @@ node brain/report.js
 node brain/report.js brain/logs/session-<date>-Kirill.jsonl 10
 ```
 
-Autoplay executes the goal plan, checking body state after each step. Ordinary queued chat is
-handled after the current plan; status and stop act immediately. Bare `стоп`/`stop`
+Autoplay executes the goal plan, checking body state after each step. You can steer the bot while
+it works: say `железо глубже, на y=16` or `сундук с углём слева`. It immediately acknowledges
+with a local phrase such as `ок, понял` (at most once per 8 seconds). An ack also suppresses
+fillers for the next 8 seconds; a recent filler does not delay the first player-message ack.
+One cheap actor call classifies each message as a hint, new goal, question or small talk.
+Hints go to the planner with the current plan, step, state and scene, and remain in memory for
+later replans. A `keep` response continues the body task; revised remaining steps replace the
+plan, cancelling the body task only if the current step changes. Questions get a short answer
+without replanning; small talk gets a short reply or silence. A different request, such as
+`сначала добудь уголь`, gets a one-line confirmation and a new plan; the long-term autoplay goal
+resumes afterwards. `план?` reports progress immediately. Bare `стоп`/`stop`
 pauses and cancels the current action; `продолжай`/`continue` resumes. The defaults are hard limits
 of 200 model turns (including chat while autoplay is active) and 60 wall-clock minutes, including
 paused/disconnected time. Reaching either limit ends autoplay; one final reflection asks for

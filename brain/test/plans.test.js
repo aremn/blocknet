@@ -142,6 +142,11 @@ test('only planner backend args enable live web search, with the same role restr
   assert.equal(claudePlanner[claudePlanner.indexOf('--tools') + 1], 'WebSearch');
   assert.equal(claudePlanner[claudePlanner.indexOf('--allowedTools') + 1], 'mcp__blocknet,WebSearch');
   assert.equal(claudeActor[claudeActor.indexOf('--tools') + 1], '');
+  const chat = buildCodexArgs({ role: 'chat', mcpServer: { command: 'unused', args: [] } });
+  assert.ok(chat.includes('mcp_servers={}'));
+  assert.ok(chat.includes('web_search="disabled"'));
+  const claudeChat = buildClaudeArgs({ role: 'chat' });
+  assert.equal(claudeChat[claudeChat.indexOf('--allowedTools') + 1], '');
 });
 
 test('failed steps replan with reasons, critic rejects unearned success, third failure tells player', async () => fixture(async f => {
@@ -206,4 +211,155 @@ test('tool steps never call actor; free text restarts actor per step with tiny c
   assert.deepEqual(parseRole('codex:gpt-6-luna:priority'), { backend: 'codex', model: 'gpt-6-luna', serviceTier: 'priority' });
   assert.ok(buildCodexArgs(parseRole('codex:gpt-6.1-sol:medium')).includes('model_reasoning_effort="medium"'));
   assert.ok(buildClaudeArgs(parseRole('claude:sonnet:high')).includes('--effort'));
+}));
+
+const oneStep = (goal, item) => ({ goal, budget_min: 2,
+  steps: [{ id: 1, do: `obtain ${item} 1`, done: `inv ${item} >= 1` }] });
+async function until(predicate) {
+  const deadline = Date.now() + 3000;
+  while (!predicate()) {
+    if (Date.now() > deadline) throw new Error('condition timed out');
+    await new Promise(resolve => setImmediate(resolve));
+  }
+}
+async function runningPlan(f, { review, classify = () => ({ kind: 'hint' }), autoplay = false } = {}) {
+  const body = new FakeBody(), prompts = [], chatPrompts = [], events = [];
+  const call = body.call.bind(body);
+  let finish;
+  body.call = async (bot, tool, args) => {
+    if (tool === 'obtain' && args.item === 'iron_ingot') {
+      body.calls.push({ tool, args });
+      const task_id = 'running-iron';
+      body.tasks.set(task_id, new Promise(resolve => { finish = result => {
+        if (!result) body.inventory.iron_ingot = 1;
+        resolve(result ?? 'obtained iron_ingot');
+      }; }));
+      return { task_id };
+    }
+    if (tool === 'stop') finish?.('cancelled');
+    return call(bot, tool, args);
+  };
+  const planner = backend(async text => {
+    prompts.push(text);
+    return { text: JSON.stringify(text.includes('Hint review:') ? review
+      : oneStep(text.includes('Goal: get coal') ? 'get coal' : 'find iron', text.includes('Goal: get coal') ? 'coal' : 'iron_ingot')) };
+  });
+  const session = new BrainSession({ body, backend: backend(async () => ({ text: '<silent>' })),
+    chatBackend: backend(async text => { chatPrompts.push(text); return { text: JSON.stringify(classify(text)) }; }),
+    plannerBackend: planner, bot: 'Kirill', goal: autoplay ? 'find iron' : '', pauseMs: 1,
+    plansFile: join(f.dir, 'hints.jsonl'), log: { write: (type, data) => events.push({ type, ...data }) } });
+  f.sessions.push(session); await session.start();
+  if (!autoplay) body.emit('event', { type: 'chat', from: 'Alex', text: 'find iron' });
+  await until(() => finish);
+  return { session, body, prompts, chatPrompts, events, finish: result => finish(result),
+    chat: text => body.emit('event', { type: 'chat', from: 'Alex', text }) };
+}
+
+test('hint during running task immediately acks once, reviews once, and keep never cancels the body', async () => fixture(async f => {
+  const r = await runningPlan(f, { review: { action: 'keep' } });
+  r.chat('железо глубже, на y=16');
+  assert.equal(r.body.calls.filter(c => c.tool === 'say').length, 1, 'ack is immediate');
+  await r.session.plans.interactions;
+  assert.equal(r.prompts.length, 2, 'one initial plan and exactly one hint review');
+  assert.match(r.prompts[1], /железо глубже, на y=16/u);
+  assert.match(r.prompts[1], /Current plan:.*obtain iron_ingot/u);
+  assert.match(r.prompts[1], /Current step:.*iron_ingot/u);
+  assert.match(r.prompts[1], /State:.*pos 0/u);
+  assert.match(r.prompts[1], /Scene: forest/u);
+  assert.equal(r.body.calls.filter(c => c.tool === 'stop').length, 0);
+  assert.equal(r.body.calls.filter(c => c.tool === 'say').length, 1);
+  assert.equal(r.session.plans.running, true);
+  r.finish(); await until(() => !r.session.busy);
+}));
+
+test('different revised step stops the running task once and executes the revised plan', async () => fixture(async f => {
+  const r = await runningPlan(f, { review: oneStep('find iron', 'coal') });
+  r.chat('сундук с углём слева');
+  await until(() => !r.session.busy);
+  assert.equal(r.prompts.length, 2);
+  assert.equal(r.body.calls.filter(c => c.tool === 'stop').length, 1);
+  assert.equal(r.body.inventory.coal, 1);
+  assert.equal(r.session.plans.plan.steps[0].do, 'obtain coal 1');
+  assert.equal(r.events.filter(e => e.type === 'plan_failure').length, 0);
+}));
+
+test('revising later steps preserves the running step and remembers hints on failure replan', async () => fixture(async f => {
+  const review = oneStep('find iron', 'iron_ingot');
+  review.steps.push({ id: 2, do: 'obtain coal 1', done: 'inv coal >= 1' });
+  const r = await runningPlan(f, { review });
+  r.chat('сундук с углём слева');
+  await r.session.plans.interactions;
+  assert.equal(r.body.calls.filter(c => c.tool === 'stop').length, 0);
+  r.finish('failed: tunnel blocked');
+  await until(() => r.prompts.length === 3 && r.body.calls.filter(c => c.tool === 'obtain').length === 2);
+  assert.match(r.prompts[2], /Player hints for this plan:.*сундук с углём слева/u);
+  r.finish(); await until(() => !r.session.busy);
+}));
+
+test('question is answered while working without replanning; burst chat shares ack cooldown', async () => fixture(async f => {
+  const r = await runningPlan(f, { classify: () => ({ kind: 'question', reply: 'Сейчас добываю железо.' }) });
+  r.chat('что ты делаешь?'); r.chat('и где ты?');
+  await r.session.plans.interactions;
+  assert.equal(r.prompts.length, 1);
+  assert.equal(r.chatPrompts.length, 2);
+  assert.ok(r.chatPrompts.every(p => p.includes('Current plan:') && p.includes('Scene: forest')));
+  const { persona } = await import('../thinking.js');
+  assert.equal(r.body.calls.filter(c => c.tool === 'say' && persona.ru.ack.includes(c.args.text)).length, 1);
+  assert.equal(r.body.calls.filter(c => c.tool === 'say' && c.args.text === 'Сейчас добываю железо.').length, 2);
+  assert.equal(r.body.calls.filter(c => c.tool === 'stop').length, 0);
+  r.finish(); await until(() => !r.session.busy);
+}));
+
+test('new player goal replans immediately, then resumes the unchanged long-term autoplay goal', async () => fixture(async f => {
+  const r = await runningPlan(f, { autoplay: true,
+    classify: () => ({ kind: 'new_goal', goal: 'get coal', reply: 'Хорошо, сначала добуду уголь.' }) });
+  r.chat('вместо этого добудь уголь');
+  await until(() => r.body.inventory.coal === 1 && r.body.calls.filter(c => c.tool === 'obtain' && c.args.item === 'iron_ingot').length === 2);
+  assert.equal(r.session.goal, 'find iron');
+  assert.equal(r.session.ended, false);
+  assert.equal(r.body.calls.filter(c => c.tool === 'stop').length, 1);
+  assert.equal(r.prompts.length, 3);
+  assert.match(r.prompts[1], /Goal: get coal/u);
+  assert.match(r.prompts[2], /Goal: find iron/u);
+  assert.ok(r.body.calls.some(c => c.tool === 'say' && c.args.text === 'Хорошо, сначала добуду уголь.'));
+  r.finish(); await until(() => r.session.ended && !r.session.busy);
+}));
+
+test('before player chat an English autoplay goal still uses persona default ru for speech', async () => fixture(async f => {
+  const { persona, Thinking } = await import('../thinking.js');
+  const thinking = new Thinking({ random: () => 0 });
+  assert.ok(persona.ru.finding.includes(thinking.phrase('find iron')));
+  const r = await runningPlan(f, { autoplay: true });
+  assert.match(r.session.languageRule(), /Before any player message, use ru/u);
+  assert.equal(r.session.lastPlayerMessage, undefined);
+  assert.ok(persona.ru.thinking.includes(r.session.thinking.phrase('survive and progress', r.session.lastPlayerMessage?.text)));
+  r.session.cancel();
+}));
+
+test('acks remain available beyond three messages, respecting the eight-second cooldown', async () => {
+  const { persona, Thinking } = await import('../thinking.js');
+  const said = []; let time = 0;
+  const thinking = new Thinking({ say: text => said.push(text), now: () => time, random: () => 0 });
+  for (let i = 0; i < 6; i++) {
+    await thinking.ack(); await thinking.ack();
+    time += 8000;
+  }
+  assert.equal(said.length, 6);
+  assert.ok(said.every(s => persona.ru.ack.includes(s)));
+});
+
+test('slow initial autoplay planning sends a Russian filler before any player message', async () => fixture(async f => {
+  const { persona } = await import('../thinking.js');
+  const body = new FakeBody(); let finish;
+  const planner = backend(() => new Promise(resolve => { finish = () => resolve({ text: JSON.stringify(oneStep('find coal', 'coal')) }); }));
+  const session = new BrainSession({ body, backend: backend(async () => ({ text: '<silent>' })), plannerBackend: planner,
+    chatBackend: backend(async () => ({ text: JSON.stringify({ kind: 'question', reply: 'Да, я тут.' }) })),
+    bot: 'Kirill', goal: 'find coal', pauseMs: 1, persona: { ...persona, delayMs: 1 }, plansFile: join(f.dir, 'default.jsonl') });
+  f.sessions.push(session); await session.start();
+  await until(() => body.calls.some(c => c.tool === 'say'));
+  assert.ok(persona.ru.finding.includes(body.calls.find(c => c.tool === 'say').args.text));
+  body.emit('event', { type: 'chat', from: 'Alex', text: 'ты тут?' });
+  assert.equal(body.calls.filter(c => c.tool === 'say' && persona.ru.ack.includes(c.args.text)).length, 1,
+    'a recent filler must not suppress the immediate player-message ack');
+  finish(); await until(() => session.ended && !session.busy);
 }));

@@ -10,7 +10,8 @@ export function buildCodexArgs({ mcpServer, model = 'gpt-6-luna', serviceTier = 
     'features.plugins': 'false', 'features.apps': 'false', 'features.memories': 'false',
     'features.shell_tool': 'false', 'features.multi_agent': 'false', web_search: role === 'planner' ? '"live"' : '"disabled"',
   };
-  if (mcpServer) {
+  if (role === 'chat') config.mcp_servers = '{}';
+  if (mcpServer && role !== 'chat') {
     const env = Object.entries(mcpServer.env ?? {}).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(',');
     config.mcp_servers = `{blocknet={command=${JSON.stringify(mcpServer.command)},args=${JSON.stringify(mcpServer.args)},env={${env}},default_tools_approval_mode="approve",tool_timeout_sec=600}}`;
   }
@@ -43,7 +44,9 @@ export class CodexBackend {
     const result = await this.process.request('thread/start', {
       model: this.model, serviceTier: this.options.serviceTier ?? 'priority', cwd: this.options.cwd,
       approvalPolicy: 'never', sandbox: 'read-only', baseInstructions: this.options.prompt,
-      developerInstructions: 'Use only the blocknet MCP tools to act in Minecraft.', ephemeral: true,
+      developerInstructions: this.options.role === 'chat'
+        ? 'Classify player messages using only the supplied context. Return the requested JSON; never call tools or act in Minecraft.'
+        : 'Use only the blocknet MCP tools to act in Minecraft.', ephemeral: true,
     });
     this.threadId = result.thread.id;
   }

@@ -1,13 +1,16 @@
 {
+  "defaultLanguage": "ru",
   "delayMs": 700,
   "intervalMs": 8000,
   "recentCount": 3,
   "ru": {
+    "ack": ["ок, понял", "принял", "ага, щас учту"],
     "crafting": ["ща, гляну как это крафтится", "погоди, сверюсь с рецептом", "щас гляну в справочнике", "так, проверю что нужно для крафта", "ща, разберусь с рецептом"],
     "finding": ["ща, гляну че есть", "погоди, осмотрюсь", "щас посмотрю вокруг", "так, прикину где искать", "ща, поищу зацепки"],
     "thinking": ["так, дай подумать...", "щас прикину", "секунду, соображу", "ща, подумаю как лучше", "так, соберу мысли"]
   },
   "en": {
+    "ack": ["okay, got it", "gotcha", "yep, I'll keep that in mind"],
     "crafting": ["lemme check the recipe", "hang on, checking the guide", "gimme a sec to check what we need", "let me look up how to craft that", "one sec, checking the ingredients"],
     "finding": ["lemme see what's around", "hang on, taking a look", "one sec, looking for clues", "let me see where to look", "gimme a sec to look around"],
     "thinking": ["lemme think a sec", "hang on, working it out", "one sec, thinking", "let me figure this out", "gimme a moment to plan"]

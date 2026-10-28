@@ -65,7 +65,7 @@ export function shortReply(text) {
 /** One queue owns the model; chat always precedes the next autonomous turn. */
 export class BrainSession {
   constructor({ body, backend, bot, aliases = [], listen = 'all', goal = '', maxTurns = 200,
-    maxMinutes = 60, pauseMs = 1200, log, auditFile, lessonsFile, usageFile, plannerBackend, plansFile, persona }) {
+    maxMinutes = 60, pauseMs = 1200, log, auditFile, lessonsFile, usageFile, plannerBackend, plansFile, persona, chatBackend }) {
     if (!Number.isInteger(maxTurns) || maxTurns < 1 || !Number.isFinite(maxMinutes) || maxMinutes <= 0)
       throw new Error('Limits must be positive (--max-turns integer, --max-minutes number)');
     Object.assign(this, { body, backend, bot, goal, maxTurns, maxMinutes, pauseMs, log, auditFile, lessonsFile, usageFile });
@@ -77,6 +77,11 @@ export class BrainSession {
     this.thinking = new Thinking({ say: (text, player) => this.say(text, player), pool: persona,
       active: () => !this.closed && !this.paused && !this.awaitingRespawn });
     this.plannerBackend = plannerBackend;
+    // Chat must remain available while the step actor is waiting on a body task.
+    // Real backends get an independent, tool-free session of the actor model.
+    this.chatBackend = chatBackend ?? (backend instanceof CodexBackend || backend instanceof ClaudeBackend
+      ? createBackend(backend.backend, { ...backend.options, role: 'chat', mcpServer: undefined,
+        mcpConfig: '{"mcpServers":{}}' }) : backend);
     if (plannerBackend) this.plans = new PlanRunner({
       call: (tool, args) => this.call(tool, args), tools: body.hello?.tools,
       library: new PlanLibrary(plansFile ?? resolve(brainDir, 'logs/plans.jsonl')),
@@ -101,13 +106,13 @@ export class BrainSession {
   }
   diagnostic(error) { process.stderr.write(`${error.message ?? error}\n`); }
   languageRule() {
-    return `Answer in the language the player last used, including autoplay chat. Latest player message: ${JSON.stringify(this.lastPlayerMessage ?? null)}.\n`;
+    return `Answer in the language the player last used, including autoplay chat. Before any player message, use ${this.thinking.pool.defaultLanguage ?? 'ru'}. Latest player message: ${JSON.stringify(this.lastPlayerMessage ?? null)}.\n`;
   }
   async sendRole(role, backend, text) {
     const generation = this.generation;
     return this.thinking.run(() => this.sendRoleWithScene(role, backend, text, generation), {
       text: /^Goal: (.*)/mu.exec(text)?.[1] ?? text,
-      languageText: this.lastPlayerMessage?.text ?? this.goal, player: this.lastPlayerMessage?.from,
+      languageText: this.lastPlayerMessage?.text, player: this.lastPlayerMessage?.from,
       isActive: () => generation === this.generation,
     });
   }
@@ -117,7 +122,7 @@ export class BrainSession {
     const [scene] = await Promise.all([
       role === 'planner' && this.body.hello?.tools?.some(t => t.name === 'scene')
         ? this.call('scene', { delta: false }).then(r => r.result).catch(() => 'unavailable') : null,
-      this.auditFile ? writeFile(this.auditFile, '') : null,
+      this.auditFile && role !== 'chat' ? writeFile(this.auditFile, '') : null,
       role === 'planner' ? backend.prepare?.() : null,
     ]);
     if (generation !== this.generation || this.closed) throw new Error('Model request cancelled');
@@ -131,7 +136,7 @@ export class BrainSession {
       return result;
     } catch (error) { failure = error.message; throw error; }
     finally {
-      const audit = this.auditFile ? await readFile(this.auditFile, 'utf8').catch(() => '') : '';
+      const audit = this.auditFile && role !== 'chat' ? await readFile(this.auditFile, 'utf8').catch(() => '') : '';
       const entry = { bot: this.bot, role, backend: backend.backend, model: backend.model,
         ms: result?.ms ?? Date.now() - started, ttft_ms: result?.ttftMs ?? null, usage: result?.usage ?? null,
         tool_calls: audit.trim() ? audit.trim().split('\n').length : result?.toolCalls ?? 0, error: failure ?? null };
@@ -171,6 +176,7 @@ export class BrainSession {
   cancel(clear = true) {
     this.generation++; this.backend.close(); this.sessionTurns = 0; this.compact.reset();
     this.plannerBackend?.close(); this.plans?.cancel();
+    if (this.chatBackend !== this.backend) this.chatBackend?.close();
     clearTimeout(this.nextTimer);
     if (clear) this.queue.length = 0;
   }
@@ -238,6 +244,30 @@ export class BrainSession {
     if (/^(?:continue|продолжай)[.!?]*$/iu.test(order.trim())) {
       this.paused = false; this.log?.write('autoplay_resume'); this.schedule(); return;
     }
+    if (this.plans?.running) {
+      const generation = this.generation;
+      this.thinking.ack(event.text, event.from).catch(e => this.diagnostic(e));
+      this.plans.interact(async () => {
+        const context = await this.plans.context();
+        const result = await this.sendRoleWithScene('chat', this.chatBackend,
+          this.languageRule() + `Classify this player message during the current plan. Do not call tools or act in the world.\n`
+          + `Return ONLY JSON: {"kind":"hint|new_goal|question|chat","reply":"one short sentence or empty","goal":"only for new_goal"}.\n`
+          + `hint = information relevant to the current goal/step; new_goal = asks to do something else; question = answer using the context; chat = brief small talk or silence.\n`
+          + `${context}\nPlayer ${JSON.stringify(event.from)} message: ${JSON.stringify(order)}`, generation);
+        if (generation !== this.generation || this.closed) return;
+        this.plans.assertActive();
+        const classified = JSON.parse(result.text);
+        if (classified.kind === 'hint') await this.plans.hint(order, event.from);
+        else if (classified.kind === 'new_goal') {
+          await this.say(shortReply(classified.reply) || (/[а-яё]/iu.test(order) ? 'Хорошо, займусь этим.' : 'Okay, on it.'), event.from);
+          this.queue = this.queue.filter(m => !m.autoplay);
+          this.queue.unshift({ from: event.from, text: classified.goal?.trim() || order, needsPlan: true });
+          this.plans.cancel(); this.backend.close();
+          await this.call('stop');
+        } else if (['question', 'chat'].includes(classified.kind)) await this.say(shortReply(classified.reply), event.from);
+      }).catch(e => { if (generation === this.generation && !this.plans.controller.signal.aborted) this.diagnostic(e); });
+      return;
+    }
     this.queue = this.queue.filter(m => !m.autoplay);
     this.queue.push(/^(?:итоги|lessons|summary)[.!?]*$/iu.test(order.trim())
       ? { reflection: true, from: event.from, text: order }
@@ -266,7 +296,7 @@ export class BrainSession {
         if (this.plans && !message.reflection) {
           this.plans.tools = this.body.hello?.tools ?? this.plans.tools;
           let direct;
-          try { direct = !message.autoplay && parseTool(message.text, this.plans.tools); }
+          try { direct = !message.autoplay && !message.needsPlan && parseTool(message.text, this.plans.tools); }
           catch { /* A tool verb followed by natural language belongs to the planner. */ }
           if (direct) { await this.runRule({ ...direct, ack: 'Готово.' }, message.from); continue; }
           if (message.needsPlan || message.autoplay || needsPlan(message.text, this.plans.tools)) {
@@ -306,7 +336,7 @@ export class BrainSession {
           called = true;
           if (!message.reflection) this.turns++;
           result = await this.thinking.run(() => this.backend.send(prompt), {
-            text: message.text ?? this.goal, languageText: this.lastPlayerMessage?.text ?? this.goal, player: message.from,
+            text: message.text ?? this.goal, languageText: this.lastPlayerMessage?.text, player: message.from,
             isActive: () => generation === this.generation && !message.reflection,
           });
           this.sessionTurns++;

@@ -134,9 +134,9 @@ export class PlanLibrary {
   }
 }
 
-export function plannerInput({ goal, state, scene, failures = [], examples = [], tools = toolCatalog }) {
+export function plannerInput({ goal, state, scene, failures = [], hints = [], examples = [], tools = toolCatalog }) {
   return `Goal: ${goal}\nState: ${oneLine(state)}\nScene: ${oneLine(scene)}\nPrevious failures: ${JSON.stringify(failures)}\n`
-    + `Matching successful plans (examples): ${JSON.stringify(examples)}\nAvailable skills/tools (positional argument order; ? = optional):\n`
+    + `Player hints for this plan: ${JSON.stringify(hints)}\nMatching successful plans (examples): ${JSON.stringify(examples)}\nAvailable skills/tools (positional argument order; ? = optional):\n`
     + tools.map(t => `${t.name} ${Object.keys((t.params ?? t.inputSchema).properties).map(k => k + ((t.params ?? t.inputSchema).required?.includes(k) ? '' : '?')).join(' ')}: ${oneLine(t.description)}`).join('\n');
 }
 
@@ -154,6 +154,56 @@ export class PlanRunner {
     this.state = { inventory: {} }; this.label = 'нет';
   }
   cancel() { this.controller?.abort(); this.label = 'прерван'; }
+  interact(work) {
+    const controller = this.controller;
+    const pending = (this.interactions ?? Promise.resolve()).then(async () => {
+      await this.ready;
+      if (controller !== this.controller || controller.signal.aborted || !this.running) return;
+      return work();
+    });
+    this.interactions = pending.catch(error => this.log('plan_chat_error', { error: error.message }));
+    return pending;
+  }
+  async waitInteractions() {
+    let pending;
+    do { pending = this.interactions; await pending; } while (pending !== this.interactions);
+  }
+  async context() {
+    await this.snapshot(); this.assertActive();
+    const scene = this.tools.some(t => t.name === 'scene')
+      ? (await this.call('scene', { delta: false })).result : 'unknown';
+    this.assertActive();
+    return `Goal: ${this.plan.goal}\nCurrent plan: ${JSON.stringify(this.plan)}\nCurrent step: ${JSON.stringify(this.step)}\nState: ${this.stateLine}\nScene: ${scene}\nPlayer hints: ${JSON.stringify(this.hints)}\n${this.status()}`;
+  }
+  async hint(text, player) {
+    this.hints.push(text);
+    const context = await this.context();
+    const result = await this.bounded(() => this.planner(plannerInput({ goal: this.plan.goal,
+      state: this.stateLine, scene: 'see current context below', hints: this.hints, tools: this.tools })
+      + `\n${context}\nPlayer hint: ${JSON.stringify(text)}\nHint review: return {"action":"keep","reply":"optional short reply"} or a revised plan starting at the current step (ids start at 1).`), 120_000);
+    this.assertActive();
+    const value = JSON.parse(result.text);
+    if (value.action === 'keep') {
+      if (value.reply) await this.say(oneLine(value.reply).split(' ').slice(0, 12).join(' ').slice(0, 200), player);
+      return;
+    }
+    const revised = validatePlan(value, this.tools);
+    const next = revised.steps[0], previous = this.step;
+    const command = step => {
+      const tool = parseTool(step.do, this.tools);
+      return tool ? JSON.stringify([tool.tool, Object.entries(tool.args).sort(([a], [b]) => a.localeCompare(b))]) : step.do.trim();
+    };
+    const changed = command(next) !== command(previous)
+      || JSON.stringify(parseCondition(next.done)) !== JSON.stringify(parseCondition(previous.done));
+    this.plan.steps.splice(this.index, Infinity, ...revised.steps.map((s, i) => ({ ...s, id: this.index + i + 1 })));
+    this.log('plan_revised', { plan: this.plan, hint: text, changed });
+    if (changed) {
+      this.step = this.plan.steps[this.index];
+      this.resetActor?.();
+      await this.call('stop'); this.assertActive();
+      this.stepController?.abort(new Error('Plan revised'));
+    }
+  }
   status() {
     if (!this.plan || !this.step) return `план: ${this.label}`;
     return `план: шаг ${this.step.id}/${this.plan.steps.length} ${oneLine(this.step.do)} — ${checkDone(this.step.done, this.state).progress}`;
@@ -168,7 +218,7 @@ export class PlanRunner {
   assertActive() {
     if (this.controller.signal.aborted || !this.isActive()) throw new Error('Plan cancelled');
   }
-  async bounded(work, ms) {
+  async bounded(work, ms, stepSignal) {
     this.assertActive();
     let timer, abort;
     try {
@@ -176,18 +226,19 @@ export class PlanRunner {
         timer = setTimeout(() => reject(new Error('step budget exceeded')), ms);
         abort = () => reject(new Error('Plan cancelled'));
         this.controller.signal.addEventListener('abort', abort, { once: true });
+        stepSignal?.addEventListener('abort', abort, { once: true });
       })]);
-    } finally { clearTimeout(timer); this.controller.signal.removeEventListener('abort', abort); }
+    } finally { clearTimeout(timer); this.controller.signal.removeEventListener('abort', abort); stepSignal?.removeEventListener('abort', abort); }
   }
   async makePlan(goal, failures, scene) {
     const matches = await this.library.matches(goal);
     this.assertActive();
-    if (!failures.length && matches[0]?.score >= 0.8) {
+    if (!failures.length && !this.hints.length && matches[0]?.score >= 0.8) {
       this.log('plan_reused', { goal });
       return validatePlan({ ...matches[0].plan, goal }, this.tools);
     }
     const input = plannerInput({ goal, state: this.stateLine, scene, failures,
-      examples: matches.map(m => m.plan), tools: this.tools });
+      examples: matches.map(m => m.plan), hints: this.hints, tools: this.tools });
     let invalid = '';
     for (let attempt = 0; attempt < 2; attempt++) {
       const result = await this.bounded(() => this.planner(input + invalid), 120_000);
@@ -199,17 +250,25 @@ export class PlanRunner {
   }
   async run(goal, player) {
     this.controller = new AbortController(); this.plan = null; this.step = null; this.label = 'составляю';
+    this.hints = []; this.interactions = Promise.resolve(); this.running = true;
+    let ready;
+    this.ready = new Promise(resolve => { ready = resolve; });
     const started = Date.now(), failures = [], completed = [];
     try {
       await this.snapshot();
       let scene = 'unknown'; // BrainSession reads one cheap scene alongside planner request preparation.
       this.plan = await this.makePlan(goal, failures, scene);
+      this.step = this.plan.steps[0]; ready();
       const deadline = started + this.plan.budget_min * 60_000;
       while (true) {
         this.log('plan', { plan: this.plan, failures });
         let reason;
-        for (const step of this.plan.steps) {
+        for (this.index = 0; this.index < this.plan.steps.length; this.index++) {
+          this.step = this.plan.steps[this.index];
+          await this.waitInteractions();
+          const step = this.plan.steps[this.index];
           this.assertActive(); this.step = step;
+          const stepController = this.stepController = new AbortController();
           this.resetActor?.();
           const budgetMs = Math.min(deadline - Date.now(), (step.budget_min ?? this.plan.budget_min / this.plan.steps.length) * 60_000);
           const stepDeadline = Date.now() + budgetMs;
@@ -224,12 +283,16 @@ export class PlanRunner {
                 }
                 scene = this.tools.some(t => t.name === 'scene') ? (await this.call('scene', { delta: true, goal })).result : scene;
                 this.assertActive();
+                if (stepController.signal.aborted) throw new Error('Plan revised');
                 if (Date.now() > stepDeadline) throw new Error('step budget exceeded');
                 return (await this.actor(`${this.actorPrefix()}Goal: ${goal}\nStep: ${step.do}\nDone: ${step.done}\nState: ${oneLine(this.stateLine)}\nScene: ${oneLine(scene).slice(0, 600)}\n${this.status()}`)).text;
-              }, budgetMs);
+              }, budgetMs, stepController.signal);
+              await this.waitInteractions();
               this.assertActive();
+              if (stepController.signal.aborted) throw new Error('Plan revised');
               if (failed(result) || /^(?:error|unsupported|needs_plan)\b/iu.test(String(result))) throw new Error(String(result));
-              await this.snapshot(); this.assertActive();
+              await this.snapshot(); await this.waitInteractions(); this.assertActive();
+              if (stepController.signal.aborted) throw new Error('Plan revised');
               if (Date.now() > stepDeadline) throw new Error('step budget exceeded');
               const verdict = checkDone(step.done, this.state);
               if (!verdict.pass) throw new Error(`${step.done}: ${verdict.progress}; no verified completion`);
@@ -237,13 +300,16 @@ export class PlanRunner {
             completed.push(step);
             this.log('plan_step', { step, status: this.status(), pass: true });
           } catch (error) {
+            await this.waitInteractions();
             this.assertActive();
+            if (stepController.signal.aborted) { this.index--; continue; }
             reason = `step ${step.id} (${step.do}): ${error.message}`;
             if (/budget exceeded/u.test(error.message)) { this.resetActor?.(); await this.call('stop'); }
             break;
           }
         }
         if (!reason) {
+          this.running = false;
           const steps = completed.map((s, i) => ({ ...s, id: i + 1 }));
           // Library entries obey the same plan bounds as fresh planner output.
           if (steps.length <= 32) await this.library.save(goal, { ...this.plan, steps }, Date.now() - started);
@@ -253,8 +319,11 @@ export class PlanRunner {
         }
         failures.push(reason); this.log('plan_failure', { reason, failures: failures.length });
         if (failures.length >= 3) throw new Error(reason);
+        await this.waitInteractions(); this.assertActive();
+        this.ready = new Promise(resolve => { ready = resolve; });
         await this.snapshot(); this.assertActive();
         this.plan = await this.makePlan(goal, failures, scene);
+        this.step = this.plan.steps[0]; ready();
       }
     } catch (error) {
       this.step = null;
@@ -262,6 +331,6 @@ export class PlanRunner {
       this.label = 'не вышло';
       await this.say(`Не получилось: ${oneLine(error.message).slice(0, 150)}`, player);
       return false;
-    }
+    } finally { this.running = false; ready(); }
   }
 }
