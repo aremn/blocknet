@@ -2,7 +2,7 @@
 
 Node 22, plain ES modules, no npm dependencies. The mod is the body; this process uses rules for
 short orders, a planner for goals and a small actor for individual steps. Defaults are
-`--planner claude:sonnet` and `--actor codex:gpt-6.1-terra:priority` (low reasoning; 2026-10-28 bench: actor steps ~4.6 s vs ~5.2 s on luna, same pass rate; planning luna failed a case). Both use
+`--planner codex:gpt-6.1-terra:priority` and `--actor codex:gpt-6.1-terra:priority` (low reasoning; 2026-10-28 bench: actor steps ~4.6 s vs ~5.2 s on luna, same pass rate; planning: terra and sonnet both passed, terra wrote leaner plans that lean on obtain and answered in ~4 s vs ~7.7 s, luna failed a case; use --planner claude:sonnet to move planning off Codex limits). Both use
 your existing subscription login, with no API key or npm dependencies.
 
 1. Start Minecraft with the mod and spawn a bot: `/blocknet spawn Kirill`.
