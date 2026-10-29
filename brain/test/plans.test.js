@@ -4,7 +4,7 @@ import { EventEmitter } from 'node:events';
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { BrainSession } from '../brain.js';
-import { parseRole, parseTool, checkDone, inventoryCounts, PlanLibrary, toolCatalog, validatePlan } from '../plans.js';
+import { parseRole, parseTool, checkDone, inventoryCounts, PlanLibrary, toolCatalog, validatePlan, parseCondition } from '../plans.js';
 import { pickaxePlan } from '../bench/role-scenarios.js';
 import { buildCodexArgs } from '../codex-backend.js';
 import { buildClaudeArgs } from '../claude-backend.js';
@@ -44,10 +44,11 @@ async function fixture(run) {
   try { await run({ dir, sessions }); }
   finally { for (const session of sessions) session.close(); await rm(dir, { recursive: true, force: true }); }
 }
-async function request({ body = new FakeBody(), planner, actor = backend(async () => { throw new Error('unexpected actor call'); }), dir, sessions, text = goal, persona }) {
+async function request({ body = new FakeBody(), planner, actor = backend(async () => { throw new Error('unexpected actor call'); }), dir, sessions, text = goal, persona,
+  chat = backend(async () => ({ text: JSON.stringify({ reply: 'Working on the next step.' }) })) }) {
   const events = [];
   const session = new BrainSession({ body, backend: actor, plannerBackend: planner, bot: 'Kirill',
-    chatBackend: backend(async () => ({ text: JSON.stringify({ reply: 'Working on the next step.' }) })),
+    chatBackend: chat,
     plansFile: join(dir, 'plans.jsonl'), persona, log: { write: (type, data) => events.push({ type, ...data }) } });
   sessions.push(session); await session.start();
   body.emit('event', { type: 'chat', from: 'Alex', text });
@@ -68,7 +69,10 @@ test('goal chat calls planner, retries invalid JSON once, executes through fake 
   assert.equal(session.plans.status(), 'план: выполнен');
   assert.deepEqual(body.calls.filter(c => ['obtain', 'craft'].includes(c.tool)).map(c => [c.tool, c.args.item]),
     [['obtain', 'stone_pickaxe'], ['obtain', 'iron_ingot'], ['craft', 'iron_pickaxe']]);
-  assert.equal(body.calls.filter(c => c.tool === 'say').length, 0);
+  // The only speech is the completion line: the planner's goal, so the player knows the job is done.
+  const said = body.calls.filter(c => c.tool === 'say');
+  assert.equal(said.length, 1);
+  assert.match(said[0].args.text, /^✔ /u);
   assert.deepEqual(inventoryCounts('main: 3 iron_ingot\n3 iron_ingot slots [0]\niron_pickaxe slots [1]\nsummary: building blocks 10'), { iron_ingot: 3, iron_pickaxe: 1 });
   assert.equal(checkDone('pos 0 64 0', { position: [0, 64, 0] }).pass, true);
   assert.throws(() => validatePlan({ ...pickaxePlan, steps: [{ id: 1, do: 'obtain iron_ingot 3', done: 'looks good' }] }));
@@ -144,11 +148,16 @@ test('only planner backend args enable live web search, with the same role restr
 test('failed steps replan with reasons, critic rejects unearned success, third failure tells player', async () => fixture(async f => {
   const prompts = [], body = new FakeBody(); body.fail = true;
   const planner = backend(async text => { prompts.push(text); return { text: JSON.stringify(pickaxePlan) }; });
-  const { events } = await request({ ...f, body, planner });
+  // The chat model says the final failure in character; tool reports never reach the player raw.
+  const chats = [], line = 'Лава в туннеле, не пройти. Дай ведро воды.';
+  const chat = backend(async text => { chats.push(text); return { text: line }; });
+  const { events } = await request({ ...f, body, planner, chat });
   assert.equal(prompts.length, 3);
   assert.match(prompts[1], /Previous failures:.*lava blocks the tunnel/u);
   assert.equal(events.filter(e => e.type === 'plan_failure').length, 3);
-  assert.ok(body.calls.some(c => c.tool === 'say' && /Не получилось:.*lava/u.test(c.args.text)));
+  assert.match(chats.at(-1), /You gave up on the order.*lava blocks the tunnel/u);
+  assert.ok(body.calls.some(c => c.tool === 'say' && c.args.text === line), 'the player hears the in-character line');
+  assert.ok(!body.calls.some(c => c.tool === 'say' && /Не получилось:/u.test(c.args.text)), 'no raw failure text');
   assert.equal((await new PlanLibrary(join(f.dir, 'plans.jsonl')).matches(goal)).length, 0);
   const recovering = new FakeBody(); recovering.noGain = true; const repairPrompts = [];
   await request({ ...f, body: recovering, planner: backend(async text => { repairPrompts.push(text); return { text: JSON.stringify(pickaxePlan) }; }) });
@@ -178,7 +187,7 @@ test('tool steps never call actor; free text restarts actor per step with tiny c
   const actor = backend(async text => {
     actorCalls++;
     assert.match(text, /Goal:.*железная кирка/u); assert.match(text, /State:.*inventory:/u); assert.match(text, /Scene: forest/u);
-    assert.match(text, /план: шаг [12]\/2/u); assert.ok(text.length < 1100);
+    assert.match(text, /план: шаг [12]\/2/u); assert.ok(text.length < 2000); // Includes six speaker-labelled conversation lines.
     assert.ok(resets >= actorCalls);
     // Status must bypass the occupied actor queue.
     body.emit('event', { type: 'chat', from: 'Alex', text: 'план?' });
@@ -264,15 +273,28 @@ test('hint classifier acknowledges once, reviews once, and keep never cancels th
   r.finish(); await until(() => !r.session.busy);
 }));
 
-test('different revised step stops the running task once and executes the revised plan', async () => fixture(async f => {
+test('a hint cannot replace the original objective with an easier inventory condition', async () => fixture(async f => {
   const r = await runningPlan(f, { review: oneStep('find iron', 'coal') });
   r.chat('сундук с углём слева');
-  await until(() => !r.session.busy);
+  await r.session.plans.interactions;
+  assert.equal(r.session.plans.running, true);
+  assert.equal(r.events.filter(e => e.type === 'plan_revision_rejected').length, 1);
+  r.finish(); await until(() => !r.session.busy);
   assert.equal(r.prompts.length, 2);
-  assert.equal(r.body.calls.filter(c => c.tool === 'stop').length, 1);
-  assert.equal(r.body.inventory.coal, 1);
-  assert.equal(r.session.plans.plan.steps[0].do, 'obtain coal 1');
+  assert.equal(r.body.calls.filter(c => c.tool === 'stop').length, 0);
+  assert.equal(r.body.inventory.coal, undefined);
+  assert.equal(r.session.plans.plan.steps[0].do, 'obtain iron_ingot 1');
   assert.equal(r.events.filter(e => e.type === 'plan_failure').length, 0);
+}));
+
+test('a blocked hint review stops work and reports the blocker without saving success', async () => fixture(async f => {
+  const r = await runningPlan(f, { review: { status: 'blocked', reason: 'Source was removed; select another chest.' } });
+  r.chat('the source chest was removed');
+  await until(() => !r.session.busy);
+  assert.equal(r.body.calls.filter(c => c.tool === 'stop').length, 1);
+  assert.ok(r.events.some(e => e.type === 'plan_blocked'));
+  assert.equal(r.events.filter(e => e.type === 'plan_step' && e.pass).length, 0);
+  assert.equal(r.session.plans.label, 'blocked');
 }));
 
 test('revising later steps preserves the running step and remembers hints on failure replan', async () => fixture(async f => {
@@ -319,7 +341,7 @@ test('new player goal replans immediately, then resumes the unchanged long-term 
 test('before player chat an English autoplay goal still uses persona default ru for speech', async () => fixture(async f => {
   const { persona, personaPrompt } = await import('../thinking.js');
   assert.equal(persona.defaultLanguage, 'ru');
-  assert.match(personaPrompt, /default to Russian/u);
+  assert.match(personaPrompt, /Russian before they\s+speak/u);
   const r = await runningPlan(f, { autoplay: true });
   assert.match(r.session.languageRule(), /Before any player message, use ru/u);
   assert.equal(r.session.lastPlayerMessage, undefined);
@@ -377,3 +399,59 @@ test('debug trace: full model I/O, reasoning and in-turn tools reach the session
   assert.equal(body.notes.filter(n => n.source === 'step').length, pickaxePlan.steps.length);
   assert.equal(body.notes.filter(n => n.source === 'critic' && /verified/u.test(n.text)).length, pickaxePlan.steps.length);
 }));
+
+test('killed done counts attack reports during the plan, and the actor sees only high-level tools', async () => {
+  const { actorTools, ACTOR_TOOLS, PlanRunner } = await import('../plans.js');
+  assert.deepEqual(parseCondition('killed villager >= 2'), { type: 'killed', creature: 'villager', count: 2 });
+  assert.equal(checkDone('killed minecraft:villager >= 1', { inventory: {}, kills: {} }).pass, false);
+  const runner = new PlanRunner({ call: async () => ({}), planner: async () => ({}), actor: async () => ({}) });
+  runner.recordKill('villager');
+  assert.deepEqual(checkDone('killed villager >= 1', runner.state), { pass: true, progress: '1/1 killed' });
+  const names = actorTools(toolCatalog).map(t => t.name);
+  assert.ok(names.includes('obtain') && names.includes('pickup') && names.includes('map'));
+  for (const hidden of ['mine_ore', 'explore_caves', 'descend', 'tunnel', 'scene'])
+    assert.ok(!names.includes(hidden), hidden);
+  assert.ok(names.includes('give'));
+  for (const needed of ['inspect', 'look-in', 'memory', 'transfer', 'withdraw', 'deposit'])
+    assert.ok(names.includes(needed), `container workflow needs ${needed}`);
+  assert.equal(new Set(ACTOR_TOOLS).size, ACTOR_TOOLS.length, 'no duplicate tools');
+  assert.ok(ACTOR_TOOLS.every(name => names.includes(name)), 'all advertised tools exist in the body registry');
+});
+
+test('an action step with done "ok" passes on its success report and fails on a failed one', async () => {
+  const { PlanRunner } = await import('../plans.js');
+  const calls = [];
+  const runner = new PlanRunner({ call: async (tool, args) => {
+    calls.push(tool);
+    if (tool === 'inv') return { result: 'inventory r1: 10 iron_ingot slots [0]' };
+    if (tool === 'status') return { result: 'pos 0, 64, 0' };
+    if (tool === 'deposit') return { result: args.filter === 'iron_ingot' ? 'deposited 10 iron_ingot into chest at 1 64 0' : 'failed: no room' };
+    return { result: 'ok' };
+  }, planner: async () => ({}), actor: async () => ({ text: '' }), tools: toolCatalog });
+  runner.controller = new AbortController(); runner.isActive = () => true;
+  assert.deepEqual(parseCondition('ok'), { type: 'ok' });
+  await runner.executeStep({ id: 1, do: 'deposit {"ref":"h1","filter":"iron_ingot"}', done: 'ok' }, 'store iron', '', 5_000, new AbortController());
+  assert.ok(calls.includes('deposit'));
+  await assert.rejects(runner.executeStep({ id: 2, do: 'deposit {"ref":"h1","filter":"coal"}', done: 'ok' }, 'store coal', '', 5_000, new AbortController()), /no room/u);
+});
+
+test('replanning after two failed plans goes to the strong planner when one is configured', async () => {
+  const { PlanRunner, ESCALATE_AFTER } = await import('../plans.js');
+  const used = [];
+  const plan = JSON.stringify({ goal: 'g', budget_min: 5, steps: [{ id: 1, do: 'look', done: 'ok' }] });
+  const runner = new PlanRunner({ call: async () => ({ result: 'ok' }), actor: async () => ({ text: '' }), tools: toolCatalog,
+    planner: async () => { used.push('normal'); return { text: plan }; },
+    strongPlanner: async () => { used.push('strong'); return { text: plan }; } });
+  runner.controller = new AbortController(); runner.isActive = () => true; runner.hints = []; runner.stateLine = '';
+  runner.library = { matches: async () => [] };
+  await runner.makePlan('g', [], '');
+  await runner.makePlan('g', ['one'], '');
+  await runner.makePlan('g', Array(ESCALATE_AFTER).fill('failed'), '');
+  assert.deepEqual(used, ['normal', 'normal', 'strong']);
+  const plain = new PlanRunner({ call: async () => ({ result: 'ok' }), actor: async () => ({ text: '' }), tools: toolCatalog,
+    planner: async () => { used.push('only'); return { text: plan }; } });
+  plain.controller = new AbortController(); plain.isActive = () => true; plain.hints = []; plain.stateLine = '';
+  plain.library = { matches: async () => [] };
+  await plain.makePlan('g', ['a', 'b'], '');
+  assert.equal(used.at(-1), 'only', 'without a strong planner the usual one keeps planning');
+});

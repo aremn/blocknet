@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 import { PassThrough } from 'node:stream';
 import { createInterface } from 'node:readline';
 import { addressed, routeRule } from '../rules.js';
-import { buildClaudeArgs } from '../brain.js';
+import { buildClaudeArgs, sendRetrying } from '../brain.js';
 import { PROTOCOL_VERSION, serveMcp, feedbackTool } from '../mcp-server.js';
+import { skillTools } from '../skills.js';
 
 test('rules route Russian and English short orders without the model', () => {
   for (const [tool, orders] of Object.entries({ stop: ['stop', 'СТОП!'],
@@ -22,7 +23,7 @@ test('rules route Russian and English short orders without the model', () => {
   assert.equal(addressed('Кир, осмотрись', 'Kirill', ['Кир']), 'осмотрись');
   assert.equal(addressed('Kirillson stop', 'Kirill'), null);
   assert.equal(addressed('hello Kirill', 'Kirill'), null);
-  assert.equal(routeRule('stop and mine coal', 'Alex'), null);
+  assert.equal(routeRule('stop and mine coal', 'Alex').nextOrder, 'mine coal');
 });
 
 test('Claude arguments disable built-ins, restrict MCP and stream a persistent Haiku session', () => {
@@ -67,7 +68,7 @@ test('MCP JSON-lines initialize and tools/list use the body registry; calls awai
   input.write(`${hello.slice(15)}\n${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`);
   assert.equal((await next()).result.protocolVersion, PROTOCOL_VERSION);
   send({ id: 2, method: 'tools/list' });
-  assert.deepEqual((await next()).result.tools, [{ name: 'goto', description: 'Walk', inputSchema: { type: 'object' } }, feedbackTool]);
+  assert.deepEqual((await next()).result.tools, [{ name: 'goto', description: 'Walk', inputSchema: { type: 'object' } }, feedbackTool, ...skillTools]);
   send({ id: 3, method: 'tools/call', params: { name: 'goto', arguments: { x: 1, y: 2, z: 3 } } });
   await new Promise(resolve => setImmediate(resolve));
   send({ id: 4, method: 'ping' });
@@ -108,4 +109,24 @@ test('MCP caps each model turn at eight calls, including concurrent calls, and r
     assert.equal((await next()).result.content[0].text, 'ok');
     assert.equal(actions, 9);
   } finally { input.end(); output.end(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('a busy model is asked again; request errors and cancelled turns are not', async () => {
+  let calls = 0, closed = 0;
+  const flaky = { close() { closed++; }, send: async () => {
+    if (++calls < 3) throw new Error('Selected model is at capacity. Please try a different model.');
+    return { text: 'ok' };
+  } };
+  const retries = [];
+  assert.deepEqual(await sendRetrying(flaky, 'plan', () => true, attempt => retries.push(attempt), [1, 1]), { text: 'ok' });
+  assert.deepEqual(retries, [1, 2]);
+  assert.equal(closed, 2, 'a fresh session for each retry');
+  let bad = 0;
+  const invalid = { close() {}, send: async () => { bad++; throw new Error("Unsupported value: 'minimal'"); } };
+  await assert.rejects(sendRetrying(invalid, 'x', () => true, () => {}, [1, 1]), /Unsupported/u);
+  assert.equal(bad, 1, 'a request error fails at once');
+  let busy = 0;
+  const overloaded = { close() {}, send: async () => { busy++; throw new Error('529 overloaded'); } };
+  await assert.rejects(sendRetrying(overloaded, 'x', () => busy < 2, () => {}, [1, 1, 1]), /overloaded/u);
+  assert.equal(busy, 2, 'a cancelled order stops retrying');
 });

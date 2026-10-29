@@ -48,7 +48,7 @@ export class FakeBackend {
         if (registry.tools.map(t => t.name).sort().join(',') !== 'knowledge,wiki') throw new Error('Planner registry must expose only knowledge and wiki');
         const denied = await this.process.request('tools/call', { name: 'obtain', arguments: { item: 'iron_ingot', count: 3 } }).catch(e => e);
         if (!(denied instanceof Error)) throw new Error('Planner was allowed to act');
-      } else if (!registry.tools.some(t => t.name === 'gather') || !registry.tools.some(t => t.name === 'tool_feedback')) throw new Error('MCP registry missing');
+      } else if (!registry.tools.some(t => t.name === 'obtain') || registry.tools.some(t => t.name === 'mine_ore') || !registry.tools.some(t => t.name === 'tool_feedback')) throw new Error('MCP registry missing');
     }
     this.sends++;
     const id = this.options.scenario.id;

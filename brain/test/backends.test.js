@@ -140,9 +140,9 @@ test('preamble streams from a fake child before the final result; absent text st
 test('compact state emits inventory/held and low health only when meaningful state changes', () => {
   const state = new CompactState();
   const first = state.update('body r1: health 20/20, food 20, pos 1, 2, 3\ninventory r1: selected 0\nmain: wooden_pickaxe\nwooden_pickaxe slots [0]\n3 cobblestone slots [1]\nsummary: free slots 34\ntask r1: idle');
-  assert.equal(first, '\nState: inventory: 1 wooden_pickaxe, 3 cobblestone; held: wooden_pickaxe');
-  assert.equal(state.update('body r2: health 19/20, pos 2, 2, 3'), '');
-  assert.match(state.update('body r3: health 3/20'), /health low/);
+  assert.equal(first, '\nState: inventory: 1 wooden_pickaxe, 3 cobblestone; held: wooden_pickaxe; health 20/20, food 20/20');
+  assert.equal(state.update('body r2: health 20/20, food 20, pos 2, 2, 3'), '', 'moving alone is not news');
+  assert.match(state.update('body r3: health 3/20, food 9, air 40/300, in_water'), /health 3\/20 \(low\), food 9\/20, air 40\/300, in water/u);
   assert.equal(state.update('no changes'), '');
   state.reset();
   assert.match(state.update('no changes'), /inventory:/);
