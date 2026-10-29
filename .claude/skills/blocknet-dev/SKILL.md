@@ -503,3 +503,26 @@ English to code, commands and commit messages.
   dropped when the player walks off. Humans only: no chores, follow or look without one, so other
   GameTests are unaffected. `TestArena.human` makes a real ServerPlayer; `IdleLifeGameTests`.
 - `BotPlayer` keeps the sneak key across Automatone's idle input reset, as it keeps zza/xxa/jump.
+
+## Long live run fixes: idle cost, brain busy, crouch, look (2026-10-29 evening)
+
+- Idle must stay cheap: `VisionSensor.objects()` walks the whole observed map (cave-mouth pass), so a
+  per-tick caller made idle ticks cost 40-180 ms. Tick loops use `objects(category)` (no cave pass
+  unless the category is dark); `IdleLife` searches for a chore at most every 40 ticks.
+- Idle pickup takes only items the bag has room for (`getFreeSlot`/`getSlotWithRemainingSpace`); an
+  item walked to and still lying there is passed over for 30 s (a full bag looped every tick).
+- `brain.working {bot, working}` (JSON-RPC notification): the brain sends true when it starts
+  processing a message (planning, plan steps, actor turns) and false when its queue is empty. While
+  working (10 min safety expiry) idle life starts no chore and picks nothing up; it still keeps company.
+- `attendedAt` starts at `Long.MIN_VALUE / 2`: `now - Long.MIN_VALUE` overflowed, so a bot nobody had spoken
+  to counted as listening forever (no glances, no pickups).
+- Walking alongside aims at the ground under "beside" (a flying player) and re-aims at most every
+  10 ticks; it used to cancel and replan the route every tick.
+- Chores gather a bounded amount (wood to 16, coal to 8): a distant forest can be one huge tree object.
+  Gather status says "gathering logs from t480" for a whole object instead of `Integer.MAX_VALUE`.
+- Remembered containers beyond 96 blocks (`ContainerMemory.SOURCE_RANGE`) are no source for obtain or
+  craft plans: a base 500 blocks away sent the bot walking into unloaded chunks.
+- Brain: a prose plan step the actor could not do must reply `failed: <line>` (`STEP_REPORT`); the
+  line is said without the prefix and the step fails (polite refusals used to pass as done). After a
+  blocked plan, a player message that answers the question (`answerBlocked`, chat classifier) resumes
+  the goal with the answer for 10 min; other messages go the usual way. `drop` is an actor tool.

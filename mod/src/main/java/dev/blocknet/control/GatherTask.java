@@ -99,7 +99,7 @@ final class GatherTask {
     }
 
     private String name() { return logs ? "logs" : BuiltInRegistries.ITEM.getKey(item).getPath(); }
-    String describe() { return "gathering " + count + " " + name(); }
+    String describe() { return wholeObject ? "gathering " + name() + " from " + object.ref() : "gathering " + count + " " + name(); }
 
     boolean checkTimeout() {
         if (++ticks <= 20 * 60 * 10) return true;

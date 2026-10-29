@@ -133,10 +133,19 @@ export class Body extends EventEmitter {
 
   /** Fire-and-forget debug note for the bot's in-game trace and overlay; never throws, never waits. */
   note(bot, source, text) {
+    this.notify('debug.note', { bot, source, text: String(text ?? '') });
+  }
+
+  /** Fire-and-forget: whether the brain is working on an order; the body's idle life holds its own chores meanwhile. */
+  working(bot, working) {
+    this.notify('brain.working', { bot, working: !!working });
+  }
+
+  notify(method, params) {
     if (!this.hello || !this.socket || this.socket.destroyed) return;
     try {
-      this.socket.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'debug.note', params: { bot, source, text: String(text ?? '') } })}\n`);
-    } catch { /* A lost note must never disturb the brain. */ }
+      this.socket.write(`${JSON.stringify({ jsonrpc: '2.0', method, params })}\n`);
+    } catch { /* A lost notification must never disturb the brain. */ }
   }
 
   async call(bot, tool, args = {}) {

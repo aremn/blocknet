@@ -107,13 +107,19 @@ public final class ContainerMemory extends SavedData {
         }
     }
 
+    /** Remembered containers farther than this are not a source for a job here (as locate's default radius). */
+    public static final double SOURCE_RANGE = 96;
+
     public List<RememberedSource> sources(BotPlayer bot) {
         // "Find/mine it" jobs gather from the world; chests are not a source then.
         if (bot.controller().worldOnly()) return List.of();
         String dimension = bot.level().dimension().location().toString();
         // Two terminals may show one network; without a network identity only the nearest one counts.
         boolean[] network = {false};
+        // A base 500 blocks away (often in unloaded chunks) is a trip to plan, not an ingredient.
         return entries.values().stream().filter(entry -> entry.location().dimension().equals(dimension))
+            .filter(entry -> bot.position().distanceToSqr(net.minecraft.world.phys.Vec3.atCenterOf(BlockPos.of(entry.location().position())))
+                <= SOURCE_RANGE * SOURCE_RANGE)
             .sorted(Comparator.comparingDouble(entry -> bot.position().distanceToSqr(
                 net.minecraft.world.phys.Vec3.atCenterOf(BlockPos.of(entry.location().position())))))
             .filter(entry -> !entry.network() || !network[0] && (network[0] = true))

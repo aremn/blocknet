@@ -239,6 +239,13 @@ public final class BridgeServer implements AutoCloseable {
                     if (!id.isJsonNull()) reply(id, object("noted", String.valueOf(noted != null)));
                     return;
                 }
+                if (method.equals("brain.working")) {
+                    // While the brain plans or acts on an order, idle life starts no chores of its own.
+                    BotPlayer working = BotManager.get(params.get("bot").getAsString());
+                    if (working != null) working.controller().idleLife().brainWorking(params.get("working").getAsBoolean());
+                    if (!id.isJsonNull()) reply(id, object("working", String.valueOf(working != null)));
+                    return;
+                }
                 if (method.equals("debug.memory")) {
                     BotPlayer viewed = BotManager.get(params.get("bot").getAsString());
                     if (viewed == null) throw new IllegalArgumentException("Bot is not spawned");

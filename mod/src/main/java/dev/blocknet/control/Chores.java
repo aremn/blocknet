@@ -94,8 +94,10 @@ final class Chores {
         if (!ready("wood") || wood >= 16) return false;
         ObjectGraph.ObjectView tree = seen("tree", null, player);
         if (tree == null) return false;
-        return begin("wood", "low on wood (" + wood + " logs); chopping the " + tree.kind() + " tree " + tree.ref() + " nearby",
-            report -> controller.gather(tree.ref(), 0, report));
+        // Enough for the bag, not the whole object: a forest seen from afar can be one huge "tree".
+        int logs = 16 - wood;
+        return begin("wood", "low on wood (" + wood + " logs); chopping " + logs + " from the " + tree.kind() + " tree " + tree.ref() + " nearby",
+            report -> controller.gather(tree.ref(), logs, report));
     }
 
     /** Little coal, a pickaxe, and a coal seam in sight near the player: mine the seam. */
@@ -105,8 +107,9 @@ final class Chores {
         if (!ready("coal") || coal >= 8 || !pickaxe) return false;
         ObjectGraph.ObjectView seam = seen("ore", "coal", player);
         if (seam == null) return false;
-        return begin("coal", "low on coal (" + coal + "); mining the coal seam " + seam.ref() + " nearby",
-            report -> controller.gather(seam.ref(), 0, report));
+        int more = 8 - coal;
+        return begin("coal", "low on coal (" + coal + "); mining " + more + " from the coal seam " + seam.ref() + " nearby",
+            report -> controller.gather(seam.ref(), more, report));
     }
 
     /**
@@ -137,8 +140,8 @@ final class Chores {
     /** The nearest observed object of a category (and kind) within reach of both the bot and its player. */
     @Nullable
     private ObjectGraph.ObjectView seen(String category, @Nullable String kind, ServerPlayer player) {
-        return bot.vision().objects().stream()
-            .filter(o -> o.category().equals(category) && (kind == null || o.kind().equals(kind)))
+        return bot.vision().objects(category).stream()
+            .filter(o -> kind == null || o.kind().equals(kind))
             .filter(o -> o.center().distanceTo(player.position()) <= NEAR_PLAYER && o.center().distanceTo(bot.position()) <= NEAR_PLAYER + 8)
             .min(Comparator.comparingDouble(o -> o.center().distanceTo(bot.position())))
             .orElse(null);

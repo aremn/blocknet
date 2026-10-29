@@ -7,12 +7,18 @@ import dev.blocknet.pathing.api.pathing.goals.Goal;
 import dev.blocknet.pathing.api.pathing.goals.GoalBlock;
 import dev.blocknet.pathing.api.pathing.goals.GoalNear;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.UUID;
 import javax.annotation.Nullable;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.util.Mth;
+import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
@@ -39,12 +45,20 @@ public final class IdleLife {
     private static final double LOOK_RANGE = 16, MIRROR_RANGE = 8, COMPANION_RANGE = 48, PICKUP_RANGE = 8;
     /** A player looking at the same spot this long makes the bot look there too. */
     private static final int SHARED_LOOK_TICKS = 15, SHARED_LOOK_HOLD = 60;
+    /** Looking for a chore is not free (it reads the observed objects): at most this often. */
+    private static final int CHORE_SEARCH_EVERY = 40;
+    /** An item the bot walked to but did not get (bag full, out of reach) is left alone this long. */
+    private static final int PASS_OVER_ITEM = 20 * 30;
+    /** A brain that said it is working and then went quiet (crashed, disconnected) is ignored after this. */
+    private static final long BRAIN_WORKING_MS = 10 * 60 * 1000;
 
     private final BotPlayer bot;
     private final BotController controller;
     private final Chores chores;
     private ServerPlayer companion;
-    private long attendedAt = Long.MIN_VALUE, idleSince, stayUntil, nextWalk, nextGlance = 100, glanceUntil;
+    private long attendedAt = Long.MIN_VALUE / 2, idleSince, stayUntil, nextWalk, nextGlance = 100, glanceUntil, nextChoreSearch;
+    /** Set from the bridge thread while the brain plans or acts on an order (wall-clock, 0 = not working). */
+    private volatile long brainWorkingSince;
     private Vec3 glance;
     /** Where the player was a moment ago, and since when they have stood (roughly) still. */
     private Vec3 lastPlayerPos;
@@ -57,11 +71,13 @@ public final class IdleLife {
     private long sharedUntil;
     private int nodTicks;
     private boolean sneaking;
+    private final Map<UUID, Long> passedOver = new HashMap<>();
     private Walk walk = Walk.NONE;
     private enum Walk { NONE, TO_PLAYER, TO_ITEM }
     /** The running idle walk's goal and the spot it was made for (kept until the spot moves). */
     private Goal walkGoal;
     private BlockPos walkSpot;
+    private long walkAimedAt;
 
     IdleLife(BotPlayer bot, BotController controller) {
         this.bot = bot;
@@ -102,6 +118,19 @@ public final class IdleLife {
     }
 
     /**
+     * The brain says it is working on an order (planning, between steps, acting) or done. While it
+     * works the bot keeps company but starts no chore and picks nothing up: the next step is coming.
+     */
+    public void brainWorking(boolean working) {
+        brainWorkingSince = working ? System.currentTimeMillis() : 0;
+    }
+
+    private boolean brainWorking() {
+        long since = brainWorkingSince;
+        return since != 0 && System.currentTimeMillis() - since < BRAIN_WORKING_MS;
+    }
+
+    /**
      * Something else owns the body. Hands back the sneak key and stops an idle walk. A new order
      * (not a reflex) also ends a stop's "stay here".
      */
@@ -136,15 +165,19 @@ public final class IdleLife {
         }
         double distance = bot.distanceTo(focus);
         if (keepNear(focus, distance) || pickUp(now)) return;
-        if (focus == companion && !attending() && now >= stayUntil && now - idleSince >= CHORES_AFTER
-                && now - playerStillSince >= PLAYER_SETTLED && distance <= KEEP_NEAR && chores.start(focus)) {
-            sneak(false);
-            return;
+        if (focus == companion && !attending() && !brainWorking() && now >= stayUntil && now - idleSince >= CHORES_AFTER
+                && now - playerStillSince >= PLAYER_SETTLED && distance <= KEEP_NEAR && now >= nextChoreSearch) {
+            nextChoreSearch = now + CHORE_SEARCH_EVERY;
+            if (chores.start(focus)) {
+                sneak(false);
+                return;
+            }
         }
         look(focus, distance, now);
         // Crouching back at a crouching player is the oldest hello in the game.
         sneak(focus.isShiftKeyDown() && distance <= MIRROR_RANGE);
     }
+
 
     /** The player the bot is with: the last one who spoke while near, else the nearest human. */
     @Nullable
@@ -227,7 +260,7 @@ public final class IdleLife {
         long now = now();
         if (walk == Walk.TO_PLAYER) {
             if (distance <= COME_TO + 1.5 && !playerMoving) stopWalking(false);
-            else step(BlockPos.containing(beside(focus)), spot -> new GoalNear(spot, 1));
+            else step(ground(BlockPos.containing(beside(focus))), spot -> new GoalNear(spot, 1));
             return walk != Walk.NONE;
         }
         boolean walkedOff = playerMoving && distance > ALONGSIDE;
@@ -237,20 +270,43 @@ public final class IdleLife {
             focus.getGameProfile().getName(), playerMoving ? "walks off," : "is", distance));
         walk = Walk.TO_PLAYER;
         sneak(false);
-        step(BlockPos.containing(beside(focus)), spot -> new GoalNear(spot, 1));
+        step(ground(BlockPos.containing(beside(focus))), spot -> new GoalNear(spot, 1));
         return true;
     }
 
-    /** One tick of an idle walk; a spot that moved more than 3 blocks gets a new leg. */
+    /**
+     * One tick of an idle walk. A spot that moved more than 3 blocks gets a new leg, but not more
+     * often than every half second: a running or flying player would otherwise cancel and replan
+     * the route every tick.
+     */
     private void step(BlockPos spot, java.util.function.Function<BlockPos, Goal> goal) {
-        if (walkGoal == null || walkSpot.distSqr(spot) > 9) {
+        long now = now();
+        boolean canAim = now - walkAimedAt >= 10;
+        if (walkGoal == null || walkSpot.distSqr(spot) > 9 && canAim) {
             walkSpot = spot;
             walkGoal = goal.apply(spot);
+            walkAimedAt = now;
         }
         var state = controller.idleWalk(walkGoal);
-        // Beside a player who walked on: aim at where "beside" is now instead of standing at the old spot.
-        if (state == BotController.PathState.ARRIVED && walk == Walk.TO_PLAYER) walkGoal = null;
+        // Beside a player who walked on, or who has just stopped: aim at where "beside" is now
+        // instead of standing at the old spot.
+        if (state == BotController.PathState.ARRIVED && walk == Walk.TO_PLAYER) {
+            if (canAim && (walkSpot.distSqr(spot) > 2 || !playerMoving && !walkSpot.equals(spot))) walkGoal = null;
+        }
         else if (state != BotController.PathState.MOVING) stopWalking(state == BotController.PathState.FAILED);
+    }
+
+    /** The standable spot at or below {@code spot}: beside a flying or jumping player is in the air. */
+    private BlockPos ground(BlockPos spot) {
+        var level = bot.level();
+        for (BlockPos pos = spot.above(2); pos.getY() >= spot.getY() - 24 && pos.getY() > level.getMinBuildHeight(); pos = pos.below()) {
+            if (level.getBlockState(pos).getCollisionShape(level, pos).isEmpty()
+                    && level.getBlockState(pos.above()).getCollisionShape(level, pos.above()).isEmpty()
+                    && level.getBlockState(pos.below()).isFaceSturdy(level, pos.below(), Direction.UP)) {
+                return pos;
+            }
+        }
+        return spot;
     }
 
     /** Three blocks beside the player, on the bot's side of them, a step behind. */
@@ -266,10 +322,14 @@ public final class IdleLife {
         if (walk == Walk.TO_ITEM) {
             Radar.Contact item = nearestItem();
             if (item == null) stopWalking(false);
-            else step(BlockPos.containing(item.position()), GoalBlock::new);
+            else {
+                step(BlockPos.containing(item.position()), GoalBlock::new);
+                // Walked onto it (or could not) and it is still lying there: the bag did not take it.
+                if (walk == Walk.NONE) passedOver.put(item.uuid(), now + PASS_OVER_ITEM);
+            }
             return walk != Walk.NONE;
         }
-        if (attending() || now - idleSince < CHORES_AFTER || now < stayUntil || now < nextWalk) return false;
+        if (attending() || brainWorking() || now - idleSince < CHORES_AFTER || now < stayUntil || now < nextWalk) return false;
         Radar.Contact item = nearestItem();
         if (item == null) return false;
         controller.trace("idle", "nothing to do; picking up " + item.count() + " " + item.type() + " lying nearby");
@@ -278,15 +338,23 @@ public final class IdleLife {
         return true;
     }
 
+    /** The nearest item lying close by that the bag has room for and that the bot has not given up on. */
     @Nullable
     private Radar.Contact nearestItem() {
+        passedOver.values().removeIf(until -> until <= now());
         for (Radar.Contact contact : bot.radar().contacts()) {
             if (contact.live() && contact.category().equals("item") && contact.position().distanceTo(bot.position()) <= PICKUP_RANGE
-                    && Math.abs(contact.position().y - bot.getY()) <= 2) {
+                    && Math.abs(contact.position().y - bot.getY()) <= 2 && !passedOver.containsKey(contact.uuid())
+                    && bot.serverLevel().getEntity(contact.uuid()) instanceof ItemEntity entity && fits(entity.getItem())) {
                 return contact;
             }
         }
         return null;
+    }
+
+    private boolean fits(ItemStack stack) {
+        var inventory = bot.getInventory();
+        return inventory.getFreeSlot() >= 0 || inventory.getSlotWithRemainingSpace(stack) >= 0;
     }
 
     /** Ends an idle walk; after a failed route the next one waits a few seconds instead of every tick. */

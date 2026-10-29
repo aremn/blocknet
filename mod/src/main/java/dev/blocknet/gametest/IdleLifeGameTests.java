@@ -245,6 +245,43 @@ public final class IdleLifeGameTests {
         });
     }
 
+    /** While the brain works on an order (planning, between steps) no chore starts; afterwards it does. */
+    @GameTest(template = "vision_field", skyAccess = true, timeoutTicks = 2400)
+    public static void noChoresWhileTheBrainWorks(GameTestHelper h) {
+        BotPlayer bot = bot(h, "BnIdleWait");
+        tree(h, 31, 24);
+        ServerPlayer player = TestArena.human(h, "IdleOrderer", new Vec3(26.5, 1, 20.5));
+        bot.controller().idleLife().brainWorking(true);
+        h.runAfterDelay(5, () -> IdleLife.heard(player));
+        h.runAtTickTime(CHORES_FROM + 300, () -> {
+            h.assertTrue(logs(bot) == 0 && !said(bot, "chore"), "no chore while the brain was working");
+            bot.controller().idleLife().brainWorking(false);
+        });
+        h.succeedWhen(() -> {
+            h.assertTrue(h.getTick() > CHORES_FROM + 300, "after the brain finished");
+            h.assertTrue(logs(bot) >= 3, "chopped the tree once the brain was done: " + logs(bot) + " logs");
+            done("BnIdleWait", player);
+        });
+    }
+
+    /** With a full bag an item lying nearby is left alone (it used to walk onto it every tick); with room it is picked up. */
+    @GameTest(template = "vision_field", skyAccess = true, timeoutTicks = 1200)
+    public static void leavesItemsItsBagCannotTake(GameTestHelper h) {
+        BotPlayer bot = bot(h, "BnIdleFull");
+        for (int slot = 1; slot < 36; slot++) bot.getInventory().setItem(slot, new ItemStack(Items.WOODEN_SWORD));
+        ServerPlayer player = TestArena.human(h, "IdleWatcher", new Vec3(24.5, 1, 20.5));
+        h.spawnItem(Items.COBBLESTONE, 24.5F, 1.2F, 28.5F);
+        h.runAtTickTime(600, () -> {
+            h.assertTrue(moved(h, bot) < 1, "did not walk to an item the bag cannot take: moved " + moved(h, bot));
+            bot.getInventory().setItem(35, ItemStack.EMPTY);
+        });
+        h.succeedWhen(() -> {
+            h.assertTrue(h.getTick() > 600, "after a slot was freed");
+            h.assertTrue(bot.getInventory().countItem(Items.COBBLESTONE) == 1, "picked it up once there was room");
+            done("BnIdleFull", player);
+        });
+    }
+
     /** No human around (other bots are not companions): nothing happens by itself. */
     @GameTest(template = "vision_field", skyAccess = true, timeoutTicks = 1000)
     public static void noChoresWithoutAPlayer(GameTestHelper h) {

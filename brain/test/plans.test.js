@@ -437,6 +437,48 @@ test('an action step with done "ok" passes on its success report and fails on a 
   await assert.rejects(runner.executeStep({ id: 2, do: 'deposit {"ref":"h1","filter":"coal"}', done: 'ok' }, 'store coal', '', 5_000, new AbortController()), /no room/u);
 });
 
+test('a prose step the actor could not do fails with its reason, and the line is said without the prefix', async () => {
+  const { PlanRunner, STEP_REPORT } = await import('../plans.js');
+  const said = [], prompts = [];
+  const runner = new PlanRunner({ call: async tool => ({ result: tool === 'status' ? 'pos 0, 64, 0' : 'inventory r1: free slots 30' }),
+    planner: async () => ({}), tools: toolCatalog, say: async text => { said.push(text); },
+    actor: async text => { prompts.push(text); return { text: 'failed: Не вижу, с какой стороны первый экран.' }; } });
+  runner.controller = new AbortController(); runner.isActive = () => true;
+  await assert.rejects(runner.executeStep({ id: 1, do: 'Attach the second terminal above the first', done: 'ok' }, 'build', '', 5_000,
+    new AbortController()), /^Error: failed: Не вижу/u);
+  assert.ok(prompts[0].includes(STEP_REPORT));
+  assert.deepEqual(said, ['Не вижу, с какой стороны первый экран.']);
+});
+
+test('an answer to a blocked plan question resumes its goal; small talk is an ordinary message', async () => fixture(async f => {
+  const planned = [];
+  const planner = backend(async text => {
+    planned.push(text);
+    return { text: JSON.stringify(planned.length === 1 ? { status: 'blocked', reason: 'Дай ячейку хранения для дисковода.' }
+      : { status: 'blocked', reason: 'Всё ещё не вижу ячейку.' }) };
+  });
+  let actorCalls = 0;
+  const actor = backend(async () => { actorCalls++; return { text: 'Привет!' }; });
+  const chat = backend(async text => ({ text: JSON.stringify({ kind: /stopped on a question/u.test(text) && /message: "Ну, у тебя есть/u.test(text) ? 'answer' : 'other' }) }));
+  const r = await request({ ...f, planner, actor, chat, text: 'построй МЭ-систему с дисководом' });
+  assert.equal(r.session.plans.waitingOnPlayer()?.reason, 'Дай ячейку хранения для дисковода.');
+  r.body.emit('event', { type: 'chat', from: 'Alex', text: 'Ну, у тебя есть ячейки' });
+  await until(() => planned.length === 2 && !r.session.busy);
+  assert.match(planned[1], /построй МЭ-систему[\s\S]*You asked: Дай ячейку[\s\S]*answered: Ну, у тебя есть ячейки/u);
+  assert.ok(r.events.some(e => e.type === 'plan_resumed'));
+  r.body.emit('event', { type: 'chat', from: 'Alex', text: 'как дела' });
+  await until(() => actorCalls === 1 && !r.session.busy);
+  assert.equal(planned.length, 2, 'small talk does not replan the blocked goal');
+}));
+
+test('the body hears when the brain starts and stops working on an order', async () => fixture(async f => {
+  const body = new FakeBody(), working = [];
+  body.working = (bot, on) => working.push([bot, on]);
+  await request({ ...f, body, planner: backend(async () => ({ text: JSON.stringify(pickaxePlan) })) });
+  assert.deepEqual(working.at(0), ['Kirill', true]);
+  assert.deepEqual(working.at(-1), ['Kirill', false]);
+}));
+
 test('replanning after two failed plans goes to the strong planner when one is configured', async () => {
   const { PlanRunner, ESCALATE_AFTER } = await import('../plans.js');
   const used = [];

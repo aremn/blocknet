@@ -243,6 +243,18 @@ public final class VisionSensor {
                     object.knownMembers(), object.center(), object.nearest(), object.bounds(), object.lastSeenTick(), object.provenance()) : object;
             }).toList();
     }
+    /**
+     * Observed objects of one category. Cheap enough for a tick loop: only dark objects need the
+     * cave-mouth pass over the whole observed map, which {@link #objects()} always makes.
+     */
+    public List<ObjectGraph.ObjectView> objects(String category) {
+        if (category.equals("dark") || category.equals("cave_mouth")) {
+            return objects().stream().filter(object -> object.category().equals(category)).toList();
+        }
+        return bot.worldMemory().observed().graph(bot.level().dimension().location().toString())
+            .objects(bot.getEyePosition(), panorama ? lookSince : bot.serverLevel().getGameTime() - 4)
+            .stream().filter(object -> object.category().equals(category)).toList();
+    }
     public List<Frontiers.Frontier> frontiers() {
         return Frontiers.find(bot.worldMemory().observed(), bot.level().dimension().location().toString(), bot.position(), range());
     }

@@ -593,12 +593,43 @@ export class BrainSession {
       this.interruptActor(order, event.from).catch(e => this.diagnostic(e));
       return;
     }
+    const waiting = this.plans?.waitingOnPlayer();
+    if (waiting && !rule && !this.typedCommand(order)) {
+      this.quickReply(order, event.from);
+      this.answerBlocked(waiting, order, event.from).catch(e => this.diagnostic(e));
+      return;
+    }
     this.queue = this.queue.filter(m => !m.autoplay);
     const reflection = /^(?:итоги|lessons|summary)[.!?]*$/iu.test(order.trim());
     this.queue.push(reflection ? { reflection: true, from: event.from, text: order }
       : rule ? { rule, from: event.from } : { from: event.from, text: order });
     if (!reflection && !rule && !this.typedCommand(order)) this.quickReply(order, event.from);
     this.processQueue().catch(e => this.diagnostic(e));
+  }
+  /**
+   * The last plan stopped on a question for the player. A message that answers it (gives or points at
+   * what was missing, says go on) resumes that goal with the answer; anything else is an ordinary message.
+   * Before, "you have them" after "give me a storage cell" got a chat reply and the job was forgotten.
+   */
+  async answerBlocked(waiting, order, player) {
+    const generation = this.generation, version = this.playerMessageVersion;
+    const result = await this.sendChat(this.languageRule()
+      + 'Your last job stopped on a question for the player. Classify the player\'s new message. Do not call tools.\n'
+      + 'Return ONLY JSON: {"kind":"answer|other"}. answer = it answers your question, gives or points at what was missing, '
+      + 'or tells you to carry on with the job; other = anything else (a new request, small talk).\n'
+      + `Job: ${JSON.stringify(waiting.goal)}\nYour question: ${JSON.stringify(waiting.reason)}\n`
+      + `Player ${JSON.stringify(player)} message: ${JSON.stringify(order)}`, generation)
+      .catch(error => { if (generation === this.generation) this.diagnostic(error); return { text: '{"kind":"other"}' }; });
+    if (generation !== this.generation || version !== this.playerMessageVersion || this.closed) return;
+    let kind = 'other';
+    try { kind = JSON.parse(result.text).kind; } catch (error) { this.diagnostic(error); }
+    this.queue = this.queue.filter(m => !m.autoplay);
+    if (kind === 'answer') {
+      this.log?.write('plan_resumed', { goal: waiting.goal, answer: order });
+      this.queue.push({ from: player, needsPlan: true,
+        text: `${waiting.goal}\nYou asked: ${waiting.reason}\nPlayer ${player} answered: ${order}` });
+    } else this.queue.push({ from: player, text: order });
+    await this.processQueue();
   }
   async interruptActor(order, player, version = this.playerMessageVersion) {
     const generation = this.generation;
@@ -643,6 +674,7 @@ export class BrainSession {
   async processQueue() {
     if (this.busy || this.closed || this.awaitingRespawn) return;
     this.busy = true;
+    this.body.working?.(this.bot, true);
     try {
       while (this.queue.length && !this.closed && !this.awaitingRespawn) {
         const message = this.queue.shift();
@@ -740,7 +772,7 @@ export class BrainSession {
         }
         if (!message.reflection && this.goal && this.turns >= this.maxTurns) this.endAutoplay('max turns');
       }
-    } finally { this.busy = false; this.schedule(); }
+    } finally { this.busy = false; this.body.working?.(this.bot, false); this.schedule(); }
   }
   close() {
     this.closed = true; this.cancel(); clearTimeout(this.deadline); this.quickBackend?.close?.();

@@ -299,6 +299,8 @@ player use until consumption, chooses safe food by default, and refuses ordinary
   (JSON-RPC notification, no reply), so `/blocknet debug` shows them in game and they land in the
   body trace `logs/blocknet/<bot>-trace.log`. `node brain/timeline.js [session] [--config ...]`
   merges both into `brain/logs/timeline-<session>.txt`.
+- `brain.working {bot, working}` (notification) tells the body when the brain starts and finishes
+  work on its message queue, so the body's idle chores never start between plan steps.
 - `brain/logs/tool-feedback.jsonl`: the brain-only `tool_feedback {kind,tool?,note}` MCP tool
   records missing/confusing/redundant/bug feedback in one concrete sentence. Validated planner
   `tool_gaps: [{want, why}]` append to the same file with `source: planner` and to the session log;

@@ -210,6 +210,10 @@ export function needsPlan(text, tools = toolCatalog) {
 
 /** Failed plans for one goal before replanning moves to the stronger planner. */
 export const ESCALATE_AFTER = 2;
+/** A blocked plan's question stays open this long: an answer within it resumes the goal. */
+export const BLOCKED_FRESH_MS = 10 * 60_000;
+/** How the actor reports a prose step it could not complete, so the plan does not count it as done. */
+export const STEP_REPORT = 'If this step was not done, start your final reply with "failed:" and then say why in character.';
 
 export class PlanRunner {
   constructor({ call, planner, strongPlanner, actor, resetActor, tools = toolCatalog, library = new PlanLibrary(), say, giveUp,
@@ -305,6 +309,18 @@ export class PlanRunner {
       this.stepController?.abort(new Error('Plan revised'));
     }
   }
+  /** The plan stops on a question for the player; their answer may resume the goal (waitingOnPlayer). */
+  async stopBlocked(goal, reason, player) {
+    this.label = 'blocked'; this.step = null;
+    this.blocked = { goal, reason, player, at: Date.now() };
+    await this.say(reason, player);
+    this.log('plan_blocked', { goal, reason });
+    return false;
+  }
+  /** The goal the last plan stopped on with a question for the player, while that question is fresh. */
+  waitingOnPlayer() {
+    return this.label === 'blocked' && !this.running && this.blocked && Date.now() - this.blocked.at < BLOCKED_FRESH_MS ? this.blocked : null;
+  }
   status() {
     if (!this.plan || !this.step) return `план: ${this.label}`;
     return `план: шаг ${this.step.id}/${this.plan.steps.length} ${oneLine(this.step.do)} — ${checkDone(this.step.done, this.state).progress}`;
@@ -384,8 +400,10 @@ export class PlanRunner {
         this.assertActive();
         if (stepController.signal.aborted) throw new Error('Plan revised');
         if (Date.now() > stepDeadline) throw new Error('step budget exceeded');
-        const reply = (await this.actor(`${this.actorPrefix()}Goal: ${goal}\nStep: ${step.do}\nDone: ${step.done}\nState: ${oneLine(this.stateLine)}\nScene: ${oneLine(scene).slice(0, 600)}\n${this.status()}`)).text;
-        if (reply && !['<silent>', 'needs_plan'].includes(reply.trim())) await this.say(oneLine(reply).slice(0, 300));
+        const reply = (await this.actor(`${this.actorPrefix()}Goal: ${goal}\nStep: ${step.do}\nDone: ${step.done}\nState: ${oneLine(this.stateLine)}\nScene: ${oneLine(scene).slice(0, 600)}\n${this.status()}\n${STEP_REPORT}`)).text;
+        // "failed: <line>" fails the step (a polite "can't do it" used to pass as done); the line is still said.
+        const spoken = String(reply ?? '').replace(/^\s*failed:\s*/iu, '');
+        if (spoken && !['<silent>', 'needs_plan'].includes(spoken.trim())) await this.say(oneLine(spoken).slice(0, 300));
         return reply;
       }, budgetMs, stepController.signal);
       await this.waitInteractions();
@@ -417,22 +435,16 @@ export class PlanRunner {
       await this.snapshot();
       let scene = 'unknown'; // BrainSession reads one cheap scene alongside planner request preparation.
       this.plan = await this.makePlan(goal, failures, scene);
-      if (this.plan.status === 'blocked') { this.label = 'blocked'; await this.say(this.plan.reason, player); this.log('plan_blocked', { goal, reason: this.plan.reason }); return false; }
+      if (this.plan.status === 'blocked') return this.stopBlocked(goal, this.plan.reason, player);
       this.objective = this.plan.steps.at(-1).done;
       this.step = this.plan.steps[0]; ready();
       const deadline = started + this.plan.budget_min * 60_000;
       while (true) {
-        if (this.blockedReason) {
-          this.label = 'blocked'; this.step = null; await this.say(this.blockedReason, player);
-          this.log('plan_blocked', { goal, reason: this.blockedReason }); return false;
-        }
+        if (this.blockedReason) return this.stopBlocked(goal, this.blockedReason, player);
         this.log('plan', { plan: this.plan, failures });
         let reason;
         for (this.index = 0; this.index < this.plan.steps.length; this.index++) {
-          if (this.blockedReason) {
-            this.label = 'blocked'; this.step = null; await this.say(this.blockedReason, player);
-            this.log('plan_blocked', { goal, reason: this.blockedReason }); return false;
-          }
+          if (this.blockedReason) return this.stopBlocked(goal, this.blockedReason, player);
           this.step = this.plan.steps[this.index];
           await this.waitInteractions();
           const step = this.plan.steps[this.index];
@@ -486,7 +498,7 @@ export class PlanRunner {
         this.ready = new Promise(resolve => { ready = resolve; });
         await this.snapshot(); this.assertActive();
         this.plan = await this.makePlan(goal, failures, scene);
-        if (this.plan.status === 'blocked') { this.label = 'blocked'; this.step = null; await this.say(this.plan.reason, player); this.log('plan_blocked', { goal, reason: this.plan.reason }); return false; }
+        if (this.plan.status === 'blocked') return this.stopBlocked(goal, this.plan.reason, player);
         this.step = this.plan.steps[0]; ready();
       }
     } catch (error) {
