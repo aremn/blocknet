@@ -490,7 +490,7 @@ English to code, commands and commit messages.
 - Chat (`IdleLife::onChat`) and voice frames (`VoiceInput.onServerTick`, while still talking) make bots
   within 24 blocks attend to a human for 25 s: eased head turn (`idleLook`: a third of the angle per
   tick, capped at the player rate), one nod. No random fidgets (they read as a bot). Looks where its
-  player keeps looking for 15 ticks (block or creature, not at the bot itself). Mirrors a crouch.
+  player keeps looking for 15 ticks (block or creature, not at the bot itself). Answers a crouch hello.
 - Walks alongside: starts when its player walks off past 6 blocks or is past 10; goal is 3 blocks to
   the side the bot is on, re-aimed when that spot moves 3 blocks (`idleWalk` keeps one Goal instance;
   a different goal starts a new leg); stops within 4.5 once the player stands. `stopAndStay()`
@@ -518,6 +518,8 @@ English to code, commands and commit messages.
   to counted as listening forever (no glances, no pickups).
 - Walking alongside aims at the ground under "beside" (a flying player) and re-aims at most every
   10 ticks; it used to cancel and replan the route every tick.
+- Crouch hello: counts the player's short crouches (<= 15 ticks), answers 5+ ticks after they pause
+  with 1-5 crouches of its own rhythm; never mirrors. A long sneak is not a hello.
 - Chores gather a bounded amount (wood to 16, coal to 8): a distant forest can be one huge tree object.
   Gather status says "gathering logs from t480" for a whole object instead of `Integer.MAX_VALUE`.
 - Remembered containers beyond 96 blocks (`ContainerMemory.SOURCE_RANGE`) are no source for obtain or

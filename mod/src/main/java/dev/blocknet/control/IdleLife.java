@@ -71,6 +71,10 @@ public final class IdleLife {
     private long sharedUntil;
     private int nodTicks;
     private boolean sneaking;
+    /** The player's short crouches being counted, and the bot's own crouches still to make in reply. */
+    private boolean playerCrouched;
+    private long playerCrouchedAt, lastPlayerCrouch, nextCrouch;
+    private int playerCrouches, crouchesLeft;
     private final Map<UUID, Long> passedOver = new HashMap<>();
     private Walk walk = Walk.NONE;
     private enum Walk { NONE, TO_PLAYER, TO_ITEM }
@@ -137,6 +141,8 @@ public final class IdleLife {
     void busy(boolean order) {
         if (order) stayUntil = 0;
         idleSince = now();
+        crouchesLeft = 0;
+        playerCrouches = 0;
         sneak(false);
         if (walk != Walk.NONE) stopWalking(false);
     }
@@ -174,10 +180,38 @@ public final class IdleLife {
             }
         }
         look(focus, distance, now);
-        // Crouching back at a crouching player is the oldest hello in the game.
-        sneak(focus.isShiftKeyDown() && distance <= MIRROR_RANGE);
+        crouchBack(focus, distance, now);
     }
 
+    /**
+     * Crouching back at a crouching player is the oldest hello in the game, but a mirror looks like
+     * a puppet. The bot counts the player's short crouches and, once they pause, answers after a
+     * beat with a few of its own in its own rhythm. A long crouch (sneaking along a ledge) is not a hello.
+     */
+    private void crouchBack(ServerPlayer focus, double distance, long now) {
+        boolean down = focus.isShiftKeyDown() && distance <= MIRROR_RANGE;
+        if (down && !playerCrouched) playerCrouchedAt = now;
+        if (!down && playerCrouched && now - playerCrouchedAt <= 15) {
+            playerCrouches++;
+            lastPlayerCrouch = now;
+        }
+        playerCrouched = down;
+        var random = bot.getRandom();
+        if (crouchesLeft == 0 && playerCrouches > 0 && !down && now - lastPlayerCrouch >= 5) {
+            crouchesLeft = Mth.clamp(playerCrouches - 1 + random.nextInt(3), 1, 5);
+            playerCrouches = 0;
+            nextCrouch = now + 4 + random.nextInt(12);
+        }
+        if (crouchesLeft == 0 || now < nextCrouch) return;
+        if (sneaking) {
+            sneak(false);
+            crouchesLeft--;
+            nextCrouch = now + 2 + random.nextInt(8);
+        } else {
+            sneak(true);
+            nextCrouch = now + 2 + random.nextInt(5);
+        }
+    }
 
     /** The player the bot is with: the last one who spoke while near, else the nearest human. */
     @Nullable
@@ -270,6 +304,7 @@ public final class IdleLife {
             focus.getGameProfile().getName(), playerMoving ? "walks off," : "is", distance));
         walk = Walk.TO_PLAYER;
         sneak(false);
+        crouchesLeft = 0;
         step(ground(BlockPos.containing(beside(focus))), spot -> new GoalNear(spot, 1));
         return true;
     }

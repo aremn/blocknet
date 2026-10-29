@@ -245,6 +245,35 @@ public final class IdleLifeGameTests {
         });
     }
 
+    /**
+     * A crouch hello is answered after the player's, not mirrored: nothing while the player bobs,
+     * then a few crouches of the bot's own, and it ends standing.
+     */
+    @GameTest(template = "vision_field", skyAccess = true, timeoutTicks = 300)
+    public static void answersACrouchHelloAfterThePlayer(GameTestHelper h) {
+        BotPlayer bot = bot(h, "BnIdleCrouch");
+        ServerPlayer player = TestArena.human(h, "IdleCroucher", new Vec3(24.5, 1, 20.5));
+        for (int tick : new int[] {20, 28}) {
+            h.runAtTickTime(tick, () -> player.setShiftKeyDown(true));
+            h.runAtTickTime(tick + 4, () -> player.setShiftKeyDown(false));
+        }
+        boolean[] mirrored = {false}, last = {false};
+        int[] answers = {0};
+        h.onEachTick(() -> {
+            boolean down = bot.isShiftKeyDown();
+            if (h.getTick() >= 20 && h.getTick() <= 33) mirrored[0] |= down;
+            if (down && !last[0]) answers[0]++;
+            last[0] = down;
+        });
+        h.runAtTickTime(250, () -> {
+            h.assertTrue(!mirrored[0], "did not crouch along while the player was crouching");
+            h.assertTrue(answers[0] >= 1 && answers[0] <= 5, "answered with its own crouches: " + answers[0]);
+            h.assertTrue(!bot.isShiftKeyDown(), "stands again afterwards");
+            done("BnIdleCrouch", player);
+            h.succeed();
+        });
+    }
+
     /** While the brain works on an order (planning, between steps) no chore starts; afterwards it does. */
     @GameTest(template = "vision_field", skyAccess = true, timeoutTicks = 2400)
     public static void noChoresWhileTheBrainWorks(GameTestHelper h) {
