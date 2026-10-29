@@ -1,0 +1,47 @@
+name: GameTests
+
+on: [push, workflow_dispatch]
+
+jobs:
+  gametest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Brain tests
+        run: node --test brain/test/ brain/bench/test/
+
+      - name: GameTests
+        run: |
+          mkdir -p build
+          ./gradlew :mod:runGameTestServer --console=plain > build/gametest.log 2>&1 || true
+          grep -a -E "GAME TESTS COMPLETE|required tests (passed|failed)|failed at" build/gametest.log || true
+          # Gradle's exit code is not enough: the summary line decides.
+          grep -a -q -E "required tests passed" build/gametest.log
+          ! grep -a -q -E "failed at" build/gametest.log
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gametest-logs
+          path: |
+            build/gametest.log
+            mod/run/logs/
+          if-no-files-found: ignore
