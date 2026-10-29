@@ -546,7 +546,7 @@
   },
   {
     "name": "descend",
-    "description": "Dig a safe 1-wide, 2-high staircase down to y; optional cardinal direction, otherwise facing. Requires a pickaxe for stone.",
+    "description": "Dig a safe 1-wide, 2-high staircase down to y (a player's mine shaft); optional cardinal direction, otherwise facing. Use when asked to dig down or make a mine; to get a resource use obtain. Requires a pickaxe for stone.",
     "task": true,
     "params": {
       "type": "object",
@@ -566,7 +566,7 @@
   },
   {
     "name": "tunnel",
-    "description": "Dig a safe 1x2 tunnel at this level and report uncovered ores with refs. Requires a pickaxe for stone.",
+    "description": "Dig a safe 1x2 tunnel at this level and report uncovered ores with refs. Use when asked to dig a tunnel or branch mine; to get a resource use obtain. Requires a pickaxe for stone.",
     "task": true,
     "params": {
       "type": "object",

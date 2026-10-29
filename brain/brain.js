@@ -102,7 +102,7 @@ export class BrainSession {
     // Real backends get an independent, tool-free session of the actor model.
     this.chatBackend = chatBackend ?? (backend instanceof CodexBackend || backend instanceof ClaudeBackend
       ? createBackend(backend.backend, { ...backend.options, role: 'chat', mcpServer: undefined,
-        mcpConfig: '{"mcpServers":{}}', effort: 'minimal', timeoutMs: 15_000 }) : backend);
+        mcpConfig: '{"mcpServers":{}}', effort: 'low', timeoutMs: 15_000 }) : backend);
     if (plannerBackend) this.plans = new PlanRunner({
       call: (tool, args) => this.call(tool, args), tools: body.hello?.tools,
       library: new PlanLibrary(plansFile ?? resolve(brainDir, 'logs/plans.jsonl')),
@@ -786,7 +786,7 @@ export async function main() {
   const quickFile = resolve(logDir, `quick-prompt.${bot}.md`);
   await writeFile(quickFile, personaPrompt);
   const quickBackend = quickSpec && createBackend(quickSpec.backend, { ...quickSpec, cwd: rootDir, role: 'chat', prompt: personaPrompt,
-    promptFile: quickFile, mcpConfig: '{"mcpServers":{}}', maxTurns: 8, timeoutMs: 15_000 });
+    promptFile: quickFile, mcpConfig: '{"mcpServers":{}}', maxTurns: 3, timeoutMs: 15_000 });
   Promise.resolve(quickBackend?.prepare?.()).catch(() => {});
   hearing?.warm?.().then(ms => log.write('voice_warm', { ms }), error => log.write('voice_error', { stage: 'warm', error: error.message }));
   const session = new BrainSession({ body, backend, plannerBackend, strongPlannerBackend, hearing, speech, quickBackend, bot, aliases, goal, log, auditFile, lessonsFile,

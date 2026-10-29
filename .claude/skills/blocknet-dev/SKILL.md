@@ -434,7 +434,7 @@ English to code, commands and commit messages.
 - `gather {ref}` without count (count 0 through the command) takes that whole observed object and
   stops ("the whole t1 oak tree"); a pointed `p#` maps to the observed object around that block.
   `gather` is an actor tool again; prompt says "this tree" = gather ref, obtain = totals.
-- Brain: chat role effort `minimal`; CompactState always carries vitals (health/food/air/in water);
+- Brain: chat role effort `low` (gpt-6.1-sol rejects `minimal`); CompactState always carries vitals (health/food/air/in water);
   persona forbids service-speak and echoing the order. Voice phrase pause 450 ms.
 
 ## Live log fixes: craft cursor, beds, voice switch (2026-10-29 late morning)

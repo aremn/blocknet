@@ -55,8 +55,8 @@ public final class BridgeTools {
             choice.add("required", required); choices.add(choice);
         }
         TOOLS.get("goto").params().add("oneOf", choices);
-        add("descend", "Dig a safe 1-wide, 2-high staircase down to y; optional cardinal direction, otherwise facing. Requires a pickaxe for stone.", true, "y", "direction?");
-        add("tunnel", "Dig a safe 1x2 tunnel at this level and report uncovered ores with refs. Requires a pickaxe for stone.", true, "direction", "length");
+        add("descend", "Dig a safe 1-wide, 2-high staircase down to y (a player's mine shaft); optional cardinal direction, otherwise facing. Use when asked to dig down or make a mine; to get a resource use obtain. Requires a pickaxe for stone.", true, "y", "direction?");
+        add("tunnel", "Dig a safe 1x2 tunnel at this level and report uncovered ores with refs. Use when asked to dig a tunnel or branch mine; to get a resource use obtain. Requires a pickaxe for stone.", true, "direction", "length");
         add("mine", "Walk to and mine one block, then collect its drops; needs a suitable tool.", true, "x", "y", "z");
         add("gather", "Harvest ONE observed thing: gather {ref} with a t#/s#/o# ref (or the player's pointed p#) and no count chops that whole tree or object, then stops. With count, or with logs/wood, stone/cobblestone, coal, iron, dirt, sand or an item id, gathers that many more. Remembered refs are revisited and reobserved; requires the right tool.", true, "item?", "ref?", "target?", "count?");
         add("use", "Walk to and right-click an observed ref or exact block; sneak bypasses block interactions.", true, "x?", "y?", "z?", "sneak?", "ref?");

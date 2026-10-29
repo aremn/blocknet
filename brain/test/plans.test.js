@@ -409,8 +409,10 @@ test('killed done counts attack reports during the plan, and the actor sees only
   assert.deepEqual(checkDone('killed villager >= 1', runner.state), { pass: true, progress: '1/1 killed' });
   const names = actorTools(toolCatalog).map(t => t.name);
   assert.ok(names.includes('obtain') && names.includes('pickup') && names.includes('map'));
-  for (const hidden of ['mine_ore', 'explore_caves', 'descend', 'tunnel', 'scene'])
+  for (const hidden of ['mine_ore', 'explore_caves', 'scene'])
     assert.ok(!names.includes(hidden), hidden);
+  // ADR-0015: "dig down" / "make a mine" are player requests, not acquisition the model could confuse.
+  for (const dig of ['descend', 'tunnel']) assert.ok(names.includes(dig), dig);
   assert.ok(names.includes('give'));
   for (const needed of ['inspect', 'look-in', 'memory', 'transfer', 'withdraw', 'deposit'])
     assert.ok(names.includes(needed), `container workflow needs ${needed}`);
