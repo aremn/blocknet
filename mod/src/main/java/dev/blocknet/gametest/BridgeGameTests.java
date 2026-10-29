@@ -52,8 +52,16 @@ public final class BridgeGameTests {
                     + goal.getX() + ",\"y\":" + goal.getY() + ",\"z\":" + goal.getZ() + "}}}");
                 var accepted = read(input).getAsJsonObject("result");
                 String id = accepted.get("task_id").getAsString();
-                var message = read(input);
-                var event = message.getAsJsonObject("params");
+                JsonObject message;
+                JsonObject event;
+                // Each bridge receives lifecycle events for every bot, including parallel fixtures.
+                // Wait for this command's terminal event rather than assuming it is the next line.
+                do {
+                    message = read(input);
+                    event = message.getAsJsonObject("params");
+                } while (event == null || !event.has("task_id") || !event.get("task_id").getAsString().equals(id)
+                    || !event.has("bot") || !event.get("bot").getAsString().equals("BnBridge")
+                    || !event.has("type") || !event.get("type").getAsString().equals("task.finished"));
                 check(message.get("method").getAsString().equals("event")
                     && event.get("type").getAsString().equals("task.finished")
                     && event.get("task_id").getAsString().equals(id)

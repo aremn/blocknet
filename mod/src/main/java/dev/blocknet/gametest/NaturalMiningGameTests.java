@@ -127,7 +127,9 @@ public final class NaturalMiningGameTests {
             TestArena.see(h, bot, pos);
             var cell = bot.worldMemory().observed().cell(bot.level().dimension().location().toString(), h.absolutePos(pos));
             if (cell != null && cell.stateId() >= 0 && faceY[0] < 47) faceY[0]++;
-            var found = bot.vision().objects().stream().filter(o -> o.category().equals("cliff")).findFirst();
+            // Open sky shows neighbouring fixtures' walls as cliffs too; take the one we built.
+            var face = Vec3.atCenterOf(h.absolutePos(pos));
+            var found = bot.vision().objects().stream().filter(o -> o.category().equals("cliff") && o.bounds().contains(face)).findFirst();
             if (found.isEmpty()) return;
             var cliff = found.get();
             ref[0] = cliff.ref(); seenAt[0] = cliff.lastSeenTick();

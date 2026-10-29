@@ -193,7 +193,8 @@ public final class BodyStateGameTests {
         Blocknet.LOGGER.info("INV sample:\n{}", reports.getFirst());
         reports.clear();
         commands.performPrefixedCommand(source, "blocknet status BnStateCmd");
-        helper.assertTrue(reports.size() == 2 && reports.getFirst().startsWith("body r") && reports.getLast().startsWith("task r"), "status sections");
+        helper.assertTrue(reports.size() == 3 && reports.getFirst().startsWith("body r")
+            && reports.get(1).startsWith("task r") && reports.getLast().startsWith("players: "), "status sections including online players");
         Blocknet.LOGGER.info("STATUS sample:\n{}", String.join("\n", reports));
         reports.clear();
         commands.performPrefixedCommand(source, "blocknet changes BnStateCmd");

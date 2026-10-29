@@ -307,6 +307,33 @@ public final class CraftExecuteGameTests {
         });
     }
 
+    /**
+     * Live failure: a hotbar without building blocks, logs in the main inventory. While the logs
+     * were on the cursor, idle pathing moved dirt into the emptied slot and the craft failed with
+     * "inventory changed while returning cursor", three times in a row.
+     */
+    @GameTest(template = "arena", timeoutTicks = 200)
+    public static void craftsWhileIdlePathingWantsBuildingBlocksInHotbar(GameTestHelper helper) {
+        BotPlayer bot = bot(helper, "BnCraftCursor");
+        Item[] hotbar = {Items.STONE_PICKAXE, Items.GUNPOWDER, Items.EGG, Items.IRON_SWORD, Items.BONE,
+            Items.IRON_NUGGET, Items.BOW, Items.ARROW, Items.GOLDEN_LEGGINGS};
+        for (int slot = 0; slot < hotbar.length; slot++) {
+            bot.getInventory().setItem(slot, new ItemStack(hotbar[slot]));
+        }
+        bot.getInventory().setItem(9, stack(Items.OAK_LOG, 3));
+        bot.getInventory().setItem(10, stack(Items.DIRT, 20));
+        List<String> reports = new ArrayList<>();
+        bot.controller().craft(new ItemStack(Items.OAK_PLANKS), 4, reports::add);
+        helper.succeedWhen(() -> {
+            done(helper, bot, reports, "crafted 4 oak_planks");
+            var stock = inventory(bot);
+            helper.assertTrue(stock.get(new ItemKey(stack(Items.OAK_LOG, 1))) == 2L, "two logs left: " + stock);
+            helper.assertTrue(stock.get(new ItemKey(stack(Items.DIRT, 1))) == 20L, "dirt kept: " + stock);
+            helper.assertTrue(bot.inventoryMenu.getCarried().isEmpty(), "nothing left on the cursor");
+            BotManager.despawn("BnCraftCursor");
+        });
+    }
+
     @GameTest(template = "arena", timeoutTicks = 80)
     public static void stopReturnsUnconsumedInventoryGridAndReportsOnce(GameTestHelper helper) {
         BotPlayer bot = bot(helper, "BnCraftStop", stack(Items.OAK_LOG, 3));

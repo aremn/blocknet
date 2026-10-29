@@ -32,8 +32,15 @@ final class TestArena {
             helper.getLevel().getServer().getPlayerList().setViewDistance(4);
         }
         BotPlayer bot = BotManager.spawn(helper.getLevel().getServer(), name, helper.getLevel(), helper.absoluteVec(relativePos), 0.0F);
+        // Player data survives runs: a timed-out fixture can have starved while other tests finish.
+        // Every fresh fixture starts healthy; tests of danger/starvation set their own state below.
+        bot.setHealth(bot.getMaxHealth());
+        bot.getFoodData().setFoodLevel(20);
+        bot.getFoodData().setSaturation(5);
         // Test worlds reuse SavedData files; world observations belong to this fixture only.
         bot.getServer().overworld().getDataStorage().set("blocknet_world_" + bot.getUUID(), new WorldMemory());
+        // Fixtures were written for sight-only ores (hidden-ore pairs); full-perception tests opt in.
+        bot.fullPerception(false);
         return bot;
     }
 
