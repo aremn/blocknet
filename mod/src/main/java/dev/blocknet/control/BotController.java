@@ -272,10 +272,29 @@ public final class BotController {
             && excavating == null && exploring == null && bot.containerMenu == bot.inventoryMenu;
     }
 
-    void idleLook(Vec3 point) { lookAt(point); }
+    /**
+     * An unhurried look: a third of the remaining angle per tick (eases in and out instead of a
+     * constant sweep), still no faster than a player; pitchOffset tips the head (a nod).
+     */
+    void idleLook(Vec3 point, float pitchOffset) {
+        Vec3 eye = bot.getEyePosition();
+        double dx = point.x - eye.x, dy = point.y - eye.y, dz = point.z - eye.z;
+        float yaw = (float) (Mth.atan2(dz, dx) * Mth.RAD_TO_DEG) - 90.0F;
+        float pitch = (float) -(Mth.atan2(dy, Math.sqrt(dx * dx + dz * dz)) * Mth.RAD_TO_DEG) + pitchOffset;
+        float yawStep = Mth.wrapDegrees(yaw - bot.getYRot()), pitchStep = pitch - bot.getXRot();
+        turnTowards(bot.getYRot() + ease(yawStep), bot.getXRot() + ease(pitchStep));
+    }
 
-    /** One step of an idle walk; false once there or when no route is found. */
-    boolean idleWalk(Goal goal) { return pathTo(goal) == PathState.MOVING; }
+    private static float ease(float delta) {
+        float step = delta / 3.0F;
+        return Math.abs(delta) <= 1.0F ? delta : Math.copySign(Math.max(Math.abs(step), 1.0F), delta);
+    }
+
+    /** One step of an idle walk toward goal; a different goal than the running leg starts a new leg. */
+    PathState idleWalk(Goal goal) {
+        if (pathGoal != null && !pathGoal.equals(goal)) stopPathing();
+        return pathTo(goal);
+    }
 
     void idleHalt() { if (pathGoal != null) stopPathing(); }
 
@@ -1539,7 +1558,9 @@ public final class BotController {
         if (skill != null) {
             skill.tick();
         }
-        if (idle()) idleLife.tick(); else idleLife.busy(true);
+        if (idle()) idleLife.tick();
+        else if (idleLife.choring()) idleLife.superviseChore();
+        else idleLife.busy(true);
         if (target == null) {
             return;
         }
@@ -1643,7 +1664,7 @@ public final class BotController {
         }
     }
 
-    private enum PathState { MOVING, ARRIVED, FAILED }
+    enum PathState { MOVING, ARRIVED, FAILED }
 
     private void tickFollow() {
         Entity leader = followTarget;

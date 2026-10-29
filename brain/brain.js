@@ -454,6 +454,20 @@ export class BrainSession {
     this.log?.write('voice_changed', { voice: picked, from });
     await this.say(`Так лучше? Это голос ${voiceName(picked)}.`, from || undefined);
   }
+  /**
+   * The body took on a small job by itself while its player is busy nearby (IdleLife chores). Say
+   * so in one casual line, as a companion would ("пойду дерева нарублю"); never while a model turn
+   * is talking to the player, and at most once in 20 s.
+   */
+  announceChore(note) {
+    if (this.closed || this.busy || Date.now() - (this.lastChoreLine ?? 0) < 20_000) return;
+    this.lastChoreLine = Date.now();
+    const generation = this.generation, player = this.lastPlayerMessage?.from;
+    this.sendChat(this.languageRule() + `On your own, while the player is busy nearby, you are starting this: ${note}. `
+      + 'Tell them in ONE casual spoken line, at most 8 words, no item ids or refs. Reply with the line only, or <silent>.', generation)
+      .then(result => { const line = shortReply(result.text); if (line && generation === this.generation && !this.busy) return this.say(line, player); })
+      .catch(error => this.log?.write('voice_error', { stage: 'chore', error: error.message }));
+  }
   /** Says the same words aloud through the body's voice chat; text chat has already gone out. */
   speak(text) {
     this.speech.synthesize(text)
@@ -506,6 +520,7 @@ export class BrainSession {
         this.processQueue().catch(e => this.diagnostic(e)); this.schedule();
       }
       if (event.type === 'moment' && event.kind === 'emergency') this.shout(event.note);
+      if (event.type === 'moment' && event.kind === 'chore') this.announceChore(event.note);
       if (event.type === 'moment' && event.kind === 'danger_failed' && this.goal && !this.paused && !this.ended) {
         this.cancel(false);
         this.queue.push({ autoplay: true, from: 'Body', text: this.goal });

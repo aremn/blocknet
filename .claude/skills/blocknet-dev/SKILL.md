@@ -482,16 +482,24 @@ English to code, commands and commit messages.
   between batches (planned carry-over heat burns away); Automatone `InventoryBehavior` runs only
   while a path is active (it swapped a furnace out of the hand every tick).
 
-## Idle life (2026-10-29)
+## Idle life: a companion, not a statue (2026-10-29)
 
 - `control/IdleLife`, ticked by `BotController.tick()` only while `idle()` (no task, skill, container,
-  craft, gather, excavate, explore or open menu); reflexes and orders call `busy()`, which hands back
-  the fidget slot (only if no one chose another since) and the sneak key. No model involved.
+  craft, gather, excavate, explore or open menu); a running chore is supervised instead; reflexes and
+  orders call `busy()`. No model involved; players see only player inputs.
 - Chat (`IdleLife::onChat`) and voice frames (`VoiceInput.onServerTick`, while still talking) make bots
-  within 24 blocks attend to a human speaker for 25 s: face them (player turn rate), fidget (crouch
-  first, then a hotbar swap, then random swap/strafe/crouch). Beyond 10 blocks the bot walks back to
-  4 through the pathfinder (no task, no report); after `stopAndStay()` (`/blocknet stop` and the
-  bridge's stop) it stays 3 min unless an order starts. Idle 15 s: picks up radar items within 8.
-  Mirrors a crouching player within 8. Humans only: bots are never companions, so other tests are
-  unaffected. `TestArena.human` makes a real ServerPlayer for tests; `IdleLifeGameTests` covers it.
+  within 24 blocks attend to a human for 25 s: eased head turn (`idleLook`: a third of the angle per
+  tick, capped at the player rate), one nod. No random fidgets (they read as a bot). Looks where its
+  player keeps looking for 15 ticks (block or creature, not at the bot itself). Mirrors a crouch.
+- Walks alongside: starts when its player walks off past 6 blocks or is past 10; goal is 3 blocks to
+  the side the bot is on, re-aimed when that spot moves 3 blocks (`idleWalk` keeps one Goal instance;
+  a different goal starts a new leg); stops within 4.5 once the player stands. `stopAndStay()`
+  (`/blocknet stop`, the bridge's stop) holds it 3 min unless an order starts. Track resets when the
+  focus player changes (else a new speaker looks like a walk).
+- `control/Chores`: after 12 s idle, attention over, its player still for 5 s and within 10 blocks:
+  torch in the dark, torches from coal, chop a seen tree (wood < 16), mine a seen coal seam (coal < 8,
+  pickaxe), hunt an adult unnamed unleashed food animal (no food). Within 16 blocks of the player,
+  through ordinary controller actions; moment `chore` (the brain voices one line, 20 s cooldown);
+  dropped when the player walks off. Humans only: no chores, follow or look without one, so other
+  GameTests are unaffected. `TestArena.human` makes a real ServerPlayer; `IdleLifeGameTests`.
 - `BotPlayer` keeps the sneak key across Automatone's idle input reset, as it keeps zza/xxa/jump.

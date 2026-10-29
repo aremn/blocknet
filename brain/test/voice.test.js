@@ -171,3 +171,26 @@ test('the quick mouth answers first with a tiny prompt; the model preamble does 
   assert.deepEqual(said(slow.body), ['Ща, иду.'], 'a quick line later than the preamble stays silent');
   slow.session.close();
 });
+
+test('a chore the body took on is voiced once in a casual line, not while a turn is talking', async () => {
+  class Body extends EventEmitter {
+    hello = { bots: ['Kirill'], tools: [] }; calls = [];
+    async ready() { return this.hello; }
+    async call(bot, tool, args) { this.calls.push({ tool, args }); return { result: 'ok' }; }
+    close() {}
+  }
+  const body = new Body(), prompts = [];
+  const backend = { backend: 'fake', model: 'fake', maxTurns: 3, close() {}, send: async () => ({ text: '<silent>' }) };
+  const chatBackend = { backend: 'fake', model: 'fake', close() {}, send: async text => { prompts.push(text); return { text: 'Пойду дерева нарублю.' }; } };
+  const session = new BrainSession({ body, backend, chatBackend, bot: 'Kirill', pauseMs: 5 });
+  await session.start();
+  const chore = note => body.emit('event', { type: 'moment', bot: 'Kirill', kind: 'chore', note });
+  chore('low on wood (2 logs); chopping the oak tree t3 nearby');
+  await until(() => body.calls.some(c => c.tool === 'say'));
+  assert.equal(body.calls.find(c => c.tool === 'say').args.text, 'Пойду дерева нарублю.');
+  assert.match(prompts[0], /chopping the oak tree t3/u);
+  chore('no torches left; crafting 8 from coal and sticks');
+  await sleep(30);
+  assert.equal(prompts.length, 1, 'at most one chore line in 20 s');
+  session.close();
+});
