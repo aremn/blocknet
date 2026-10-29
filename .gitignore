@@ -62,3 +62,6 @@ brain/mcp.*.json
 
 # Third-party sources pulled locally for reading, not vendored
 _src/
+
+### Local agent tools ###
+.codex/

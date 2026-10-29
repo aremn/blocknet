@@ -11,4 +11,4 @@ Short version:
 - The body never names a mod (ADR-0005); the bot acts through player code paths; it must not see
   through walls (ADR-0002).
 - `pathing/` and `crafting/` are LGPL-3.0-or-later (keep file headers); everything else is MIT.
-- Do not commit or push; leave changes in the working tree for review.
+- Commit each meaningful, tested step on a feature branch (Conventional Commits, see the skill), so work can be restored; push only when the user asks.
