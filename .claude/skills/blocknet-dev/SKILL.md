@@ -527,6 +527,22 @@ English to code, commands and commit messages.
 - Remembered containers beyond 96 blocks (`ContainerMemory.SOURCE_RANGE`) are no source for obtain or
   craft plans: a base 500 blocks away sent the bot walking into unloaded chunks.
 - Brain: a prose plan step the actor could not do must reply `failed: <line>` (`STEP_REPORT`); the
-  line is said without the prefix and the step fails (polite refusals used to pass as done). After a
+  step fails (polite refusals used to pass as done) and the line is not said (see below). After a
   blocked plan, a player message that answers the question (`answerBlocked`, chat classifier) resumes
   the goal with the answer for 10 min; other messages go the usual way. `drop` is an actor tool.
+
+## Plan pace and quiet (2026-10-29 night)
+
+- Live ME-network build: 8 minutes for 9 blocks, 28 spoken lines. Body tools took 55 s, the planner
+  151 s (88 s at high effort with 5 wiki calls), actor steps 319 s (10-57 s each, 40-120k tokens,
+  re-looking before every place because each step starts a fresh actor).
+- A plan speaks only while making its first plan (`PlanRunner.speaking`, checked in `opened()`);
+  step preambles, step replies and replan preambles are silent. Player hears: opening line, blocked
+  questions, classifier replies, the `✔ goal` line or `giveUp`.
+- `task.finished` events carry `tool`; `PlanRunner.observe` keeps non-look results (16, ~1500 chars)
+  as "Done so far in this job" for actor steps and replans, so steps act on exact positions.
+- Planner prompt: placing a few blocks = one direct `place {item,x,y,z}` step each, coordinates counted
+  from the pointed/seen block; parts on a cable with a side face; wiki only for unknown things.
+- Defaults: planner `codex:gpt-6.1-sol:medium`, actor `codex:gpt-6.1-sol:low`.
+- `place` fails at once when the chosen face (or every side) has nothing to click on, and after 40
+  ticks standing beside the spot without a visible face (both used to wait 400 ticks).

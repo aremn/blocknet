@@ -426,7 +426,8 @@ export class BrainSession {
   }
   /**
    * One opening line per player message when the quick mouth is racing the model's preamble.
-   * The later of the two is a duplicate and stays silent; later preambles (replans) are said.
+   * The later of the two is a duplicate and stays silent. A plan speaks only while making its first
+   * plan: its steps and replans work quietly (a line per step was a running commentary).
    */
   opened(by) {
     const opening = this.opening;
@@ -435,6 +436,7 @@ export class BrainSession {
       if (!current || opening.state !== 'open') return false;
       opening.state = 'quick'; return true;
     }
+    if (this.plans?.running && !this.plans.speaking) return false;
     if (!current) return true;
     if (opening.state === 'open') { opening.state = 'preamble'; return true; }
     // The quick line already answered this message: drop the first preamble, keep later ones.
@@ -508,6 +510,7 @@ export class BrainSession {
       if (event.type === 'task.finished') {
         const kill = /\bkilled e\d+ ([\w:-]+)/u.exec(String(event.result));
         if (kill) this.plans?.recordKill(kill[1]);
+        this.plans?.observe(event);
         this.recentResults.push(String(event.result).slice(0, 300));
         this.recentResults = this.recentResults.slice(-3);
       }
@@ -801,8 +804,9 @@ export async function main() {
   const promptFile = resolve(logDir, `prompt.${bot}.md`);
   await writeFile(promptFile, prompt);
   const legacyBackend = option('backend', process.env.BLOCKNET_BACKEND);
-  const actorSpec = parseRole(option('actor', legacyBackend === 'claude' ? 'claude:haiku' : 'codex:gpt-6.1-sol:medium'));
-  const plannerSpec = parseRole(option('planner', 'codex:gpt-6.1-sol:high'));
+  // Low/medium: on 2026-10-29 a plan took 88 s at high and steps spent their time on round trips, not reasoning.
+  const actorSpec = parseRole(option('actor', legacyBackend === 'claude' ? 'claude:haiku' : 'codex:gpt-6.1-sol:low'));
+  const plannerSpec = parseRole(option('planner', 'codex:gpt-6.1-sol:medium'));
   const backend = createBackend(actorSpec.backend, {
     cwd: rootDir, mcpConfig, mcpServer, prompt, promptFile, maxTurns: 10,
     ...actorSpec,

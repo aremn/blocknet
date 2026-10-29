@@ -195,8 +195,9 @@ function reusable(plan) {
   });
 }
 
-export function plannerInput({ goal, state, scene, failures = [], hints = [], examples = [], tools = toolCatalog }) {
+export function plannerInput({ goal, state, scene, failures = [], hints = [], examples = [], tools = toolCatalog, reports = [] }) {
   return `Goal: ${goal}\nState: ${oneLine(state)}\nScene: ${oneLine(scene)}\nPrevious failures: ${JSON.stringify(failures)}\n`
+    + (reports.length ? `Done so far in this job (body reports, oldest first; positions are exact): ${reportLines(reports)}\n` : '')
     + `Player hints for this plan: ${JSON.stringify(hints)}\nMatching successful plans (examples): ${JSON.stringify(examples)}\nAvailable skills/tools (positional argument order; ? = optional):\n`
     + actorTools(tools).map(t => `${t.name} ${Object.keys((t.params ?? t.inputSchema).properties).map(k => k + ((t.params ?? t.inputSchema).required?.includes(k) ? '' : '?')).join(' ')}: ${oneLine(t.description)}`).join('\n');
 }
@@ -212,8 +213,20 @@ export function needsPlan(text, tools = toolCatalog) {
 export const ESCALATE_AFTER = 2;
 /** A blocked plan's question stays open this long: an answer within it resumes the goal. */
 export const BLOCKED_FRESH_MS = 10 * 60_000;
-/** How the actor reports a prose step it could not complete, so the plan does not count it as done. */
-export const STEP_REPORT = 'If this step was not done, start your final reply with "failed:" and then say why in character.';
+/**
+ * A plan step works silently (the player heard "on it" once; a line per step was a running commentary)
+ * and reports a step it could not complete with "failed:", so the plan does not count it as done.
+ */
+export const STEP_REPORT = 'Work silently: no opening line, no narration; nobody hears this reply. Final reply: "ok", '
+  + 'or "failed: <why>" if this step was not done.';
+/** Body reports a plan keeps for later steps and replans; older ones are dropped. */
+const MAX_REPORTS = 16;
+/** The newest reports that fit in about 1500 characters, oldest first. */
+function reportLines(reports) {
+  const kept = [];
+  for (let i = reports.length - 1, size = 0; i >= 0 && (size += reports[i].length + 2) <= 1500; i--) kept.unshift(reports[i]);
+  return kept.join('; ');
+}
 
 export class PlanRunner {
   constructor({ call, planner, strongPlanner, actor, resetActor, tools = toolCatalog, library = new PlanLibrary(), say, giveUp,
@@ -221,9 +234,20 @@ export class PlanRunner {
     Object.assign(this, { call, planner, strongPlanner, actor, resetActor, tools, library, say, log, feedback, actorPrefix, isActive });
     // The final failure is said by the persona when the session supplies it; raw reasons stay in the trace.
     this.giveUp = giveUp ?? ((goal, reason, player) => this.say(`Не получилось: ${oneLine(reason).slice(0, 150)}`, player));
-    this.state = { inventory: {}, kills: {} }; this.label = 'нет';
+    this.state = { inventory: {}, kills: {} }; this.label = 'нет'; this.reports = [];
   }
   cancel() { this.controller?.abort(); this.label = 'прерван'; }
+  /**
+   * Every finished body task while a plan runs, including the actor's own calls. Each step starts a
+   * fresh actor, which had forgotten where it placed things a step earlier and looked, inspected and
+   * located again before every block. Looks are perception, not progress.
+   */
+  observe(event) {
+    if (!this.running || event.tool === 'look') return;
+    const line = oneLine(event.result).replace(/^\[[^\]]+\] /u, '').slice(0, 200);
+    if (!line || line === this.reports.at(-1)) return;
+    this.reports = [...this.reports, line].slice(-MAX_REPORTS);
+  }
   /** Called for every "killed e3 villager" attack report while a plan may be running. */
   recordKill(creature) {
     const key = itemId(creature);
@@ -360,7 +384,7 @@ export class PlanRunner {
       catch { /* A saved destination may now be the bot's start; ask the planner again. */ }
     }
     const input = plannerInput({ goal, state: this.stateLine, scene, failures,
-      examples: matches.map(m => m.plan), hints: this.hints, tools: this.tools })
+      examples: matches.map(m => m.plan), hints: this.hints, tools: this.tools, reports: this.reports })
       + (this.objective ? `\nPreserve the original final condition: ${this.objective}. If impossible, return {"status":"blocked","reason":"concrete explanation or question"}.` : '');
     let invalid = '';
     // Two failed plans for one goal: the next plan comes from the stronger model, when one is configured.
@@ -400,11 +424,11 @@ export class PlanRunner {
         this.assertActive();
         if (stepController.signal.aborted) throw new Error('Plan revised');
         if (Date.now() > stepDeadline) throw new Error('step budget exceeded');
-        const reply = (await this.actor(`${this.actorPrefix()}Goal: ${goal}\nStep: ${step.do}\nDone: ${step.done}\nState: ${oneLine(this.stateLine)}\nScene: ${oneLine(scene).slice(0, 600)}\n${this.status()}\n${STEP_REPORT}`)).text;
-        // "failed: <line>" fails the step (a polite "can't do it" used to pass as done); the line is still said.
-        const spoken = String(reply ?? '').replace(/^\s*failed:\s*/iu, '');
-        if (spoken && !['<silent>', 'needs_plan'].includes(spoken.trim())) await this.say(oneLine(spoken).slice(0, 300));
-        return reply;
+        const done = this.reports.length ? `Done so far in this job (body reports, oldest first; positions are exact, `
+          + `use them instead of looking, inspecting or locating again): ${reportLines(this.reports)}\n` : '';
+        // "failed: <line>" fails the step (a polite "can't do it" used to pass as done). The line is not said:
+        // a replan may still succeed, and a final failure is told once by giveUp.
+        return (await this.actor(`${this.actorPrefix()}Goal: ${goal}\nStep: ${step.do}\nDone: ${step.done}\nState: ${oneLine(this.stateLine)}\nScene: ${oneLine(scene).slice(0, 600)}\n${done}${this.status()}\n${STEP_REPORT}`)).text;
       }, budgetMs, stepController.signal);
       await this.waitInteractions();
       this.assertActive();
@@ -427,6 +451,8 @@ export class PlanRunner {
     this.objective = null;
     this.blockedReason = null;
     this.hints = []; this.interactions = Promise.resolve(); this.hintReviews = Promise.resolve(); this.running = true;
+    // Only the first planning of a job may speak its opening line; replans and steps work quietly.
+    this.reports = []; this.speaking = true;
     this.state = { ...this.state, kills: {}, transfers: {} };
     let ready;
     this.ready = new Promise(resolve => { ready = resolve; });
@@ -435,6 +461,7 @@ export class PlanRunner {
       await this.snapshot();
       let scene = 'unknown'; // BrainSession reads one cheap scene alongside planner request preparation.
       this.plan = await this.makePlan(goal, failures, scene);
+      this.speaking = false;
       if (this.plan.status === 'blocked') return this.stopBlocked(goal, this.plan.reason, player);
       this.objective = this.plan.steps.at(-1).done;
       this.step = this.plan.steps[0]; ready();

@@ -27,7 +27,9 @@ seen in the last 10 s are bright, older ones dim, blocks seen in darkness are vi
 
 Node 22, plain ES modules, no npm dependencies. The mod is the body; this process uses rules for
 short orders, a planner for goals and a small actor for individual steps. Defaults are
-`--planner codex:gpt-6.1-sol:high` (high reasoning) and `--actor codex:gpt-6.1-sol:medium` (medium reasoning, priority tier; 2026-10-28 live play: terra picked wrong tools too often. Earlier 2026-10-28 bench: actor steps ~4.6 s vs ~5.2 s on luna, same pass rate; planning: terra and sonnet both passed, terra wrote leaner plans that lean on obtain and answered in ~4 s vs ~7.7 s, luna failed a case; use --planner claude:sonnet to move planning off Codex limits). Both use
+`--planner codex:gpt-6.1-sol:medium` and `--actor codex:gpt-6.1-sol:low` (priority tier; 2026-10-29 live play: a high-effort plan took
+88 s and medium-effort steps spent 10-57 s each on tool round trips with almost no reasoning, so both went one level down;
+2026-10-28 live play: terra picked wrong tools too often. Earlier 2026-10-28 bench: actor steps ~4.6 s vs ~5.2 s on luna, same pass rate; planning: terra and sonnet both passed, terra wrote leaner plans that lean on obtain and answered in ~4 s vs ~7.7 s, luna failed a case; use --planner claude:sonnet to move planning off Codex limits). Both use
 your existing subscription login, with no API key or npm dependencies.
 
 1. Start Minecraft with the mod and spawn a bot: `/blocknet spawn Kirill`.

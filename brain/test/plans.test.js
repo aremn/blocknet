@@ -437,18 +437,74 @@ test('an action step with done "ok" passes on its success report and fails on a 
   await assert.rejects(runner.executeStep({ id: 2, do: 'deposit {"ref":"h1","filter":"coal"}', done: 'ok' }, 'store coal', '', 5_000, new AbortController()), /no room/u);
 });
 
-test('a prose step the actor could not do fails with its reason, and the line is said without the prefix', async () => {
+test('a prose step the actor could not do fails with its reason and says nothing; a done step is silent too', async () => {
   const { PlanRunner, STEP_REPORT } = await import('../plans.js');
   const said = [], prompts = [];
+  let reply = 'failed: Не вижу, с какой стороны первый экран.';
   const runner = new PlanRunner({ call: async tool => ({ result: tool === 'status' ? 'pos 0, 64, 0' : 'inventory r1: free slots 30' }),
     planner: async () => ({}), tools: toolCatalog, say: async text => { said.push(text); },
-    actor: async text => { prompts.push(text); return { text: 'failed: Не вижу, с какой стороны первый экран.' }; } });
+    actor: async text => { prompts.push(text); return { text: reply }; } });
   runner.controller = new AbortController(); runner.isActive = () => true;
   await assert.rejects(runner.executeStep({ id: 1, do: 'Attach the second terminal above the first', done: 'ok' }, 'build', '', 5_000,
     new AbortController()), /^Error: failed: Не вижу/u);
   assert.ok(prompts[0].includes(STEP_REPORT));
-  assert.deepEqual(said, ['Не вижу, с какой стороны первый экран.']);
+  reply = 'Терминал стоит лицом к проходу.';
+  await runner.executeStep({ id: 2, do: 'Attach the terminal to the cable', done: 'ok' }, 'build', '', 5_000, new AbortController());
+  // A replan may still succeed and a final failure is told once by giveUp: steps never talk.
+  assert.deepEqual(said, []);
 });
+
+test('later steps and replans get the body reports of earlier steps; looks are not progress', async () => {
+  const { PlanRunner } = await import('../plans.js');
+  const prompts = [], planned = [];
+  let runner;
+  const runnerCall = async (tool, args) => {
+    if (tool === 'status') return { result: 'pos 0, 64, 0' };
+    if (tool === 'inv') return { result: 'inventory r1: free slots 30' };
+    if (tool === 'place') {
+      runner.observe({ type: 'task.finished', tool: 'place', result: `[Kirill] placed ${args.item} at ${args.x} ${args.y} ${args.z}` });
+      return { result: `placed ${args.item} at ${args.x} ${args.y} ${args.z}` };
+    }
+    return { result: 'ok' };
+  };
+  const plans = [
+    { goal: 'build', budget_min: 5, steps: [
+      { id: 1, do: 'place {"item":"ae2:controller","x":1,"y":65,"z":0}', done: 'ok' },
+      { id: 2, do: 'Extend the crafting CPU row', done: 'ok' }] },
+    { goal: 'build', budget_min: 5, steps: [{ id: 1, do: 'Extend the crafting CPU row', done: 'ok' }] }];
+  runner = new PlanRunner({ call: runnerCall, tools: toolCatalog, say: async () => {}, giveUp: async () => {},
+    planner: async text => { planned.push(text); return { text: JSON.stringify(plans[planned.length - 1]) }; },
+    actor: async text => {
+      prompts.push(text);
+      // The actor's own calls reach the plan as body events, like a live MCP place and look.
+      runner.observe({ type: 'task.finished', tool: 'look', result: '[Kirill] built: b1 structure x23 SE 2m' });
+      runner.observe({ type: 'task.finished', tool: 'place', result: '[Kirill] placed ae2:256k_crafting_storage at 2 65 0' });
+      return { text: prompts.length === 1 ? 'failed: ряд не нашёл' : 'ok' };
+    } });
+  assert.equal(await runner.run('build'), true);
+  assert.match(prompts[0], /Done so far in this job[^\n]*placed ae2:controller at 1 65 0/u);
+  assert.match(prompts[1], /placed ae2:controller at 1 65 0; placed ae2:256k_crafting_storage at 2 65 0/u);
+  assert.match(planned[1], /Done so far in this job[^\n]*placed ae2:256k_crafting_storage at 2 65 0/u);
+  assert.ok(prompts.every(p => !/built: b1/u.test(p)), 'look results stay out of the reports');
+  assert.ok(!/Done so far/u.test(planned[0]), 'a new job starts with no reports');
+});
+
+test('only the first planning of a job speaks; step and replan preambles stay quiet', async () => fixture(async f => {
+  let plans = 0, steps = 0;
+  const planner = backend(async () => {
+    plans++;
+    planner.onText(plans === 1 ? 'Берусь.\n' : 'Разобью на короткие действия.\n');
+    return { text: JSON.stringify({ goal: 'поставь контроллер', budget_min: 5, steps: [{ id: 1, do: 'Put the controller by the chest', done: 'ok' }] }) };
+  });
+  const actor = backend(async () => {
+    steps++;
+    actor.onText('Контроллер сбоку поставлю.\n');
+    return { text: steps === 1 ? 'failed: не влез' : 'Контроллер стоит.' };
+  });
+  const { body } = await request({ ...f, planner, actor, text: 'построй контроллер у сундука' });
+  assert.equal(plans, 2); assert.equal(steps, 2);
+  assert.deepEqual(body.calls.filter(c => c.tool === 'say').map(c => c.args.text), ['Берусь.', '✔ поставь контроллер']);
+}));
 
 test('an answer to a blocked plan question resumes its goal; small talk is an ordinary message', async () => fixture(async f => {
   const planned = [];

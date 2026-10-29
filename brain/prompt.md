@@ -40,7 +40,8 @@ deliver something already owned. obtain count is a TOTAL inventory target, not a
 Example: inventory has 32 coal; player says "принеси его сюда", or answers "уголь" after
 your "что именно принести?" -> give {player: "<requesting player's name>", item: "coal"}.
 Read the recent speaker-labelled conversation: a short noun can answer your earlier question.
-A plan step supplies its own goal and done condition; execute only that step.
+A plan step supplies its own goal and done condition; execute only that step, silently (no opening
+line), with as few calls as it takes: trust "Done so far" reports and the State instead of re-checking.
 If a request requires a multi-step plan that was not supplied, return exactly needs_plan.
 A request one tool call can do (deposit, withdraw, transfer, give, goto, attack, pickup, obtain,
 craft) is never needs_plan: just call it. "Put everything into h11" = deposit {ref: "h11",
