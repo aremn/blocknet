@@ -41,9 +41,17 @@ public final class WorldMemory extends SavedData {
         return observed;
     }
 
+    /** True when this memory came from the world save; a new one wipes any stale disk archive. */
+    private boolean loaded;
+
     public static WorldMemory forBot(BotPlayer bot) {
-        return bot.getServer().overworld().getDataStorage().computeIfAbsent(
+        WorldMemory memory = bot.getServer().overworld().getDataStorage().computeIfAbsent(
             new SavedData.Factory<>(WorldMemory::new, WorldMemory::load), "blocknet_world_" + bot.getUUID());
+        if (!memory.observed.archiving()) {
+            memory.observed.attach(bot.getServer().getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT)
+                .resolve("data").resolve("blocknet_memory").resolve(bot.getUUID().toString()), bot.registryAccess(), !memory.loaded);
+        }
+        return memory;
     }
 
     public List<Entry> nearby(BotPlayer bot, double radius) {
@@ -131,6 +139,7 @@ public final class WorldMemory extends SavedData {
 
     public static WorldMemory load(CompoundTag tag, HolderLookup.Provider registries) {
         WorldMemory memory = new WorldMemory();
+        memory.loaded = true;
         memory.observed.load(tag, registries);
         // Migrate the old station/container-only SavedData without reading any world cells.
         for (Tag raw : tag.getList("world", Tag.TAG_COMPOUND)) {

@@ -53,6 +53,10 @@ Blocknet: an AI companion that plays modded Minecraft with you as a real server-
 [[mixins]]
 config="${mod_id}.mixins.json"
 
+# Optional mod adapters; each mixin applies only when its mod is loaded (CompatMixinPlugin).
+[[mixins]]
+config="${mod_id}.compat.mixins.json"
+
 # The [[accessTransformers]] block allows you to declare where your AT file is.
 # If this block is omitted, a fallback attempt will be made to load an AT from META-INF/accesstransformer.cfg
 #[[accessTransformers]]

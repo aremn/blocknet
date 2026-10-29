@@ -4,6 +4,7 @@ import dev.blocknet.body.BotPlayer;
 import dev.blocknet.crafting.CraftPlan;
 import dev.blocknet.memory.ContainerMemory;
 import dev.blocknet.memory.WorldMemory;
+import dev.blocknet.map.WorldMap;
 import dev.blocknet.state.ItemDescriber;
 import dev.blocknet.state.ToolFacts;
 import dev.blocknet.pathing.api.IBaritone;
@@ -22,6 +23,7 @@ import java.util.function.Predicate;
 import javax.annotation.Nullable;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.protocol.game.ServerboundPlayerActionPacket;
 import net.minecraft.server.level.ServerLevel;
@@ -66,6 +68,24 @@ public final class BotController {
     private enum Task { IDLE, GOTO, FOLLOW, MINE_APPROACH, MINE_BREAK, COLLECT, USE, EAT, PLACE, CRAFT, GATHER, CONTAINER, LOOK, EXPLORE, EXCAVATE }
 
     private SkillTask skill;
+    /** Toss through the Q-key path; a null recipient means drop here. */
+    public void give(@Nullable net.minecraft.server.level.ServerPlayer player, String item, int count, Consumer<String> report) {
+        stop();
+        skill = new GiveTask(bot, player, item, count, report);
+    }
+
+    void approachRecipient(net.minecraft.server.level.ServerPlayer player, Consumer<String> report) {
+        come(player.position(), player.onGround(), report);
+        // Q throws forward for a few blocks before pickup delay expires; standing on top of the
+        // recipient makes stacks overshoot. Stop roughly three blocks away, then let inertia settle.
+        // A short upward toss must reach a raised player's platform before gravity drops it.
+        if (target != null) navigationGoal = new GoalNear(target, player.getY() > bot.getY() + .5 ? 0 : 3);
+    }
+
+    boolean aimForToss(Vec3 eyes) {
+        lookAt(eyes);
+        return isLookingAt(eyes);
+    }
     private Integer surfaceY;
     int miningSurfaceY() {
         if (surfaceY == null || bot.getBlockY() > surfaceY) surfaceY = bot.getBlockY();
@@ -89,13 +109,50 @@ public final class BotController {
     }
 
     public void obtain(net.minecraft.world.item.Item item, int count, Consumer<String> report) {
-        stop();
-        skill = new ObtainTask(bot, item, count, report);
+        obtain(item, count, false, report);
     }
 
-    public void exploreCaves(net.minecraft.world.item.Item item, int count, Consumer<String> report) {
+    /** {@code world}: mine, smelt and craft only; remembered containers are not a source. */
+    public void obtain(net.minecraft.world.item.Item item, int count, boolean world, Consumer<String> report) {
         stop();
-        skill = new ExploreCavesTask(bot, item, count, report);
+        skill = new ObtainTask(bot, item, count, world, report);
+    }
+
+    private boolean worldOnly;
+
+    /** While a world-only obtain runs, remembered containers are not item sources. */
+    public boolean worldOnly() { return worldOnly; }
+    void worldOnly(boolean value) { worldOnly = value; }
+
+    public void exploreCaves(net.minecraft.world.item.Item item, int count, Consumer<String> report) {
+        exploreCaves(item, count, null, report);
+    }
+
+    /** {@code caveRef}: a map cave ("k3") to walk into first, or null. */
+    public void exploreCaves(net.minecraft.world.item.Item item, int count, @Nullable String caveRef, Consumer<String> report) {
+        stop();
+        skill = new ExploreCavesTask(bot, item, count, caveRef, report);
+    }
+
+    /**
+     * Picks up dropped items within 24 blocks: a radar ref ("i3"), an item id, or everything when
+     * {@code query} is empty or "all".
+     */
+    public void pickup(@Nullable String query, Consumer<String> report) {
+        String q = query == null ? "" : query.trim().toLowerCase(Locale.ROOT);
+        java.util.UUID only = null;
+        net.minecraft.world.item.Item item = null;
+        if (q.matches("i[0-9]+")) {
+            var contact = bot.radar().find(q);
+            if (contact == null || !contact.category().equals("item")) { report.accept("none nearby for " + q + "; try map items"); return; }
+            only = contact.uuid();
+        } else if (!q.isEmpty() && !q.equals("all")) {
+            var id = net.minecraft.resources.ResourceLocation.tryParse(q.contains(":") ? q : "minecraft:" + q);
+            if (id == null || !BuiltInRegistries.ITEM.containsKey(id)) { report.accept("blocked: unknown item " + q); return; }
+            item = BuiltInRegistries.ITEM.get(id);
+        }
+        stop();
+        skill = new PickupTask(bot, only, item, bot.position(), dev.blocknet.map.Radar.ITEM_RANGE, report);
     }
 
     void gatherCave(String item, int count, Consumer<String> report) {
@@ -249,11 +306,154 @@ public final class BotController {
     private int lastMobHurt;
     private boolean dangerWarned;
     private boolean explicitAttack;
+    private net.minecraft.world.entity.LivingEntity hunting;
+    private String huntName = "";
+    private int huntTicks;
     private final java.util.Map<java.util.UUID, Double> dangerDistances = new java.util.HashMap<>();
     private int dangerHiddenTicks;
     private boolean dangerRetreating;
 
     public boolean defending() { return danger != null; }
+
+    /** Defense, an escape or a reflex meal holds the hands (and the feet): pathing must not move or swap tools. */
+    public boolean ownsHands() { return danger != null || hungerSlot >= 0 || escape != null; }
+
+    // ---- survival: a player drops everything to come up for air or get out of lava ----
+    /** Air left (of 300) when the bot stops whatever it does and swims for the surface: about six seconds. */
+    static final int AIR_LOW = 120;
+    private String escape;
+    private BlockPos escapeTo;
+    private int escapeTicks;
+
+    /** "air" or "lava" while escaping, else null. */
+    public String escaping() { return escape; }
+
+    /** True while escaping water or lava; the current task waits, like it does for a fight. */
+    private boolean tickSurvival() {
+        boolean drowning = bot.isUnderWater() && bot.getAirSupply() < AIR_LOW;
+        if (escape == null) {
+            if (!drowning && !bot.isInLava()) return false;
+            escape = drowning ? "air" : "lava";
+            escapeTo = null;
+            escapeTicks = 0;
+            stopPathing();
+            String note = drowning ? "drowning: air " + bot.getAirSupply() + "/" + bot.getMaxAirSupply() + ", swimming up"
+                : "in lava, health " + bot.getHealth() + ", getting out";
+            trace("survival", note);
+            bot.moments().emit("emergency", note);
+        }
+        boolean safe = escape.equals("air")
+            ? !bot.isInWater() || !bot.isUnderWater() && bot.getAirSupply() >= bot.getMaxAirSupply() - 20
+            : !bot.isInLava() && !bot.level().getBlockState(bot.blockPosition()).is(Blocks.LAVA);
+        if (safe || ++escapeTicks > 600) {
+            trace("survival", safe ? "safe again (air " + bot.getAirSupply() + ", health " + bot.getHealth() + "); back to work"
+                : "could not get out in 30 s; giving the task back");
+            escape = null;
+            bot.setJumping(false);
+            bot.zza = 0.0F;
+            return false;
+        }
+        if (escapeTo == null || escapeTicks % 20 == 0) escapeTo = escape.equals("air") ? surface() : dryFooting();
+        // Holding jump is how a player swims up and climbs out of a pool.
+        bot.setJumping(true);
+        if (escapeTo != null) walkTowards(Vec3.atBottomCenterOf(escapeTo)); else { bot.zza = 0.0F; bot.xxa = 0.0F; }
+        return true;
+    }
+
+    /** The nearest water surface with open air above and nothing solid between it and the bot's depth. */
+    @Nullable
+    private BlockPos surface() {
+        var level = bot.serverLevel();
+        BlockPos feet = bot.blockPosition(), best = null;
+        double bestCost = Double.MAX_VALUE;
+        for (int dx = -8; dx <= 8; dx++) for (int dz = -8; dz <= 8; dz++) {
+            for (int y = feet.getY(); y <= feet.getY() + 16; y++) {
+                BlockPos at = new BlockPos(feet.getX() + dx, y, feet.getZ() + dz);
+                var state = level.getBlockState(at);
+                if (!state.getFluidState().isEmpty()) continue;
+                if (!state.getCollisionShape(level, at).isEmpty()) break; // a ceiling over this column
+                if (y == feet.getY()) break; // already air at our depth: not a way up
+                double cost = Math.sqrt(dx * dx + dz * dz) + (y - feet.getY()) * 0.5;
+                if (cost < bestCost) { bestCost = cost; best = at.below(); }
+                break;
+            }
+        }
+        return best;
+    }
+
+    /** The nearest block to stand on that is neither lava nor fire, with solid ground under it. */
+    @Nullable
+    private BlockPos dryFooting() {
+        var level = bot.serverLevel();
+        BlockPos feet = bot.blockPosition(), best = null;
+        double bestDistance = Double.MAX_VALUE;
+        for (BlockPos at : BlockPos.betweenClosed(feet.offset(-5, -2, -5), feet.offset(5, 3, 5))) {
+            var here = level.getBlockState(at);
+            if (here.is(Blocks.LAVA) || here.is(Blocks.FIRE) || !here.getCollisionShape(level, at).isEmpty()) continue;
+            if (!level.getBlockState(at.above()).getCollisionShape(level, at.above()).isEmpty() || level.getBlockState(at.above()).is(Blocks.LAVA)) continue;
+            BlockPos floor = at.below();
+            if (!level.getBlockState(floor).isFaceSturdy(level, floor, Direction.UP) || level.getBlockState(floor).is(Blocks.MAGMA_BLOCK)) continue;
+            double distance = at.distSqr(feet);
+            if (distance < bestDistance) { bestDistance = distance; best = at.immutable(); }
+        }
+        return best;
+    }
+
+    // ---- hunger: like a player, eat before the bar runs out and get back to work ----
+    /** Below this the bot eats on its own; 18 is the level natural regeneration needs. */
+    static final int HUNGRY = 14, REGENERATES = 18;
+    private int hungerSlot = -1, hungerTicks, hungerCooldown;
+
+    /** Starts or continues a reflex meal; true while chewing, which pauses the current task. */
+    private boolean tickHunger() {
+        if (hungerSlot >= 0) {
+            bot.zza = 0.0F;
+            bot.xxa = 0.0F;
+            if (bot.isUsingItem() && ++hungerTicks < 100) return true;
+            if (bot.isUsingItem()) bot.stopUsingItem();
+            trace("hunger", "food now " + bot.getFoodData().getFoodLevel() + "; back to " + task.name().toLowerCase(Locale.ROOT));
+            // Swap the meal back to where it came from, returning the tool that was in hand.
+            hold(hungerSlot);
+            hungerSlot = -1;
+            hungerCooldown = 100;
+            return false;
+        }
+        if (hungerCooldown > 0) { hungerCooldown--; return false; }
+        if (task == Task.EAT || containerTask != null || bot.containerMenu != bot.inventoryMenu || bot.isUsingItem()) return false;
+        int food = bot.getFoodData().getFoodLevel();
+        boolean healing = bot.getHealth() < bot.getMaxHealth() && food < REGENERATES;
+        if (food >= HUNGRY && !healing) return false;
+        int best = -1;
+        double score = -Double.MAX_VALUE;
+        int missing = 20 - food;
+        for (int i = 0; i < 36; i++) {
+            ItemStack stack = bot.getInventory().getItem(i);
+            var properties = stack.isEmpty() ? null : stack.getFoodProperties(bot);
+            if (properties == null) continue;
+            // A reflex never eats something harmful (rotten flesh, spider eyes); the player can still ask for it.
+            if (properties.effects().stream().anyMatch(e -> !e.effect().getEffect().value().isBeneficial())) continue;
+            double value = Math.min(missing, properties.nutrition()) * 10 - Math.max(0, properties.nutrition() - missing) * 4
+                + properties.saturation();
+            if (value > score) { best = i; score = value; }
+        }
+        if (best < 0) {
+            trace("hunger", "food " + food + " and nothing safe to eat in the inventory");
+            hungerCooldown = 1200;
+            return false;
+        }
+        hold(best);
+        String meal = BuiltInRegistries.ITEM.getKey(bot.getMainHandItem().getItem()).getPath();
+        bot.gameMode.useItem(bot, bot.serverLevel(), bot.getMainHandItem(), InteractionHand.MAIN_HAND);
+        if (!bot.isUsingItem()) {
+            hold(best);
+            hungerCooldown = 200;
+            return false;
+        }
+        trace("hunger", "food " + food + (healing && food >= HUNGRY ? " and hurt" : "") + "; eating " + meal + " before carrying on");
+        hungerSlot = best;
+        hungerTicks = 0;
+        return true;
+    }
 
     public void mobHurt(net.minecraft.world.damagesource.DamageSource source) {
         if (bot.isAlive() && source.getEntity() instanceof net.minecraft.world.entity.Mob mob) {
@@ -262,16 +462,61 @@ public final class BotController {
         }
     }
 
-    /** Refs for entities are their observed UUIDs; type names also resolve only visible entities. */
+    /**
+     * Hunts a creature by radar ref ("e3"), UUID, player name or type (nearest of that type):
+     * chases its live position (ADR-0011), fights it in reach, and reports killed or lost.
+     */
     public void attack(String query, Consumer<String> report) {
-        var seen = bot.vision().entities().stream().filter(e -> e.uuid().toString().equals(query)
-            || e.type().equals(query.replace("minecraft:", ""))).findFirst();
-        Entity entity = seen.map(e -> bot.serverLevel().getEntity(e.uuid())).orElse(null);
-        if (!(entity instanceof net.minecraft.world.entity.LivingEntity living) || !living.isAlive()
-                || !bot.hasLineOfSight(living)) { report.accept("none seen for " + query + "; try look"); return; }
-        start(Task.IDLE, bot.blockPosition(), report);
+        var contact = bot.radar().find(query);
+        var living = bot.radar().entity(contact);
+        if (living == null) {
+            report.accept(contact == null ? "none nearby for " + query + "; try map"
+                : "failed: lost " + contact.ref() + " " + contact.type() + ", last seen at " + BlockPos.containing(contact.position()).toShortString());
+            return;
+        }
+        start(Task.FOLLOW, living.blockPosition(), report);
+        hunting = living;
+        huntName = contact.ref() + " " + contact.type();
+        huntTicks = 0;
         explicitAttack = true;
-        beginDanger(living);
+        followTarget = living;
+        followName = huntName;
+        lastSeenFollowPosition = living.position();
+        lastSeenFollowOnGround = living.onGround();
+        followAllowSprint = pathing().settings().allowSprint.get();
+        trace("hunt", "chasing " + huntName + String.format(Locale.ROOT, ", %.1f m away", bot.distanceTo(living)));
+        if (bot.distanceTo(living) <= 3.5 && bot.hasLineOfSight(living)) beginDanger(living);
+    }
+
+    private boolean killed() {
+        return hunting.isDeadOrDying() || hunting.getRemovalReason() == Entity.RemovalReason.KILLED;
+    }
+
+    private String hunted() {
+        return killed() ? "killed " + huntName : "failed: lost " + huntName + ", last seen at " + hunting.blockPosition().toShortString();
+    }
+
+    /** Like a player after a kill: walk over the drops before reporting. */
+    private void lootKill() {
+        String killed = "killed " + huntName;
+        Vec3 at = hunting.position();
+        Consumer<String> report = reporter;
+        hunting = null;
+        pathing().settings().allowSprint.set(followAllowSprint);
+        // Not FOLLOW any more, so stopping cannot report "stopped" for the finished hunt.
+        task = Task.IDLE;
+        SkillTask owner = skill;
+        skill = null;
+        stop();
+        if (owner != null) {
+            // A skill hunting for a drop (obtain wool) collects it itself and keeps the task.
+            skill = owner;
+            report.accept(killed);
+            return;
+        }
+        trace("hunt", killed + "; picking up its drops");
+        skill = new PickupTask(bot, null, null, at, 6, message -> report.accept(killed + "; "
+            + (message.equals("no items to pick up") ? "no drops" : message)));
     }
 
     private void beginDanger(net.minecraft.world.entity.LivingEntity mob) {
@@ -281,12 +526,119 @@ public final class BotController {
         stopPathing(); abortBreaking();
         if (task == Task.MINE_BREAK) { task = Task.MINE_APPROACH; breakProgress = 0; breakTicks = 0; }
         bot.releaseUsingItem();
-        bot.moments().emit("danger_reflex", "paused task to defend against "
+        bot.moments().emit("danger_reflex", (mob == hunting ? "attacking " : "paused task to defend against ")
             + BuiltInRegistries.ENTITY_TYPE.getKey(mob.getType()).getPath());
+    }
+
+    // ---- shelter: a player losing a fight digs three blocks down under themselves and caps the hole ----
+    private BlockPos shelterTop;
+    private int shelterStage, shelterTicks;
+    private float shelterProgress;
+    private boolean shelterBreaking;
+    private long shelterSince;
+
+    private int throwawaySlot() {
+        for (int slot = 0; slot < 36; slot++) {
+            ItemStack stack = bot.getInventory().getItem(slot);
+            if (!stack.isEmpty() && stack.getItem() instanceof net.minecraft.world.item.BlockItem
+                && InventoryBehavior.isAcceptableThrowaway(stack, pathing().settings())) return slot;
+        }
+        return -1;
+    }
+
+    /** Three diggable cells under the feet, a solid floor below them, no fluid around, and a block for the cap. */
+    private boolean canShelter() {
+        if (throwawaySlot() < 0) return false;
+        ServerLevel level = bot.serverLevel();
+        BlockPos feet = bot.blockPosition();
+        for (int down = 1; down <= 3; down++) {
+            BlockPos cell = feet.below(down);
+            BlockState state = level.getBlockState(cell);
+            if (state.isAir() || state.hasBlockEntity() || state.getDestroySpeed(level, cell) < 0 || state.getDestroySpeed(level, cell) > 5
+                || !state.getFluidState().isEmpty()) return false;
+            for (Direction side : Direction.values()) if (!level.getFluidState(cell.relative(side)).isEmpty()) return false;
+        }
+        BlockState floor = level.getBlockState(feet.below(4));
+        return canStandOn(level, feet.below(4)) && floor.getFluidState().isEmpty();
+    }
+
+    private void startShelter() {
+        shelterTop = bot.blockPosition();
+        shelterStage = 0; shelterTicks = 0; shelterProgress = 0; shelterBreaking = false;
+        stopPathing(); abortBreaking();
+        trace("danger", "losing the fight (health " + bot.getHealth() + "); digging in under " + shelterTop.toShortString());
+        bot.moments().emit("danger_shelter", "digging in to hide; health " + bot.getHealth());
+    }
+
+    /** Runs the shelter while one is active; true while it owns the body. */
+    private boolean tickShelter() {
+        if (shelterTop == null) return false;
+        ServerLevel level = bot.serverLevel();
+        stopPathing();
+        bot.zza = 0; bot.xxa = 0; bot.setJumping(false);
+        if (++shelterTicks > 20 * 30 && shelterStage < 4) {
+            trace("danger", "could not finish the shelter; fighting on");
+            shelterTop = null;
+            return false;
+        }
+        if (shelterStage < 3) {
+            BlockPos cell = shelterTop.below(shelterStage + 1);
+            BlockState state = level.getBlockState(cell);
+            if (state.isAir()) { shelterStage++; shelterProgress = 0; shelterBreaking = false; return true; }
+            if (!bot.onGround()) return true;
+            if (!shelterBreaking) {
+                int tool = bestCorrectTool(state);
+                if (tool >= 0) hold(tool);
+                bot.gameMode.handleBlockBreakAction(cell, ServerboundPlayerActionPacket.Action.START_DESTROY_BLOCK, Direction.UP, level.getMaxBuildHeight(), sequence++);
+                shelterBreaking = true;
+            }
+            lookAt(Vec3.atCenterOf(cell));
+            shelterProgress += state.getDestroyProgress(bot, level, cell);
+            bot.swing(InteractionHand.MAIN_HAND);
+            if (shelterProgress >= 1.0F) {
+                bot.gameMode.handleBlockBreakAction(cell, ServerboundPlayerActionPacket.Action.STOP_DESTROY_BLOCK, Direction.UP, level.getMaxBuildHeight(), sequence++);
+                shelterProgress = 0;
+            }
+            return true;
+        }
+        if (shelterStage == 3) {
+            BlockPos cap = shelterTop.below();
+            if (!bot.onGround() || bot.getBlockY() > shelterTop.getY() - 3) return true;
+            if (!level.getBlockState(cap).canBeReplaced()) { shelterStage = 4; shelterSince = level.getGameTime(); return true; }
+            int slot = throwawaySlot();
+            if (slot < 0) { shelterStage = 4; shelterSince = level.getGameTime(); return true; }
+            hold(slot);
+            for (Direction face : Direction.Plane.HORIZONTAL) {
+                var hit = BlockPlacement.face(bot, cap, face);
+                if (hit == null) continue;
+                lookAt(hit.getLocation());
+                BlockPlacement.click(bot, hit);
+                break;
+            }
+            if (!level.getBlockState(cap).canBeReplaced() || shelterTicks % 40 == 0) {
+                shelterStage = 4; shelterSince = level.getGameTime();
+                trace("danger", "sheltered " + (level.getBlockState(cap).canBeReplaced() ? "without a cap" : "under a block") + "; waiting to heal");
+                bot.moments().emit("danger_sheltered", "hiding underground; health " + bot.getHealth());
+            }
+            return true;
+        }
+        // Wait until healed, or until nothing has hurt the bot for a minute.
+        long now = level.getGameTime();
+        if (bot.getHealth() >= bot.getMaxHealth() * .7f || now - shelterSince > 20 * 60 && bot.tickCount - lastMobHurt > 20 * 30) {
+            trace("danger", "healed in the shelter (health " + bot.getHealth() + "); carrying on");
+            shelterTop = null;
+            danger = null;
+            dangerWarned = false;
+            bot.moments().emit("danger_clear", "left the shelter");
+            if (explicitAttack) { explicitAttack = false; hunting = null; finish("failed: retreated to heal; the fight is over"); }
+            return false;
+        }
+        return true;
     }
 
     private boolean tickDanger() {
         if (!bot.isAlive()) return true;
+        if (tickShelter()) return true;
         var visible = bot.level().getEntities(bot, bot.getBoundingBox().inflate(16),
             e -> e instanceof net.minecraft.world.entity.monster.Enemy && e.isAlive() && bot.hasLineOfSight(e));
         if (danger == null) {
@@ -304,6 +656,7 @@ public final class BotController {
         stopPathing();
         bot.zza = 0; bot.xxa = 0; bot.setJumping(false);
         boolean low = bot.getHealth() < bot.getMaxHealth() * .3f;
+        if (low && bot.onGround() && canShelter()) { startShelter(); return true; }
         boolean retreat = low || visible.stream().filter(e -> bot.distanceToSqr(e) <= 64).count() > 1;
         if (!dangerWarned && (low || ++dangerTicks >= 200 && bot.tickCount - lastMobHurt < 60)) {
             dangerWarned = true;
@@ -373,7 +726,14 @@ public final class BotController {
         bot.moments().emit("danger_clear", "resuming paused task");
         trace("danger", "threat gone; resuming " + describe());
         if (gathering != null && task == Task.GATHER) gathering.resumeSelection();
-        if (explicitAttack) { explicitAttack = false; finish("attacked; threat gone"); }
+        if (explicitAttack) {
+            // The hunt goes on while the quarry lives: back to chasing its live position.
+            if (hunting != null && hunting.isAlive() && !hunting.isRemoved()) { trace("hunt", "still chasing " + huntName); return false; }
+            explicitAttack = false;
+            if (hunting == null) finish("attacked; threat gone");
+            else if (killed()) lootKill();
+            else finish(hunted());
+        }
         return false;
     }
 
@@ -409,7 +769,10 @@ public final class BotController {
     /** Paths to the exact feet block, trying more costly routes before settling for the closest spot. */
     public void goTo(BlockPos pos, Consumer<String> reporter) {
         start(Task.GOTO, pos, reporter);
-        navigationGoal = new GoalBlock(pos);
+        // Coordinates of a chest, a machine or any solid block mean "go to it", never "dig it out and stand there".
+        var state = bot.serverLevel().getBlockState(pos);
+        navigationGoal = state.hasBlockEntity() || !state.getCollisionShape(bot.serverLevel(), pos).isEmpty()
+            ? new GoalGetToBlock(pos) : new GoalBlock(pos);
     }
 
     /**
@@ -429,11 +792,16 @@ public final class BotController {
     /** Shares come's feet/ground projection and horizontal goal with each follow leg. */
     private boolean setGroundGoal(Vec3 source, boolean sourceOnGround) {
         BlockPos feet = BlockPos.containing(source.x, source.y + 0.1251, source.z);
-        if (sourceOnGround) {
+        ServerLevel level = bot.serverLevel();
+        var shape = level.getBlockState(feet).getCollisionShape(level, feet);
+        // A just-teleported player can retain onGround for one tick. Verify support before
+        // trusting it; partial blocks (slabs/paths) can support feet inside their block cell.
+        boolean supported = canStandOn(level, feet.below()) || !shape.isEmpty()
+            && feet.getY() + shape.max(Direction.Axis.Y) <= source.y + 0.1251;
+        if (sourceOnGround && supported) {
             setComeGoal(feet);
             return true;
         }
-        ServerLevel level = bot.serverLevel();
         for (int down = 1; down <= 16; down++) {
             BlockPos ground = feet.below(down);
             if (ground.getY() < level.getMinBuildHeight()) {
@@ -443,6 +811,12 @@ public final class BotController {
                 setComeGoal(ground.above());
                 return true;
             }
+        }
+        BlockPos nearby = WorldMap.groundNear(level, feet, 4, bot.blockPosition());
+        if (nearby != null) {
+            trace("nav", "airborne target: using nearby ground at " + nearby.toShortString());
+            setComeGoal(nearby);
+            return true;
         }
         return false;
     }
@@ -513,9 +887,46 @@ public final class BotController {
     public void goTo(String ref, Consumer<String> reporter) {
         final String normalizedRef = dev.blocknet.bridge.BridgeTools.normalizeRef(ref);
         var object = bot.vision().resolve(normalizedRef);
-        if (object == null) { reporter.accept("none seen for " + ref + "; try look or explore"); return; }
-        start(Task.GOTO, object.nearest(), reporter);
-        navigationGoal = new GoalGetToBlock(object.nearest());
+        if (object != null) {
+            // A building's nearest seen block is often its roof; stand on the ground beside it instead.
+            BlockPos ground = object.category().equals("built") ? WorldMap.groundBeside(bot.serverLevel(),
+                (int) object.bounds().minX, (int) object.bounds().minZ, (int) object.bounds().maxX - 1, (int) object.bounds().maxZ - 1,
+                bot.blockPosition()) : null;
+            if (ground != null) {
+                start(Task.GOTO, ground, reporter);
+                setComeGoal(ground);
+                return;
+            }
+            start(Task.GOTO, object.nearest(), reporter);
+            navigationGoal = new GoalGetToBlock(object.nearest());
+            return;
+        }
+        var place = WorldMap.target(bot, normalizedRef);
+        if (place != null) {
+            if (place.stand() == null) { reporter.accept("failed: " + place.label()); return; }
+            start(Task.GOTO, place.stand(), reporter);
+            if (bot.serverLevel().getChunkSource().getChunkNow(place.stand().getX() >> 4, place.stand().getZ() >> 4) == null) {
+                // Not loaded yet, so the height is unknown: head for the column; the map refines it on arrival.
+                navigationGoal = new dev.blocknet.pathing.api.pathing.goals.GoalXZ(place.stand().getX(), place.stand().getZ());
+            } else setComeGoal(place.stand());
+            return;
+        }
+        // Creatures, items and players: radar refs (e#, i#), a player name or a creature type.
+        var contact = bot.radar().find(normalizedRef);
+        var player = contact == null ? bot.getServer().getPlayerList().getPlayerByName(normalizedRef) : null;
+        if (player != null && player != bot && player.serverLevel() == bot.serverLevel()) {
+            start(Task.GOTO, player.blockPosition(), reporter);
+            if (!setGroundGoal(player.position(), player.onGround())) fail("no ground near " + player.getName().getString());
+            return;
+        }
+        if (contact != null) {
+            var living = bot.radar().entity(contact);
+            Vec3 where = living != null ? living.position() : contact.position();
+            start(Task.GOTO, BlockPos.containing(where), reporter);
+            if (!setGroundGoal(where, living == null || living.onGround())) fail("no ground near " + contact.ref() + " " + contact.type());
+            return;
+        }
+        reporter.accept("none seen for " + ref + "; try map, look or explore");
     }
 
     public void tunnel(Direction direction, int length, Consumer<String> reporter) {
@@ -612,8 +1023,56 @@ public final class BotController {
     public void use(BlockPos pos, Consumer<String> reporter) { use(pos, false, reporter); }
 
     public void use(BlockPos pos, boolean sneak, Consumer<String> reporter) {
+        // A player closes the last screen before clicking another block; a leftover menu would hide the new one.
+        bot.closeContainer();
+        usedContainerMenu = null;
         start(Task.USE, pos, reporter);
         sneakUse = sneak;
+        useAims = null;
+        useAimIndex = 0;
+    }
+
+    /** Other parts of the clicked block to try when a right-click did nothing (see {@link #partAims}). */
+    private List<BlockHitResult> useAims;
+    private int useAimIndex;
+
+    /**
+     * One visible point on each separate box of a block's outline. A cable carrying a terminal, a
+     * pipe with an attachment or a slab-like machine has several boxes, and the click lands on
+     * whichever part the ray meets; when the first click did nothing, a player clicks another part.
+     * Empty for an ordinary single-box block.
+     */
+    List<BlockHitResult> partAims(BlockPos pos) {
+        ServerLevel level = bot.serverLevel();
+        List<AABB> boxes = new ArrayList<>(level.getBlockState(pos).getShape(level, pos).toAabbs());
+        if (boxes.size() < 2) return List.of();
+        Vec3 eye = bot.getEyePosition();
+        List<BlockHitResult> aims = new ArrayList<>();
+        // Large boxes first: attachments are panels, the core of a cable is small.
+        boxes.sort(java.util.Comparator.comparingDouble((AABB b) -> -(b.getXsize() * b.getYsize() + b.getYsize() * b.getZsize() + b.getXsize() * b.getZsize())));
+        for (AABB local : boxes) {
+            AABB box = local.move(pos);
+            BlockHitResult found = null;
+            for (Direction face : Direction.values()) {
+                Vec3 normal = Vec3.atLowerCornerOf(face.getNormal());
+                Vec3 half = new Vec3(box.getXsize() / 2, box.getYsize() / 2, box.getZsize() / 2);
+                Vec3 faceCenter = box.getCenter().add(normal.multiply(half));
+                if (normal.dot(eye.subtract(faceCenter)) <= 0) continue;
+                // The face centre may hide behind another part; try points toward its corners too.
+                Vec3 spread = new Vec3(face.getAxis() == Direction.Axis.X ? 0 : half.x * 0.7,
+                    face.getAxis() == Direction.Axis.Y ? 0 : half.y * 0.7, face.getAxis() == Direction.Axis.Z ? 0 : half.z * 0.7);
+                for (int[] k : new int[][] {{0, 0, 0}, {1, 1, 1}, {-1, -1, 1}, {1, -1, -1}, {-1, 1, -1}}) {
+                    Vec3 point = faceCenter.add(spread.x * k[0], spread.y * k[1], spread.z * k[2]);
+                    // Aim a little past the face: a ray that ends exactly on a surface may not count it.
+                    BlockHitResult hit = WorldMemory.clip(bot, point.add(point.subtract(eye).normalize().scale(0.05)), ClipContext.Block.OUTLINE);
+                    if (hit.getType() == HitResult.Type.BLOCK && hit.getBlockPos().equals(pos)
+                        && box.inflate(1.0E-3).contains(hit.getLocation())) { found = hit; break; }
+                }
+                if (found != null) break;
+            }
+            if (found != null) aims.add(found);
+        }
+        return aims;
     }
 
     /** Select through the same inventory menu swap a player uses. */
@@ -667,25 +1126,59 @@ public final class BotController {
         int slot = -1;
         for (int i = 0; i < 36; i++) if (bot.getInventory().getItem(i).is(item.getItem())) { slot = i; break; }
         if (slot < 0) { fail("item missing from inventory"); return; }
-        if (!(item.getItem() instanceof net.minecraft.world.item.BlockItem)) { fail("not a block item"); return; }
         hold(slot);
-        actionItem = item.copy();
+        actionItem = bot.getMainHandItem().copy();
+        // Anything placed by right-click counts: cables, pipes and parts are items, not BlockItems.
         placeFace = face;
         actionTicks = 0;
     }
 
     private void tickPlace(BlockPos pos) {
         if (++actionTicks > 400) { fail("no visible free placement face at " + pos.toShortString()); return; }
-        if (!bot.level().getBlockState(pos).canBeReplaced()) { fail("position occupied"); return; }
+        boolean blockItem = actionItem.getItem() instanceof net.minecraft.world.item.BlockItem;
+        BlockState before = bot.level().getBlockState(pos);
+        // A part (terminal, bus) goes ONTO an occupied block such as a cable: right-click that block's face.
+        boolean attach = !blockItem && !before.canBeReplaced();
+        if (!attach && !before.canBeReplaced()) { fail("position occupied"); return; }
         for (Direction face : Direction.values()) {
             if (placeFace != null && face != placeFace) continue;
-            BlockHitResult hit = BlockPlacement.face(bot, pos, face);
+            BlockHitResult hit = attach ? BlockPlacement.on(bot, pos, face) : BlockPlacement.face(bot, pos, face);
             if (hit == null) continue;
             stopPathing();
             if (!craftAim(hit.getLocation())) return;
-            BlockPlacement.click(bot, hit);
-            if (bot.level().getBlockState(pos).is(((net.minecraft.world.item.BlockItem) actionItem.getItem()).getBlock())) {
+            // Navigation may have selected a tool or a building block on the way here.
+            int slot = -1;
+            for (int i = 0; i < 36; i++) {
+                if (ItemStack.isSameItemSameComponents(bot.getInventory().getItem(i), actionItem)) { slot = i; break; }
+            }
+            if (slot < 0) { fail("item missing from inventory"); return; }
+            hold(slot);
+            int beforeCount = bot.getInventory().countItem(actionItem.getItem());
+            BlockPos beside = pos.relative(face);
+            BlockState besideBefore = bot.level().getBlockState(beside);
+            var result = BlockPlacement.click(bot, hit);
+            if (result.shouldSwing()) bot.swing(InteractionHand.MAIN_HAND);
+            BlockState after = bot.level().getBlockState(pos);
+            boolean used = bot.getInventory().countItem(actionItem.getItem()) < beforeCount;
+            boolean placed = blockItem
+                ? after.is(((net.minecraft.world.item.BlockItem) actionItem.getItem()).getBlock())
+                : used || !after.equals(before);
+            if (result.consumesAction() && placed) {
                 bot.worldMemory().remember(bot, pos);
+                BlockState besideAfter = bot.level().getBlockState(beside);
+                if (attach && after.equals(before) && !besideAfter.equals(besideBefore)) {
+                    // The clicked block did not take the part; the item made a new block next to it.
+                    bot.worldMemory().remember(bot, beside);
+                    finish("placed " + BuiltInRegistries.ITEM.getKey(actionItem.getItem()).getPath() + " as a new "
+                        + BuiltInRegistries.BLOCK.getKey(besideAfter.getBlock()).getPath() + " at " + beside.getX() + " " + beside.getY() + " " + beside.getZ()
+                        + ", beside " + BuiltInRegistries.BLOCK.getKey(before.getBlock()).getPath() + " (not on it); target that block to use it");
+                    return;
+                }
+                if (attach) {
+                    finish("attached " + BuiltInRegistries.ITEM.getKey(actionItem.getItem()).getPath() + " to the " + face.getName()
+                        + " face of " + BuiltInRegistries.BLOCK.getKey(after.getBlock()).getPath() + " at " + pos.getX() + " " + pos.getY() + " " + pos.getZ());
+                    return;
+                }
                 finish("placed " + BuiltInRegistries.ITEM.getKey(actionItem.getItem()).getPath() + " at "
                     + pos.getX() + " " + pos.getY() + " " + pos.getZ());
                 return;
@@ -716,9 +1209,12 @@ public final class BotController {
     private void beginLook(String focus, boolean fresh) {
         lookFocus = focus;
         long now = bot.serverLevel().getGameTime();
-        quickLook = !fresh && panoramaPosition != null && now - lastPanorama < 600
+        boolean recentPanorama = panoramaPosition != null && now - lastPanorama < 600
             && panoramaDimension.equals(bot.level().dimension().location().toString())
             && bot.position().distanceToSqr(panoramaPosition) < 36;
+        // The background camera already sweeps all round (ADR-0012): once it has made a few turns,
+        // an ordinary look reads one frame instead of spinning the head. Only "fresh" spins.
+        quickLook = !fresh && (recentPanorama || bot.vision().completedFrames() >= 6);
         lookFrame = bot.vision().completedFrames();
         if (quickLook) bot.vision().startFrame(); else bot.vision().startPanorama();
         lookTicks = 0;
@@ -759,6 +1255,11 @@ public final class BotController {
         transfer(pos, ContainerTask.Action.WITHDRAW, filter, count, reporter);
     }
 
+    /** Ask the storage network behind a terminal to craft {@code count} of an item it has a pattern for. */
+    public void autocraft(BlockPos pos, String item, int count, Consumer<String> reporter) {
+        transfer(pos, ContainerTask.Action.AUTOCRAFT, item, Math.max(1, count), reporter);
+    }
+
     private void transfer(BlockPos pos, ContainerTask.Action action, String filter, int count, Consumer<String> reporter) {
         try {
             container(pos, action, ContainerFilter.parse(bot, filter), count, reporter);
@@ -767,7 +1268,7 @@ public final class BotController {
         }
     }
 
-    private void container(BlockPos pos, ContainerTask.Action action, Predicate<ItemStack> filter,
+    void container(BlockPos pos, ContainerTask.Action action, Predicate<ItemStack> filter,
         int count, Consumer<String> reporter) {
         start(Task.CONTAINER, pos, reporter);
         containerTask = new ContainerTask(bot, this, pos, action, filter, count, message -> {
@@ -778,6 +1279,24 @@ public final class BotController {
 
     public void craft(ItemStack item, int count, Consumer<String> reporter) {
         craft(item, count, CraftPlan.Mode.CRAFT, reporter);
+    }
+
+    public void transferContainers(BlockPos source, BlockPos destination, String label, Consumer<String> reporter) {
+        stop();
+        skill = new TransferTask(bot, source, destination, label, reporter);
+    }
+
+    void containerRoom(BlockPos pos, ItemStack stack, Consumer<String> reporter) {
+        start(Task.CONTAINER, pos, reporter);
+        containerTask = new ContainerTask(bot, this, pos, ContainerTask.Action.DEPOSIT, s -> false, 0,
+            message -> { containerTask = null; finish(message); }).probe(stack);
+    }
+
+    void containerDetailed(BlockPos pos, boolean deposit, Predicate<ItemStack> filter, int count,
+            Consumer<java.util.Map<dev.blocknet.crafting.ItemKey, Long>> moved, Consumer<String> reporter) {
+        start(Task.CONTAINER, pos, reporter);
+        containerTask = new ContainerTask(bot, this, pos, deposit ? ContainerTask.Action.DEPOSIT : ContainerTask.Action.WITHDRAW,
+            filter, count, message -> { containerTask = null; finish(message); }).movement(moved);
     }
 
     public void get(ItemStack item, int count, Consumer<String> reporter) {
@@ -887,7 +1406,7 @@ public final class BotController {
             skill = null;
             cancelled.complete("failed: cancelled");
         }
-        danger = null; explicitAttack = false;
+        danger = null; explicitAttack = false; hunting = null; shelterTop = null;
         if (excavating != null) { excavating = null; reporter.accept("failed: cancelled"); }
         exploring = null;
         exploreBefore = null;
@@ -967,7 +1486,9 @@ public final class BotController {
 
     /** Called from {@link BotPlayer#tick()} before physics: sets this tick's inputs. */
     public void tick() {
+        if (tickSurvival()) return;
         if (tickDanger()) return;
+        if (tickHunger()) return;
         if (usedContainerMenu != null) {
             if (bot.containerMenu == usedContainerMenu && usedContainerMenu.stillValid(bot)) {
                 bot.containerMemory().observe(bot, usedContainerPos);
@@ -1107,8 +1628,23 @@ public final class BotController {
         }
         if (!leader.isAlive() || leader.isRemoved()
             || bot.serverLevel().getEntity(leader.getUUID()) != leader) {
-            fail(followName + " is gone");
+            if (hunting != null) {
+                explicitAttack = false;
+                if (killed()) lootKill();
+                else finish(hunted());
+            } else fail(followName + " is gone");
             return;
+        }
+        if (hunting != null) {
+            if (++huntTicks > 20 * 120) {
+                fail("lost " + huntName + " after chasing it for 2 minutes, last seen at " + leader.blockPosition().toShortString());
+                return;
+            }
+            if (bot.distanceTo(leader) <= 3.5 && bot.hasLineOfSight(leader)) {
+                stopPathing();
+                beginDanger(hunting);
+                return;
+            }
         }
         boolean visible = WorldMemory.clip(bot, leader.getEyePosition(), ClipContext.Block.VISUAL).getType() == HitResult.Type.MISS;
         if (visible != followVisible) {
@@ -1116,13 +1652,14 @@ public final class BotController {
             trace("follow", visible ? "sees " + followName + " again" : "lost sight of " + followName
                 + "; heading to where they were last seen, " + BlockPos.containing(lastSeenFollowPosition).toShortString());
         }
-        if (visible) {
+        // A hunted creature is tracked live (ADR-0011); a followed player only by sight.
+        if (visible || hunting != null) {
             lastSeenFollowPosition = leader.position();
             lastSeenFollowOnGround = leader.onGround();
         }
         double distanceSq = bot.position().distanceToSqr(lastSeenFollowPosition);
         pathing().settings().allowSprint.set(followAllowSprint && distanceSq > 64);
-        if (distanceSq <= 9 && bot.onGround()) {
+        if (distanceSq <= 9 && bot.onGround() && hunting == null) {
             stopPathing();
             bot.zza = 0;
             bot.xxa = 0;
@@ -1332,6 +1869,7 @@ public final class BotController {
         if (hit == null) {
             return;
         }
+        if (useAims != null && useAimIndex < useAims.size()) hit = useAims.get(useAimIndex++);
         ServerLevel level = bot.serverLevel();
         String block = level.getBlockState(pos).getBlock().getName().getString();
         // Same call the server makes for a client's right-click packet: the block (or mod) decides what happens.
@@ -1342,6 +1880,13 @@ public final class BotController {
         finally { bot.setShiftKeyDown(sneaking); }
         if (result.shouldSwing()) {
             bot.swing(InteractionHand.MAIN_HAND);
+        }
+        if (!result.consumesAction() && bot.containerMenu == bot.inventoryMenu) {
+            if (useAims == null) useAims = partAims(pos);
+            if (useAimIndex < useAims.size()) {
+                trace("aim", "clicking " + block + " did nothing; trying another part of it (" + (useAimIndex + 1) + "/" + useAims.size() + ")");
+                return;
+            }
         }
         if (!(bot.containerMenu instanceof CraftingMenu)
             && !ContainerMemory.containerSlots(bot).isEmpty()) {

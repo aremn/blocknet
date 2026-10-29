@@ -23,19 +23,31 @@ public final class BridgeTools {
         add("inv", "Read inventory and tool, food and space hints.", false);
         add("changes", "Read state changes since this connection's last changes call.", false);
         add("memory", "Read remembered container contents; optionally filter items.", false, "filter?");
+        add("inspect", "Resolve an observed object ref to its exact block and supported actions, without moving or opening it.", false, "ref");
+        add("menu", "Read the currently open player menu: id, slots, cursor and synchronized data values (progress/energy where supplied by the menu). Open through use ref first. An open storage-network terminal adds a network section: exact stored amounts (craftable-only keys listed apart), or pending/disconnected/empty; filter narrows it, page continues a long list and fails when the network changed. Does not reveal closed storage.", false, "filter?", "page?");
+        add("encode_pattern", "On an open pattern encoding terminal (use its ref first), encode a crafting pattern for an item from the game's own recipe, using a blank pattern from the inventory or terminal, and take the encoded pattern into the inventory.", false, "item");
+        add("speak", "Internal (brain voice): play a 16-bit mono WAV, base64, from the bot through voice chat.", false, "wav");
+        add("heard", "Internal (brain voice): show a player what the bot understood from their voice.", false, "player", "text");
+        add("job", "Read a saved unfinished transfer job. action forget explicitly abandons its bookkeeping; real cargo stays in inventory. Only forget when the player asks to abandon/reconcile it.", false, "action?");
+        add("menu_click", "Click a slot in the currently open menu through player code; menu_id guards stale screens. click: pickup, quick_move or button. Mouse button 0/1; button mode uses the menu button id. Wait three ticks between clicks; inspect afterward.", false, "menu_id", "slot", "button?", "click?");
+        add("transfer", "Move ALL contents from source ref to destination ref through menu clicks and repeated trips. Keeps owned items. Success confirms source empty; failures report partial delivery. Use look stations or inspect to identify refs.", true, "source", "destination");
         add("look", "Return the scene; recent nearby looks use one frontal frame, fresh forces a 360 degree turn; optional focus: trees, ores, water, danger, built, stations, food.", true, "focus?", "fresh?");
         add("scene", "Read the remembered scene instantly, without turning; delta gives one line of changes.", false, "delta?", "goal?");
+        add("map", "Read the map: a 9x9 grid of 16-block cells around you, known places (structures v#, caves k# with entrances) and creatures within 48 blocks (e#) at their live positions, even behind walls; optional focus: a type, cave, structure or ref. Ores are not on the map.", false, "focus?");
+        add("locate", "Full perception: the nearest blocks of an id or #tag (ores, logs, chests, machines, anything) through walls in loaded chunks, and which containers or machines around hold an item, with coordinates. Read-only; radius default 96, max 192.", false, "what", "radius?");
         add("explore", "Walk through observed safe space toward a frontier, then look and report new objects.", true, "direction?", "distance?");
         add("knowledge", "Read ore heights, frequency, biome restrictions, harvest tool and loot from server data.", false, "item");
         add("wiki", "Read in-game guides/quests/tooltips; use before crafting unfamiliar modded items.", false, "query");
-        add("explore_caves", "Explore a seen cave mouth or dark opening, follow safe observed frontiers, gather target wall ore and place owned torches in darkness; return along breadcrumbs after five minutes or enough drops. Reports no cave seen if a fresh look finds none.", true, "item", "count?");
+        add("explore_caves", "Explore a seen cave mouth or dark opening, follow safe observed frontiers, gather target wall ore and place owned torches in darkness; return along breadcrumbs after five minutes or enough drops. Without cave, a fresh look then the nearest map cave entrance; cave k# (from map) walks into that cave first.", true, "item", "count?", "cave?");
         add("mine_ore", "Descend to a known ore peak, bypass observed fluids, then mine a main tunnel and side branches until count or a ten minute budget; progress reports depth and actual drops.", true, "item", "count?");
-        add("obtain", "Obtain at least count items recursively from inventory, remembered containers, crafting and observed survival sources.", true, "item", "count?");
+        add("obtain", "Acquire a TOTAL count, including owned: inventory, remembered containers, supported crafting/smelting and survival sources; prepares needed tools. source world = mine/smelt/craft it yourself and never take from chests (use it for find/mine/добудь/накопай requests); any (default) may withdraw from remembered chests. Unsupported machine/network recipes return a blocker; plan and wiki explain dependencies.", true, "item", "count?", "source?");
         add("plan", "Plan recipes without acting; mode craft makes new items, get counts owned items.", false,
             "item", "count?", "mode?");
         add("come", "Walk near an online player in the same dimension.", true, "player");
         add("follow", "Follow a player until stopped or replaced by another task.", true, "player");
-        add("goto", "Walk to an observed object ref, or supplied exact block coordinates; never invent coordinates.", true, "ref?", "x?", "y?", "z?");
+        add("give", "Walk next to a player and toss owned items to them; item or all, omitted count means all matching items. Does not obtain items.", true, "player", "item", "count?");
+        add("drop", "Toss owned items where you stand; item or all, omitted count means all matching items.", true, "item", "count?");
+        add("goto", "Walk to a ref: observed object (to the ground beside a building), map place v#/k# (cave entrance), creature e#, item i#, a player name; or exact block coordinates; never invent coordinates.", true, "ref?", "x?", "y?", "z?");
         JsonArray choices = new JsonArray();
         for (String[] keys : List.of(new String[] {"ref"}, new String[] {"x", "y", "z"})) {
             JsonObject choice = new JsonObject(); JsonArray required = new JsonArray();
@@ -46,18 +58,23 @@ public final class BridgeTools {
         add("descend", "Dig a safe 1-wide, 2-high staircase down to y; optional cardinal direction, otherwise facing. Requires a pickaxe for stone.", true, "y", "direction?");
         add("tunnel", "Dig a safe 1x2 tunnel at this level and report uncovered ores with refs. Requires a pickaxe for stone.", true, "direction", "length");
         add("mine", "Walk to and mine one block, then collect its drops; needs a suitable tool.", true, "x", "y", "z");
-        add("gather", "Gather MORE items from an observed ref or logs/wood, stone/cobblestone, coal, iron, dirt, sand or exact item id; remembered refs are revisited and reobserved, soil is cleared by a safe staircase; requires the right tool.", true, "item?", "ref?", "target?", "count?");
-        add("use", "Walk to and right-click one block; sneak bypasses block interactions.", true, "x", "y", "z", "sneak?");
-        add("attack", "Attack an observed entity ref or type with the best weapon; retreat when overwhelmed.", true, "target");
+        add("gather", "Harvest ONE observed thing: gather {ref} with a t#/s#/o# ref (or the player's pointed p#) and no count chops that whole tree or object, then stops. With count, or with logs/wood, stone/cobblestone, coal, iron, dirt, sand or an item id, gathers that many more. Remembered refs are revisited and reobserved; requires the right tool.", true, "item?", "ref?", "target?", "count?");
+        add("use", "Walk to and right-click an observed ref or exact block; sneak bypasses block interactions.", true, "x?", "y?", "z?", "sneak?", "ref?");
+        add("attack", "Hunt a creature by ref e# (from map or look), type or player name: chase its live position, fight with the best weapon, retreat when overwhelmed, then pick up its drops; reports killed (with drops) or lost.", true, "target");
+        add("pickup", "Pick up dropped items within 24 blocks: an item ref i# (from map or look), an item id, or all when omitted. Kills already collect their own drops.", true, "item?", "ref?");
         add("eat", "Eat one inventory food through player use; omitted item selects safe nutritious food.", true, "item?");
-        add("place", "Place an inventory block at x y z; optional clicked face: up/down/north/south/east/west. Sneaks automatically.", true, "item", "x", "y", "z", "face?");
+        add("place", "Place an inventory block, or any item that goes on by right-click (cables, pipes, parts), at x y z; optional face: up/down/north/south/east/west. If x y z is already occupied (a cable) and the item is a part (terminal, bus), it is attached to that block's given face. Sneaks automatically.", true, "item", "x", "y", "z", "face?");
         add("craft", "Craft a count of NEW items; look for stations first and read missing-material hints.", true, "item", "count?");
         add("get", "Obtain at least count items, counting inventory and remembered sources.", true, "item", "count?");
-        add("look-in", "Open a container, remember its visible menu slots and close it.", true, "x", "y", "z");
-        add("deposit", "Put items into a container; filter is item id, #tag, all or junk; omitted count means all.", true,
-            "x", "y", "z", "filter", "count?");
-        add("withdraw", "Take items from a container through menu clicks; omitted count means all matching items.", true,
-            "x", "y", "z", "filter", "count?");
+        add("look-in", "Open a container by ref or coordinates, report its visible contents and close it. A storage-network terminal reports the network contents.", true, "x?", "y?", "z?", "ref?");
+        add("deposit", "Put items into a container; filter is item id, #tag, loot (everything except your tools, weapons, armor and food: use it for 'put everything away'), all (literally everything) or junk; omitted count means all. A storage-network terminal takes them into the network; a full network reports what was moved.", true,
+            "x?", "y?", "z?", "filter", "count?", "ref?");
+        add("withdraw", "Take items from a container through menu clicks; omitted count means all matching items. Works on a storage-network terminal (exact count, network items only).", true,
+            "x?", "y?", "z?", "filter", "count?", "ref?");
+        add("autocraft", "Ask a storage network to craft items it has a pattern for, through its terminal (ref or x, y, z) like a player: the network plans and runs the job. Reports submitted or what the network is short of; withdraw the result later.", true,
+            "x?", "y?", "z?", "item", "count?", "ref?");
+        for (String name : List.of("use", "look-in", "deposit", "withdraw", "autocraft"))
+            TOOLS.get(name).params().add("oneOf", choices.deepCopy());
         add("stop", "Cancel the current action immediately.", false);
         add("say", "Say one short message to all players as this bot.", false, "text", "player?");
     }
@@ -73,7 +90,7 @@ public final class BridgeTools {
             boolean optional = field.endsWith("?");
             String key = optional ? field.substring(0, field.length() - 1) : field;
             JsonObject property = new JsonObject();
-            boolean number = List.of("x", "y", "z", "count", "distance", "length").contains(key);
+            boolean number = List.of("x", "y", "z", "count", "distance", "length", "menu_id", "slot", "button").contains(key);
             property.addProperty("type", number ? "integer" : List.of("sneak", "delta", "fresh").contains(key) ? "boolean" : "string");
             if (key.equals("count")) {
                 property.addProperty("minimum", 1);
@@ -115,6 +132,8 @@ public final class BridgeTools {
     public static void run(BotPlayer bot, Tool tool, JsonObject args,
             Map<String, Map<String, Long>> baselines, Consumer<String> report) {
         args = args.deepCopy();
+        // Models often name goto's ref "target"; accept it rather than failing the step.
+        if (tool.name().equals("goto") && args.has("target") && !args.has("ref")) args.add("ref", args.remove("target"));
         for (String key : List.of("ref", "item", "target")) {
             if (args.has(key) && (tool.name().equals("goto") || tool.name().equals("gather"))) {
                 var value = args.get(key);
@@ -159,7 +178,82 @@ public final class BridgeTools {
             throw new IllegalArgumentException("goto needs ref OR x, y, z");
         }
         if (tool.name().equals("scene") && args.has("goal")) bot.controller().scene().goal(args.get("goal").getAsString());
+        if (tool.name().equals("menu")) { report.accept(dev.blocknet.control.MenuAccess.snapshot(bot,
+            args.has("filter") ? word(args, "filter", null) : null, args.has("page") ? word(args, "page", null) : null)); return; }
+        if (tool.name().equals("speak")) {
+            report.accept(dev.blocknet.voice.VoiceOutput.speak(bot, java.util.Base64.getDecoder().decode(args.get("wav").getAsString())));
+            return;
+        }
+        if (tool.name().equals("heard")) {
+            var listener = bot.getServer().getPlayerList().getPlayerByName(args.get("player").getAsString());
+            if (listener != null) listener.displayClientMessage(net.minecraft.network.chat.Component.literal(
+                "[" + bot.getGameProfile().getName() + " heard] " + args.get("text").getAsString()).withStyle(net.minecraft.ChatFormatting.GRAY), false);
+            report.accept(listener == null ? "player offline" : "shown");
+            return;
+        }
+        if (tool.name().equals("encode_pattern")) { report.accept(dev.blocknet.control.MenuAccess.encodePattern(bot, word(args, "item", null))); return; }
+        if (tool.name().equals("job")) {
+            var memory=dev.blocknet.memory.JobMemory.of(bot);
+            if(args.has("action")) {
+                if(!args.get("action").getAsString().equals("forget"))throw new IllegalArgumentException("job action must be forget");
+                memory.clearTransfer();report.accept("abandoned transfer bookkeeping; any carried cargo remains in inventory");
+            } else report.accept(memory.transfer().isEmpty()?"no unfinished transfer":memory.transfer().toString());
+            return;
+        }
+        if (tool.name().equals("menu_click")) {
+            report.accept(dev.blocknet.control.MenuAccess.click(bot, args.get("menu_id").getAsInt(), args.get("slot").getAsInt(),
+                args.has("button") ? args.get("button").getAsInt() : 0, args.has("click") ? args.get("click").getAsString() : "pickup")); return;
+        }
+        if (tool.name().equals("inspect")) {
+            var hint=HintTargets.find(bot.getServer(),word(args,"ref",null));
+            if(hint!=null) {
+                report.accept("player hint from "+hint.player()+"; dimension "+hint.dimension()+"; block "+hint.position().toShortString()
+                    +"; not eye evidence; use/look-in/withdraw/deposit/transfer can approach and verify it through player interactions");return;
+            }
+            var obj = bot.vision().resolve(word(args, "ref", null));
+            if (obj == null) throw new IllegalArgumentException("Unknown observed ref; use look stations");
+            report.accept(bot.controller().scene().object(obj) + "; block " + obj.nearest().toShortString()
+                + (dev.blocknet.control.BlockParts.of(bot.level(), obj.nearest()).isEmpty() ? ""
+                    : "; parts are on this one block: use/look-in it to open a terminal part; a click tries each part")
+                + "; actions: goto, use" + (List.of("container", "machine", "station").contains(obj.category())
+                    ? "; may open a menu: look-in (confirms slots), withdraw, deposit, transfer; menu support not yet verified" : ""));
+            return;
+        }
+        if (tool.name().equals("transfer")) {
+            String from = word(args, "source", null), to = word(args, "destination", null);
+            bot.controller().transferContainers(refPosition(bot, from), refPosition(bot, to), from + " " + to, report);
+            return;
+        }
+        if (List.of("use", "look-in", "deposit", "withdraw", "autocraft").contains(tool.name())) {
+            boolean coords = args.has("x") && args.has("y") && args.has("z");
+            if (args.has("ref") ? args.has("x") || args.has("y") || args.has("z") : !coords)
+                throw new IllegalArgumentException("Expected ref OR x, y, z");
+            var pos = args.has("ref") ? refPosition(bot, word(args, "ref", null))
+                : new net.minecraft.core.BlockPos(args.get("x").getAsInt(), args.get("y").getAsInt(), args.get("z").getAsInt());
+            switch (tool.name()) {
+                case "use" -> bot.controller().use(pos, args.has("sneak") && args.get("sneak").getAsBoolean(), report);
+                case "look-in" -> bot.controller().lookIn(pos, result -> report.accept(result + (result.startsWith("failed:") ? ""
+                    : "; " + bot.containerMemory().text(bot.getServer().overworld().getGameTime(), null,
+                        new dev.blocknet.memory.ContainerMemory.Location(bot.level().dimension().location().toString(), pos.asLong())))));
+                case "deposit" -> bot.controller().deposit(pos, word(args, "filter", null), args.has("count") ? args.get("count").getAsInt() : 0, report);
+                case "withdraw" -> bot.controller().withdraw(pos, word(args, "filter", null), args.has("count") ? args.get("count").getAsInt() : 0, report);
+                case "autocraft" -> bot.controller().autocraft(pos, word(args, "item", null), args.has("count") ? args.get("count").getAsInt() : 1, report);
+            }
+            return;
+        }
         if (tool.name().equals("attack")) { bot.controller().attack(word(args, "target", null), report); return; }
+        if (tool.name().equals("pickup")) {
+            bot.controller().pickup(args.has("ref") ? word(args, "ref", null) : args.has("item") ? word(args, "item", null) : "", report);
+            return;
+        }
+        if (tool.name().equals("locate")) {
+            report.accept(dev.blocknet.map.WorldFind.find(bot, word(args, "what", null), args.has("radius") ? args.get("radius").getAsInt() : 96));
+            return;
+        }
+        if (tool.name().equals("map")) {
+            report.accept(dev.blocknet.map.WorldMap.text(bot, args.has("focus") ? args.get("focus").getAsString() : ""));
+            return;
+        }
         if (tool.name().equals("wiki")) {
             report.accept(dev.blocknet.knowledge.Wiki.get(bot.getServer()).search(args.get("query").getAsString()));
             return;
@@ -190,6 +284,7 @@ public final class BridgeTools {
             source = source.withEntity(player).withPosition(player.position());
         }
         if (tool.name().equals("place")) words.add(word(args, "item", null));
+        if (tool.name().equals("give")) words.add(word(args, "player", null));
         if (tool.name().equals("gather")) {
             String target = null;
             for (var entry : args.entrySet()) {
@@ -199,6 +294,13 @@ public final class BridgeTools {
                 for (String key : List.of("item", "target", "ref")) if (args.has(key)) { target = word(args, key, null); break; }
             }
             if (target == null || target.isEmpty()) throw new IllegalArgumentException("Missing item or ref");
+            // "This tree" said while pointing: the player's hint becomes the observed object around that block.
+            var hint = target.startsWith("p") ? HintTargets.find(bot.getServer(), target) : null;
+            if (hint != null) {
+                var around = bot.vision().objects().stream().filter(o -> o.bounds().inflate(0.5).contains(net.minecraft.world.phys.Vec3.atCenterOf(hint.position()))).findFirst();
+                if (around.isEmpty()) throw new IllegalArgumentException("I have not seen what " + target + " points at yet; look at it first");
+                target = around.get().ref();
+            }
             words.add(target);
             if (args.has("count")) words.add(word(args, "count", null));
         }
@@ -209,7 +311,7 @@ public final class BridgeTools {
         for (String key : List.of("item", "filter", "count")) {
             if (!tool.name().equals("gather") && args.has(key) && !(key.equals("item") && tool.name().equals("place"))) words.add(word(args, key, null));
         }
-        for (String key : List.of("ref", "focus", "direction", "distance", "length")) {
+        for (String key : List.of("ref", "focus", "direction", "distance", "length", "cave", "source")) {
             if (args.has(key) && !tool.name().equals("gather")) words.add(word(args, key, null));
         }
         if (tool.name().equals("explore") && args.has("distance") && !args.has("direction")) words.add(words.size() - 1, "auto");
@@ -231,6 +333,20 @@ public final class BridgeTools {
     public static String normalizeRef(String value) {
         String first = value.trim().replace("\"", "").split(",", 2)[0].trim();
         return first.matches("[a-z][0-9]+") ? first : value;
+    }
+
+    private static net.minecraft.core.BlockPos refPosition(BotPlayer bot, String ref) {
+        var hint=HintTargets.find(bot.getServer(),ref);
+        if(hint!=null) {
+            if(!hint.dimension().equals(bot.level().dimension().location().toString()))throw new IllegalArgumentException("Player hint is in another dimension");
+            return hint.position();
+        }
+        var object = bot.vision().resolve(ref);
+        if (object == null) throw new IllegalArgumentException("Unknown observed ref " + ref + "; use look stations");
+        var evidence = bot.worldMemory().observed().cell(bot.level().dimension().location().toString(), object.nearest());
+        if (evidence == null || evidence.stateId() < 0)
+            throw new IllegalArgumentException("Retired or unconfirmed ref " + ref + "; reobserve with look stations");
+        return object.nearest();
     }
 
     private static String word(JsonObject args, String key, String fallback) {

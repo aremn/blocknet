@@ -1,6 +1,7 @@
 package dev.blocknet.memory;
 
 import dev.blocknet.body.BotPlayer;
+import dev.blocknet.control.NetworkMenus;
 import dev.blocknet.crafting.ItemKey;
 import dev.blocknet.crafting.RememberedSource;
 import dev.blocknet.state.ItemDescriber;
@@ -24,11 +25,14 @@ import net.minecraft.world.level.block.ChestBlock;
 import net.minecraft.world.level.block.state.properties.ChestType;
 import net.minecraft.world.level.saveddata.SavedData;
 
-/** Last menu observations, never live storage queries. One overworld SavedData per bot UUID. */
+/**
+ * Last menu observations, never live storage queries. One overworld SavedData per bot UUID. An open
+ * storage-network terminal is remembered by its stored network items ({@code network} entries).
+ */
 public final class ContainerMemory extends SavedData {
     public record Location(String dimension, long position) {}
     public record Entry(Location location, String blockId, Map<ItemKey, Long> contents, long seenTick,
-                        List<Long> positions) {
+                        List<Long> positions, boolean network) {
         public Entry {
             contents = java.util.Collections.unmodifiableMap(new TreeMap<>(contents));
             positions = List.copyOf(positions);
@@ -58,7 +62,14 @@ public final class ContainerMemory extends SavedData {
 
     public void observe(BotPlayer bot, BlockPos pos) {
         var slots = containerSlots(bot);
-        if (slots.isEmpty()) {
+        var network = bot.containerMenu == bot.inventoryMenu ? null : NetworkMenus.read(bot, bot.containerMenu);
+        if (network != null && network.status() == NetworkMenus.Status.PENDING) return;
+        if (network != null && network.status() == NetworkMenus.Status.DISCONNECTED) {
+            // Unknown is not empty: an unpowered or cut-off network no longer counts as stock.
+            forget(bot, pos);
+            return;
+        }
+        if (network == null && slots.isEmpty()) {
             return;
         }
         var state = bot.level().getBlockState(pos);
@@ -73,7 +84,10 @@ public final class ContainerMemory extends SavedData {
         entries.values().removeIf(entry -> entry.location().dimension().equals(dimension)
             && entry.positions().stream().anyMatch(positions::contains));
         Map<ItemKey, Long> contents = new TreeMap<>();
-        for (Slot slot : slots) {
+        // Only real stored amounts; craftable-only keys and the terminal's own grid slots are not stock.
+        if (network != null) for (var entry : network.entries()) {
+            if (!entry.item().isEmpty() && entry.amount() > 0) contents.merge(new ItemKey(entry.item()), entry.amount(), Long::sum);
+        } else for (Slot slot : slots) {
             ItemStack stack = slot.getItem();
             if (!stack.isEmpty()) {
                 contents.merge(new ItemKey(stack), (long) stack.getCount(), Long::sum);
@@ -81,7 +95,7 @@ public final class ContainerMemory extends SavedData {
         }
         Location location = new Location(dimension, positions.getFirst());
         entries.put(location, new Entry(location, BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString(),
-            contents, bot.getServer().overworld().getGameTime(), positions));
+            contents, bot.getServer().overworld().getGameTime(), positions, network != null));
         setDirty();
     }
 
@@ -94,16 +108,26 @@ public final class ContainerMemory extends SavedData {
     }
 
     public List<RememberedSource> sources(BotPlayer bot) {
+        // "Find/mine it" jobs gather from the world; chests are not a source then.
+        if (bot.controller().worldOnly()) return List.of();
         String dimension = bot.level().dimension().location().toString();
+        // Two terminals may show one network; without a network identity only the nearest one counts.
+        boolean[] network = {false};
         return entries.values().stream().filter(entry -> entry.location().dimension().equals(dimension))
             .sorted(Comparator.comparingDouble(entry -> bot.position().distanceToSqr(
                 net.minecraft.world.phys.Vec3.atCenterOf(BlockPos.of(entry.location().position())))))
+            .filter(entry -> !entry.network() || !network[0] && (network[0] = true))
             .map(entry -> new RememberedSource(dimension, entry.location().position(), entry.blockId(), entry.contents()))
             .toList();
     }
 
     public String text(long now, Predicate<ItemStack> filter) {
-        return entries.values().stream().filter(entry -> filter == null || entry.contents().keySet().stream()
+        return text(now, filter, null);
+    }
+
+    public String text(long now, Predicate<ItemStack> filter, Location only) {
+        return entries.values().stream().filter(entry -> only == null || entry.location().dimension().equals(only.dimension())
+            && entry.positions().contains(only.position())).filter(entry -> filter == null || entry.contents().keySet().stream()
             .anyMatch(key -> filter.test(key.stack()))).map(entry -> {
                 var source = new RememberedSource(entry.location().dimension(), entry.location().position(), entry.blockId(), entry.contents());
                 long seconds = Math.max(0, now - entry.seenTick()) / 20;
@@ -114,7 +138,7 @@ public final class ContainerMemory extends SavedData {
                         + (description.maxDurability() == 0 ? "" : " " + description.remaining() + "/" + description.maxDurability())
                         + (description.customName().isEmpty() ? "" : " \"" + description.customName() + "\"");
                 }).collect(Collectors.joining(", "));
-                return source.description() + " [" + source.dimension() + "] (seen " + age + " ago): "
+                return source.description() + (entry.network() ? " network terminal" : "") + " [" + source.dimension() + "] (seen " + age + " ago): "
                     + (contents.isEmpty() ? "empty" : contents);
             }).collect(Collectors.collectingAndThen(Collectors.joining("\n"), text -> text.isEmpty() ? "no remembered containers" : text));
     }
@@ -139,6 +163,7 @@ public final class ContainerMemory extends SavedData {
             value.putString("block", entry.blockId());
             value.putLong("seen", entry.seenTick());
             value.putLongArray("positions", entry.positions());
+            if (entry.network()) value.putBoolean("network", true);
             ListTag contents = new ListTag();
             entry.contents().forEach((key, count) -> {
                 CompoundTag item = new CompoundTag();
@@ -167,7 +192,8 @@ public final class ContainerMemory extends SavedData {
                 }
             }
             List<Long> positions = java.util.Arrays.stream(value.getLongArray("positions")).boxed().toList();
-            memory.entries.put(location, new Entry(location, value.getString("block"), contents, value.getLong("seen"), positions));
+            memory.entries.put(location, new Entry(location, value.getString("block"), contents, value.getLong("seen"), positions,
+                value.getBoolean("network")));
         }
         return memory;
     }

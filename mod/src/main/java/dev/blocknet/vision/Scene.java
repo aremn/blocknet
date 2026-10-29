@@ -7,7 +7,7 @@ import java.util.stream.Collectors;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.world.phys.Vec3;
 
-/** Bounded, egocentric summaries. Every object and entity comes from eye evidence. */
+/** Bounded, egocentric summaries. Objects come from eye evidence; creatures from the radar (ADR-0011). */
 public final class Scene {
     private final BotPlayer bot;
     private final Map<String, String> looks = new HashMap<>();
@@ -44,7 +44,8 @@ public final class Scene {
             + (previous.containsKey(o.ref()) ? 0 : 20) - bot.position().distanceTo(o.center());
     }
     public String object(ObjectGraph.ObjectView o) {
-        return o.ref() + " " + o.kind() + " x" + o.knownMembers() + " "
+        return o.ref() + " " + o.kind() + (o.knownMembers() == 1 ? dev.blocknet.control.BlockParts.label(bot.level(), o.nearest()) : "")
+            + " x" + o.knownMembers() + " "
             + Frontiers.direction(o.center().subtract(bot.position())) + " "
             + Math.round(bot.position().distanceTo(Vec3.atCenterOf(o.nearest()))) + "m"
             + (o.provenance() == ObjectGraph.Provenance.REMEMBERED ? " (seen before)" : "")
@@ -81,20 +82,19 @@ public final class Scene {
             } else lines.add(category + ": " + objects.stream().limit(2).map(this::object).collect(Collectors.joining("; ")));
         });
         if (focus.isEmpty() || focus.equals("danger") || focus.equals("food")) {
-            Map<String, List<VisionSensor.EntitySeen>> entities = new LinkedHashMap<>();
-            bot.vision().entities().stream().filter(e -> focus.isEmpty() || focus.equals("danger") && e.category().equals("hostile")
-                || focus.equals("food") && food(e))
-                .sorted(Comparator.comparingDouble(e -> bot.position().distanceTo(e.position())))
-                .forEach(e -> entities.computeIfAbsent(e.category(), k -> new ArrayList<>()).add(e));
+            // Creatures and dropped items come from the radar with refs (e#, i#; ADR-0011).
+            Map<String, List<String>> entities = new LinkedHashMap<>();
+            bot.radar().contacts().stream().filter(c -> c.live() && (focus.isEmpty() || focus.equals("danger") && c.category().equals("hostile")
+                || focus.equals("food") && food(c.uuid())))
+                .forEach(c -> entities.computeIfAbsent(c.category(), k -> new ArrayList<>()).add(dev.blocknet.map.WorldMap.contact(bot, c)));
             entities.forEach((category, seen) -> lines.add((category.equals("passive") ? "animals" : category.equals("player") ? "players" : category)
-                + ": " + seen.stream().limit(2).map(e -> (e.name().isEmpty() ? e.type() : e.name()) + " " + Frontiers.direction(e.position().subtract(bot.position()))
-                    + " " + Math.round(bot.position().distanceTo(e.position())) + "m").collect(Collectors.joining("; "))));
+                + ": " + seen.stream().limit(category.equals("player") ? 2 : 3).collect(Collectors.joining("; "))));
         }
         if (focus.isEmpty()) lines.add(unexplored());
         return lines.isEmpty() ? "none seen; " + unexplored() + "; try explore" : lines.stream().limit(12).collect(Collectors.joining("\n"));
     }
-    private boolean food(VisionSensor.EntitySeen seen) {
-        net.minecraft.world.entity.Entity entity = bot.serverLevel().getEntity(seen.uuid());
+    private boolean food(UUID uuid) {
+        net.minecraft.world.entity.Entity entity = bot.serverLevel().getEntity(uuid);
         return entity instanceof net.minecraft.world.entity.animal.Animal
             || entity instanceof net.minecraft.world.entity.item.ItemEntity item
                 && item.getItem().has(net.minecraft.core.component.DataComponents.FOOD);
@@ -104,6 +104,7 @@ public final class Scene {
     private Map<String, String> snapshot() {
         Map<String, String> result = new TreeMap<>();
         bot.vision().objects().forEach(o -> result.put(o.ref(), o.category() + " " + o.kind()));
+        // Change detection stays on what the eyes see: creatures beyond walls move all the time.
         bot.vision().entities().forEach(e -> result.put(e.uuid().toString(), e.type() + " " + Frontiers.direction(e.position().subtract(bot.position())) + " " + Math.round(bot.position().distanceTo(e.position()))));
         return result;
     }

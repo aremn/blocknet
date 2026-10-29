@@ -37,6 +37,7 @@ public final class Knowledge {
     private final Map<Block, Set<Item>> drops = new HashMap<>();
     private final Map<Item, Ore> ores = new HashMap<>();
     private final Map<Item, Set<String>> otherSources = new HashMap<>();
+    private final Map<ResourceLocation, Set<Item>> lootTables = new HashMap<>();
 
     public static void started(ServerStartedEvent event) { rebuild(event.getServer()); }
     public static void reload(OnDatapackSyncEvent event) {
@@ -55,15 +56,26 @@ public final class Knowledge {
         var access = server.reloadableRegistries().get();
         var ops = access.createSerializationContext(JsonOps.INSTANCE);
         Map<ResourceLocation, Set<Item>> tables = new HashMap<>();
+        Map<ResourceLocation, Set<ResourceLocation>> references = new HashMap<>();
         access.registryOrThrow(Registries.LOOT_TABLE).entrySet().forEach(entry -> {
             Set<Item> items = new LinkedHashSet<>();
-            LootTable.DIRECT_CODEC.encodeStart(ops, entry.getValue()).result().ifPresent(json -> lootItems(json, items));
+            Set<ResourceLocation> refs = new LinkedHashSet<>();
+            LootTable.DIRECT_CODEC.encodeStart(ops, entry.getValue()).result().ifPresent(json -> lootItems(json, items, refs));
             tables.put(entry.getKey().location(), Set.copyOf(items));
-            if (entry.getKey().location().getPath().startsWith("entities/")) for (Item item : items)
-                otherSources.computeIfAbsent(item, k -> new TreeSet<>()).add("mob drops: " + entry.getKey().location().getPath().substring(9));
+            references.put(entry.getKey().location(), refs);
+        });
+        // A table may include another (a white sheep's table holds its wool and refers to the
+        // plain sheep table for mutton): what it can drop is the union of both.
+        Map<ResourceLocation, Set<Item>> resolved = new HashMap<>();
+        tables.keySet().forEach(id -> resolved.put(id, Set.copyOf(resolve(id, tables, references, new HashSet<>()))));
+        tables.putAll(resolved);
+        tables.forEach((id, items) -> {
+            if (id.getPath().startsWith("entities/")) for (Item item : items)
+                otherSources.computeIfAbsent(item, k -> new TreeSet<>()).add("mob drops: " + id.getPath().substring(9));
         });
         for (Block block : BuiltInRegistries.BLOCK)
             drops.put(block, tables.getOrDefault(block.getLootTable().location(), Set.of()));
+        lootTables.putAll(tables);
 
         Map<Item, Set<Block>> blocks = new HashMap<>();
         Map<Item, List<Range>> ranges = new HashMap<>();
@@ -128,15 +140,28 @@ public final class Knowledge {
         });
     }
 
-    private static void lootItems(JsonElement json, Set<Item> result) {
-        if (json.isJsonArray()) { json.getAsJsonArray().forEach(e -> lootItems(e, result)); return; }
+    private static void lootItems(JsonElement json, Set<Item> result, Set<ResourceLocation> refs) {
+        if (json.isJsonArray()) { json.getAsJsonArray().forEach(e -> lootItems(e, result, refs)); return; }
         if (!json.isJsonObject()) return;
         var object = json.getAsJsonObject();
-        if (object.has("type") && object.get("type").isJsonPrimitive() && object.get("type").getAsString().equals("minecraft:item") && object.has("name")) {
+        String type = object.has("type") && object.get("type").isJsonPrimitive() ? object.get("type").getAsString() : "";
+        if (type.equals("minecraft:item") && object.has("name")) {
             var id = ResourceLocation.tryParse(object.get("name").getAsString());
             if (id != null && BuiltInRegistries.ITEM.containsKey(id)) result.add(BuiltInRegistries.ITEM.get(id));
         }
-        object.entrySet().forEach(e -> lootItems(e.getValue(), result));
+        if (type.equals("minecraft:loot_table") && object.has("value") && object.get("value").isJsonPrimitive()) {
+            var id = ResourceLocation.tryParse(object.get("value").getAsString());
+            if (id != null) refs.add(id);
+        }
+        object.entrySet().forEach(e -> lootItems(e.getValue(), result, refs));
+    }
+
+    private static Set<Item> resolve(ResourceLocation id, Map<ResourceLocation, Set<Item>> tables,
+            Map<ResourceLocation, Set<ResourceLocation>> references, Set<ResourceLocation> seen) {
+        Set<Item> items = new LinkedHashSet<>(tables.getOrDefault(id, Set.of()));
+        if (!seen.add(id)) return items;
+        for (var ref : references.getOrDefault(id, Set.of())) items.addAll(resolve(ref, tables, references, seen));
+        return items;
     }
     public static String shortId(ResourceLocation id) { return id.getNamespace().equals("minecraft") ? id.getPath() : id.toString(); }
     public Ore ore(Item item) {
@@ -144,6 +169,8 @@ public final class Knowledge {
         if (item instanceof BlockItem block) return ores.values().stream().filter(o -> o.blocks.contains(block.getBlock())).findFirst().orElse(null);
         return null;
     }
+    /** Every item some ore drops in this world's generation (coal, raw iron, diamond, ...). */
+    public Set<Item> oreItems() { return Collections.unmodifiableSet(ores.keySet()); }
     public Ore ore(Block block) { return ores.values().stream().filter(o -> o.blocks.contains(block)).findFirst().orElse(null); }
     public String text(Block block) {
         Ore ore = ore(block);
@@ -154,6 +181,10 @@ public final class Knowledge {
             + "; drops " + drops(block).stream().map(i -> shortId(BuiltInRegistries.ITEM.getKey(i))).sorted().collect(Collectors.joining(", "));
     }
     public Set<Item> drops(Block block) { return drops.getOrDefault(block, Set.of()); }
+    /** What a creature can drop, from its own current loot table (a sheep's depends on its colour). */
+    public Set<Item> drops(net.minecraft.world.entity.LivingEntity creature) {
+        return lootTables.getOrDefault(creature.getLootTable().location(), Set.of());
+    }
     public String unsupported(Item item) { return "unsupported: " + String.join(", ", otherSources.getOrDefault(item, Set.of("trading or another unsupported source"))); }
     public String text(Item item) {
         Ore ore = ore(item);

@@ -354,6 +354,7 @@ final class CraftExecutor {
         }
         // Swap through the inventory menu, exactly as pressing a hotbar number over a slot.
         if (slot != bot.getInventory().selected) {
+            controller.trace("craft", "taking the " + step().station() + " in hand: slot " + slot + " to hotbar " + bot.getInventory().selected);
             int menuSlot = inventoryMenuSlot(slot);
             bot.containerMenu.clicked(menuSlot, bot.getInventory().selected, ClickType.SWAP, bot);
             delay = CLICK_DELAY - 1;
@@ -361,6 +362,7 @@ final class CraftExecutor {
         }
         if (placementWalk != null) {
             if (!controller.craftWalk(placementWalk)) {
+                controller.trace("craft", "walking to a free spot for the " + step().station() + " at " + BlockPos.containing(placementWalk).toShortString());
                 return;
             }
             placementWalk = null;
@@ -378,6 +380,7 @@ final class CraftExecutor {
             BlockPos ground = spot.below();
             Vec3 point = Vec3.atCenterOf(ground).add(0, 0.4999, 0);
             if (!controller.craftAim(point)) {
+                controller.trace("craft", "aiming at " + ground.toShortString() + " to put the " + step().station() + " on it");
                 return;
             }
             BlockPlacement.click(bot, new BlockHitResult(point, Direction.UP, ground, false));
@@ -655,6 +658,27 @@ final class CraftExecutor {
         return transfer > 0;
     }
 
+    /**
+     * The plan counts leftover heat from the previous batch, but a furnace keeps burning while the
+     * bot walks: the fire can be out early. Like a player, throw in one more piece of the best
+     * fuel in the bag (coal, then wood; never tools or storage).
+     */
+    private boolean queueSpareFuel(AbstractCookingRecipe cooking) {
+        ItemStack existing = bot.containerMenu.getSlot(1).getItem();
+        ItemKey best = null;
+        for (ItemStack stack : bot.getInventory().items) {
+            if (stack.isEmpty() || stack.getBurnTime(cooking.getType()) <= 0) continue;
+            ItemKey key = new ItemKey(stack);
+            if (CraftingCalculation.fuelRank(key) >= 3) continue;
+            if (!existing.isEmpty() && !new ItemKey(existing).equals(key)) continue;
+            if (best == null || CraftingCalculation.fuelRank(key) < CraftingCalculation.fuelRank(best)) best = key;
+        }
+        if (best == null) return false;
+        controller.trace("craft", "the furnace went out before the batch was done; adding one " + best + " from the bag");
+        queueMove(best, 1, 1);
+        return true;
+    }
+
     private void closeAndWait(long ticks) {
         clicks.add(() -> {
             expectedMenu = null;
@@ -686,7 +710,7 @@ final class CraftExecutor {
             });
             clicks.add(() -> {
                 if (!bot.containerMenu.getCarried().isEmpty()) {
-                    bot.containerMenu.clicked(sourceSlot[0], 0, ClickType.PICKUP, bot);
+                    returnCarried(sourceSlot[0]);
                     if (!bot.containerMenu.getCarried().isEmpty()) {
                         fail("inventory changed while returning cursor");
                     }
@@ -729,7 +753,7 @@ final class CraftExecutor {
         } else {
             var menu = (AbstractFurnaceMenu) bot.containerMenu;
             var cooking = (AbstractCookingRecipe) recipe.value();
-            if (!menu.isLit() && !queueFuel(cooking)) {
+            if (!menu.isLit() && !queueFuel(cooking) && !queueSpareFuel(cooking)) {
                 fail("fuel exhausted before cooking completed");
                 return;
             }
@@ -831,6 +855,29 @@ final class CraftExecutor {
             }
         }
         return -1;
+    }
+
+    /**
+     * Puts the cursor stack back where it came from, or, when something landed there meanwhile
+     * (a picked-up drop), into the first main-inventory slot that takes it, as a player would.
+     */
+    private void returnCarried(int preferred) {
+        if (canTake(preferred)) {
+            bot.containerMenu.clicked(preferred, 0, ClickType.PICKUP, bot);
+        }
+        for (int slot = 0; slot < bot.containerMenu.slots.size() && !bot.containerMenu.getCarried().isEmpty(); slot++) {
+            var candidate = bot.containerMenu.getSlot(slot);
+            if (candidate.container == bot.getInventory() && candidate.getContainerSlot() < bot.getInventory().items.size() && canTake(slot)) {
+                controller.trace("craft", "slot " + preferred + " was taken while returning the cursor; put it in slot " + slot);
+                bot.containerMenu.clicked(slot, 0, ClickType.PICKUP, bot);
+            }
+        }
+    }
+
+    private boolean canTake(int menuSlot) {
+        ItemStack carried = bot.containerMenu.getCarried();
+        ItemStack there = bot.containerMenu.getSlot(menuSlot).getItem();
+        return there.isEmpty() || ItemStack.isSameItemSameComponents(there, carried) && there.getCount() < there.getMaxStackSize();
     }
 
     private int inventoryMenuSlot(int inventorySlot) {

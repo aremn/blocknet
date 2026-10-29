@@ -24,6 +24,7 @@ abstract class SkillTask {
     }
     abstract void work();
     abstract String describe();
+    void ended(String message) {}
     String depthContext() { return ""; }
     final void action(Consumer<Consumer<String>> start, Consumer<String> after) {
         busy = true;
@@ -42,7 +43,7 @@ abstract class SkillTask {
         if (done) return;
         controller.trace("skill", "finished after " + ticks / 20 + " s: " + message);
         done = true;
-        controller.skillFinished(this, message, report);
+        controller.skillFinished(this, message, result -> { ended(result); report.accept(result); });
     }
     static boolean failed(String message) {
         return message.contains("failed:") || message.contains("blocked:") || message.contains("stopped")

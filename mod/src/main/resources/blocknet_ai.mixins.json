@@ -4,7 +4,8 @@
   "package": "dev.blocknet.mixin",
   "compatibilityLevel": "JAVA_21",
   "mixins": [
-    "PlayerListMixin"
+    "PlayerListMixin",
+    "MenuDataAccessor"
   ],
   "injectors": {
     "defaultRequire": 1

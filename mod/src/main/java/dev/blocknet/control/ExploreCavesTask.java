@@ -15,7 +15,7 @@ import net.minecraft.world.level.EmptyBlockGetter;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.phys.Vec3;
 
-/** Cave walking uses eye evidence only; breadcrumbs reserve time for the return journey. */
+/** Cave walking uses eye evidence; the map (ADR-0011) only finds the entrance. Breadcrumbs reserve time for the return. */
 final class ExploreCavesTask extends SkillTask {
     private final Knowledge.Ore ore;
     private final Item drop;
@@ -24,14 +24,22 @@ final class ExploreCavesTask extends SkillTask {
     private final List<BlockPos> trail = new ArrayList<>();
     private final Set<BlockPos> visited = new HashSet<>(), exhausted = new HashSet<>(), lit = new HashSet<>();
     private BlockPos mouth, waypoint;
-    private boolean looked, returning;
+    private boolean looked, returning, walkedToMap;
     private int walked, torches, idleTicks, surveyedAt = -1;
     private boolean entered;
     private String stopReason = "";
     private List<Vec3> lava = List.of(), hostiles = List.of();
 
+    private final String caveRef;
+
     ExploreCavesTask(BotPlayer bot, Item item, int count, Consumer<String> report) {
+        this(bot, item, count, null, report);
+    }
+
+    /** {@code caveRef} names a map cave ("k3") to walk into first; null picks what is seen or nearest. */
+    ExploreCavesTask(BotPlayer bot, Item item, int count, String caveRef, Consumer<String> report) {
         super(bot, report, 20*60*5);
+        this.caveRef = caveRef;
         ore = Knowledge.get(bot.serverLevel()).ore(item);
         drop = ore == null ? item : ore.drop();
         this.count = count; initial = held();
@@ -94,6 +102,15 @@ final class ExploreCavesTask extends SkillTask {
         for (var pos = best; !pos.equals(start); pos = parents.get(pos)) reverse.add(pos);
         Collections.reverse(reverse); return reverse;
     }
+    private void walkToMap(dev.blocknet.map.WorldMap.Target target) {
+        walkedToMap = true;
+        controller.trace("explore_caves", "walking to " + target.label() + " at " + target.stand().toShortString());
+        action(cb -> controller.goTo(target.stand(), cb), m -> {
+            // The return trail starts at the entrance, not where the walk began.
+            trail.clear(); trail.add(bot.blockPosition()); visited.add(bot.blockPosition());
+            looked = false;
+        });
+    }
     private void turnBack(String reason) { returning = true; stopReason = reason; waypoint = null; idleTicks = 0; }
     @Override void work() {
         // Two minutes (plus distance allowance) remain to walk back, before SkillTask's hard cap.
@@ -102,13 +119,31 @@ final class ExploreCavesTask extends SkillTask {
             turnBack(held()-initial >= count ? "" : "budget ended");
         }
         if (busy) return;
+        if (mouth == null && caveRef != null && !walkedToMap) {
+            var target = dev.blocknet.map.WorldMap.target(bot, caveRef);
+            if (target == null || target.stand() == null) {
+                complete("failed: " + (target == null ? "no cave " + caveRef + " on the map" : target.label()) + "; " + describe());
+                return;
+            }
+            walkToMap(target);
+            return;
+        }
         if (mouth == null) {
             mouth = bot.vision().frontiers().stream().filter(f -> f.caveMouth()).map(f -> f.unknownStart())
                 .min(Comparator.comparingDouble(p -> p.distSqr(bot.blockPosition()))).orElse(null);
             if (mouth == null) mouth = bot.vision().objects().stream().filter(o -> o.category().equals("dark"))
                 .min(Comparator.comparingDouble(o -> o.center().distanceToSqr(bot.position()))).map(o -> o.nearest()).orElse(null);
+            if (mouth == null && walkedToMap && looked) {
+                // Standing at the entrance the map gave; caves round a corner may still look dark-free.
+                mouth = bot.blockPosition();
+            }
             if (mouth == null) {
-                if (!looked) { looked = true; action(cb -> controller.look("", true, cb), m -> {}); }
+                var entrance = looked && !walkedToMap ? dev.blocknet.map.WorldMap.nearestCaveEntrance(bot, 64) : null;
+                if (!looked) { looked = true; action(cb -> controller.look("", false, cb), m -> {}); }
+                else if (entrance != null) {
+                    controller.trace("explore_caves", "no cave in sight; the map knows " + entrance.label() + ", walking there");
+                    walkToMap(entrance);
+                }
                 else complete("failed: no cave seen; " + describe());
                 return;
             }
@@ -142,7 +177,7 @@ final class ExploreCavesTask extends SkillTask {
         var feet = bot.blockPosition();
         if (walked % 4 == 0 && surveyedAt != walked) {
             surveyedAt = walked;
-            action(cb -> controller.look("", true, cb), m -> {}); return;
+            action(cb -> controller.look("", false, cb), m -> {}); return;
         }
         if (bot.level().getMaxLocalRawBrightness(feet) < 7 && bot.getInventory().countItem(Items.TORCH) > 0 && lit.add(feet)) {
             for (Direction side : Direction.Plane.HORIZONTAL) {

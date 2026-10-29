@@ -3,6 +3,12 @@ package dev.blocknet.vision;
 
 import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectLinkedOpenHashMap;
+import it.unimi.dsi.fastutil.longs.LongArrayList;
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Objects;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -19,9 +25,15 @@ import net.minecraft.nbt.NbtUtils;
 import net.minecraft.nbt.Tag;
 import net.minecraft.world.level.block.Block;
 
-/** Bounded, section-sparse eye evidence. No method here reads the world. */
+/**
+ * Section-sparse eye evidence. No method here reads the world. RAM holds a working set of recently
+ * used sections ({@link #MAX_SECTIONS}); older ones move to an unlimited {@link MemoryArchive} on
+ * disk and come back when used again, so nothing the bot saw is ever forgotten. A small index of
+ * notable blocks (containers, stations, machines, ores) covers RAM and archive alike.
+ */
 public final class ObservedMap {
-    public static final int MAX_SECTIONS = 512;
+    /** Sections kept in RAM (and in the SavedData); the rest live in the archive. */
+    public static final int MAX_SECTIONS = 3072;
     public static final int DARK_STATE = -1;
     public record Cell(int stateId, long tick, Semantics.Kind semantic, boolean side, int epoch) {}
     private static final class Section {
@@ -37,6 +49,86 @@ public final class ObservedMap {
     private Section cached;
     private long tick;
     private final Runnable dirty;
+    private MemoryArchive archive;
+    private final Map<String, long[]> pendingArchived = new HashMap<>();
+    /** dimension -> "category:kind" -> positions of notable blocks, in RAM and archive. */
+    private final Map<String, Map<String, LongOpenHashSet>> notable = new HashMap<>();
+
+    /** One remembered notable block. */
+    public record Remembered(String category, String kind, BlockPos pos) {}
+
+    /**
+     * Connects the disk archive. A memory that was not loaded from the save starts clean, so an
+     * archive left by an earlier bot with the same name is wiped.
+     */
+    public void attach(java.nio.file.Path root, HolderLookup.Provider registries, boolean fresh) {
+        if (archive != null) return;
+        archive = new MemoryArchive(root, registries);
+        if (fresh) archive.wipe();
+        else pendingArchived.forEach(archive::restoreKeys);
+        pendingArchived.clear();
+    }
+
+    public boolean archiving() { return archive != null; }
+    public int archivedCount() { return archive == null ? 0 : archive.size(); }
+
+    private static String notableKey(Cell cell) {
+        String category = cell.semantic().category();
+        return switch (category) {
+            case "container", "station", "machine", "ore" -> category + ":" + cell.semantic().kind();
+            default -> null;
+        };
+    }
+
+    private void index(String dimension, long pos, Cell old, Cell cell) {
+        String before = old == null ? null : notableKey(old), after = cell == null ? null : notableKey(cell);
+        if (Objects.equals(before, after)) return;
+        var kinds = notable.computeIfAbsent(dimension, ignored -> new HashMap<>());
+        if (before != null && kinds.containsKey(before)) kinds.get(before).remove(pos);
+        if (after != null) kinds.computeIfAbsent(after, ignored -> new LongOpenHashSet()).add(pos);
+    }
+
+    /** Nearest remembered notable blocks whose "category:kind" matches, anywhere in this dimension. */
+    public List<Remembered> remembered(String dimension, BlockPos from, java.util.function.Predicate<String> kind, int limit) {
+        List<Remembered> result = new ArrayList<>();
+        notable.getOrDefault(dimension, Map.of()).forEach((key, positions) -> {
+            if (!kind.test(key)) return;
+            String[] parts = key.split(":", 2);
+            positions.forEach((long pos) -> result.add(new Remembered(parts[0], parts[1], BlockPos.of(pos))));
+        });
+        result.sort(Comparator.comparingDouble(r -> r.pos().distSqr(from)));
+        return result.size() > limit ? List.copyOf(result.subList(0, limit)) : List.copyOf(result);
+    }
+
+    /** Brings archived sections around {@code center} back into RAM before they are needed. */
+    public void warm(String dimension, BlockPos center, int radiusSections) {
+        if (archive == null) return;
+        int cx = center.getX() >> 4, cy = center.getY() >> 4, cz = center.getZ() >> 4;
+        for (int x = -radiusSections; x <= radiusSections; x++) for (int y = -radiusSections; y <= radiusSections; y++)
+            for (int z = -radiusSections; z <= radiusSections; z++) {
+                long key = SectionPos.asLong(cx + x, cy + y, cz + z);
+                if (archive.has(dimension, key)) thaw(dimension, key);
+            }
+    }
+
+    /**
+     * RAM lookup only. Reads never thaw: callers iterate the working set while asking about
+     * neighbours, and a thaw (with its eviction) would change the map under them. Archived sections
+     * come back through {@link #warm} around the bot and through writes.
+     */
+    private Section lookup(String dimension, long key) {
+        var values = dimensions.get(dimension);
+        return values == null ? null : values.get(key);
+    }
+
+    private Section thaw(String dimension, long key) {
+        CompoundTag tag = archive.take(dimension, key);
+        if (tag == null) return null;
+        Section section = read(dimension, key, tag, archive.registries());
+        dimensions.computeIfAbsent(dimension, ignored -> new Long2ObjectLinkedOpenHashMap<>()).putAndMoveToLast(key, section);
+        if (sectionCount() > MAX_SECTIONS) evict();
+        return section;
+    }
 
     public ObservedMap(Runnable dirty) { this.dirty = dirty; }
 
@@ -55,6 +147,7 @@ public final class ObservedMap {
         long key = SectionPos.asLong(x >> 4, y >> 4, z >> 4);
         if (key == cachedKey) return cached;
         Section section = sections.getAndMoveToLast(key);
+        if (section == null && archive != null && archive.has(active, key)) section = thaw(active, key);
         if (section == null) {
             section = new Section();
             sections.put(key, section);
@@ -71,6 +164,8 @@ public final class ObservedMap {
             if (values.isEmpty()) continue;
             long key = values.firstLongKey();
             Section removed = values.removeFirst();
+            if (archive != null) archive.put(entry.getKey(), key, write(entry.getKey(), key, removed));
+            else for (var cell : removed.cells.int2ObjectEntrySet()) index(entry.getKey(), position(key, cell.getIntKey()).asLong(), cell.getValue(), null);
             ObjectGraph oldGraph = graphs.get(entry.getKey());
             if (oldGraph != null) for (int index : removed.cells.keySet()) oldGraph.remove(position(key, index).asLong());
             if (entry.getKey().equals(active) && key == cachedKey) cachedKey = Long.MIN_VALUE;
@@ -84,7 +179,11 @@ public final class ObservedMap {
         long mask = 1L << (index & 63);
         if ((section.empty[index >> 6] & mask) != 0) return;
         section.empty[index >> 6] |= mask;
-        if (section.cells.remove(index) != null) graph.remove(BlockPos.asLong(x, y, z));
+        Cell removed = section.cells.remove(index);
+        if (removed != null) {
+            graph.remove(BlockPos.asLong(x, y, z));
+            index(active, BlockPos.asLong(x, y, z), removed, null);
+        }
         dirty.run();
     }
 
@@ -99,6 +198,7 @@ public final class ObservedMap {
         section.cells.put(index, cell);
         section.empty[index >> 6] &= ~(1L << (index & 63));
         graph.put(BlockPos.asLong(x, y, z), old, cell);
+        index(active, BlockPos.asLong(x, y, z), old, cell);
         dirty.run();
     }
 
@@ -109,28 +209,23 @@ public final class ObservedMap {
     }
 
     public Cell cell(String dimension, BlockPos pos) {
-        var values = dimensions.get(dimension);
-        if (values == null) return null;
-        Section section = values.get(SectionPos.asLong(pos));
+        Section section = lookup(dimension, SectionPos.asLong(pos));
         return section == null ? null : section.cells.get(index(pos.getX(), pos.getY(), pos.getZ()));
     }
 
     public boolean known(String dimension, BlockPos pos) {
-        var values = dimensions.get(dimension);
-        if (values == null) return false;
-        Section section = values.get(SectionPos.asLong(pos));
+        Section section = lookup(dimension, SectionPos.asLong(pos));
         int i = index(pos.getX(), pos.getY(), pos.getZ());
         return section != null && (section.cells.containsKey(i) || (section.empty[i >> 6] & (1L << (i & 63))) != 0);
     }
 
     public boolean empty(String dimension, BlockPos pos) {
-        var values = dimensions.get(dimension);
-        if (values == null) return false;
-        Section section = values.get(SectionPos.asLong(pos));
+        Section section = lookup(dimension, SectionPos.asLong(pos));
         int i = index(pos.getX(), pos.getY(), pos.getZ());
         return section != null && (section.empty[i >> 6] & (1L << (i & 63))) != 0;
     }
 
+    /** Visits the RAM working set only (recent memory); the archive is reached through lookups, warm and the index. */
     public void forEach(String dimension, BiConsumer<BlockPos, Cell> consumer) {
         var values = dimensions.get(dimension);
         if (values != null) values.forEach((key, section) -> section.cells.int2ObjectEntrySet()
@@ -202,41 +297,81 @@ public final class ObservedMap {
         .mapToInt(s -> Arrays.stream(s.empty).mapToInt(Long::bitCount).sum()).sum(); }
     public int estimatedBytes() { return sectionCount() * 640 + cellCount() * 64; }
 
-    /** Stable block-state palette, never runtime registry ids on disk. */
+    /** One section with a stable block-state palette, never runtime registry ids on disk. */
+    private static CompoundTag write(String dimension, long key, Section section) {
+        CompoundTag tag = new CompoundTag();
+        tag.putString("dimension", dimension);
+        tag.putLong("section", key);
+        tag.putLongArray("empty", section.empty);
+        ListTag palette = new ListTag();
+        record PaletteKey(int state, Semantics.Kind semantic) {}
+        Map<PaletteKey, Integer> ids = new HashMap<>();
+        int[] cells = new int[section.cells.size() * 2];
+        long[] ticks = new long[section.cells.size()];
+        int offset = 0;
+        for (var entry : section.cells.int2ObjectEntrySet()) {
+            Cell cell = entry.getValue();
+            int paletteId = ids.computeIfAbsent(new PaletteKey(cell.stateId(), cell.semantic()), value -> {
+                CompoundTag item = new CompoundTag();
+                if (value.state() >= 0) item.put("state", NbtUtils.writeBlockState(Block.stateById(value.state())));
+                item.putString("class", value.semantic().category());
+                item.putString("kind", value.semantic().kind());
+                item.putBoolean("container", value.semantic().container());
+                palette.add(item);
+                return palette.size() - 1;
+            });
+            cells[offset * 2] = entry.getIntKey() | (cell.side() ? 4096 : 0);
+            cells[offset * 2 + 1] = paletteId;
+            ticks[offset++] = cell.tick();
+        }
+        tag.put("palette", palette);
+        tag.putIntArray("cells", cells);
+        tag.putLongArray("ticks", ticks);
+        return tag;
+    }
+
+    /** Rebuilds a section and puts its cells into the object graph and the notable index. */
+    private Section read(String dimension, long key, CompoundTag tag, HolderLookup.Provider registries) {
+        Section section = new Section();
+        long[] empty = tag.getLongArray("empty");
+        System.arraycopy(empty, 0, section.empty, 0, Math.min(empty.length, 64));
+        ListTag palette = tag.getList("palette", Tag.TAG_COMPOUND);
+        int[] cells = tag.getIntArray("cells");
+        long[] ticks = tag.getLongArray("ticks");
+        ObjectGraph graph = graph(dimension);
+        for (int i = 0; i < ticks.length && i * 2 + 1 < cells.length; i++) {
+            int packed = cells[i * 2], index = packed & 4095, paletteId = cells[i * 2 + 1];
+            if (packed < 0 || packed > 8191 || paletteId < 0 || paletteId >= palette.size()) continue;
+            CompoundTag item = palette.getCompound(paletteId);
+            int state = !item.contains("state") ? DARK_STATE : Block.getId(NbtUtils.readBlockState(
+                registries.lookupOrThrow(Registries.BLOCK), item.getCompound("state")));
+            Cell cell = new Cell(state, ticks[i], new Semantics.Kind(item.getString("class"),
+                item.getString("kind"), item.getBoolean("container")), (packed & 4096) != 0, Semantics.epoch() - 1);
+            section.cells.put(index, cell);
+            long pos = position(key, index).asLong();
+            graph.put(pos, null, cell);
+            index(dimension, pos, null, cell);
+        }
+        return section;
+    }
+
     public void save(CompoundTag root) {
         ListTag list = new ListTag();
-        dimensions.forEach((dimension, values) -> values.forEach((key, section) -> {
-            CompoundTag tag = new CompoundTag();
-            tag.putString("dimension", dimension);
-            tag.putLong("section", key);
-            tag.putLongArray("empty", section.empty);
-            ListTag palette = new ListTag();
-            record PaletteKey(int state, Semantics.Kind semantic) {}
-            Map<PaletteKey, Integer> ids = new HashMap<>();
-            int[] cells = new int[section.cells.size() * 2];
-            long[] ticks = new long[section.cells.size()];
-            int offset = 0;
-            for (var entry : section.cells.int2ObjectEntrySet()) {
-                Cell cell = entry.getValue();
-                int paletteId = ids.computeIfAbsent(new PaletteKey(cell.stateId(), cell.semantic()), value -> {
-                    CompoundTag item = new CompoundTag();
-                    if (value.state() >= 0) item.put("state", NbtUtils.writeBlockState(Block.stateById(value.state())));
-                    item.putString("class", value.semantic().category());
-                    item.putString("kind", value.semantic().kind());
-                    item.putBoolean("container", value.semantic().container());
-                    palette.add(item);
-                    return palette.size() - 1;
-                });
-                cells[offset * 2] = entry.getIntKey() | (cell.side() ? 4096 : 0);
-                cells[offset * 2 + 1] = paletteId;
-                ticks[offset++] = cell.tick();
-            }
-            tag.put("palette", palette);
-            tag.putIntArray("cells", cells);
-            tag.putLongArray("ticks", ticks);
-            list.add(tag);
-        }));
+        dimensions.forEach((dimension, values) -> values.forEach((key, section) -> list.add(write(dimension, key, section))));
         root.put("sections", list);
+        if (archive != null) {
+            archive.flush();
+            CompoundTag archived = new CompoundTag();
+            archive.keys().forEach((dimension, keys) -> archived.putLongArray(dimension, keys.toLongArray()));
+            root.put("archived", archived);
+        }
+        CompoundTag index = new CompoundTag();
+        notable.forEach((dimension, kinds) -> {
+            CompoundTag perDimension = new CompoundTag();
+            kinds.forEach((kind, positions) -> { if (!positions.isEmpty()) perDimension.putLongArray(kind, positions.toLongArray()); });
+            index.put(dimension, perDimension);
+        });
+        root.put("notable", index);
         ListTag refs = new ListTag();
         graphs.forEach((dimension, value) -> {
             CompoundTag tag = new CompoundTag();
@@ -248,30 +383,21 @@ public final class ObservedMap {
     }
 
     public void load(CompoundTag root, HolderLookup.Provider registries) {
+        CompoundTag index = root.getCompound("notable");
+        for (String dimension : index.getAllKeys()) {
+            CompoundTag perDimension = index.getCompound(dimension);
+            var kinds = notable.computeIfAbsent(dimension, ignored -> new HashMap<>());
+            for (String kind : perDimension.getAllKeys())
+                kinds.computeIfAbsent(kind, ignored -> new LongOpenHashSet()).addAll(LongArrayList.wrap(perDimension.getLongArray(kind)));
+        }
+        CompoundTag archived = root.getCompound("archived");
+        for (String dimension : archived.getAllKeys()) pendingArchived.put(dimension, archived.getLongArray(dimension));
         for (Tag raw : root.getList("sections", Tag.TAG_COMPOUND)) {
             if (sectionCount() >= MAX_SECTIONS) break;
             CompoundTag tag = (CompoundTag) raw;
             String dimension = tag.getString("dimension");
             long key = tag.getLong("section");
-            Section section = new Section();
-            long[] empty = tag.getLongArray("empty");
-            System.arraycopy(empty, 0, section.empty, 0, Math.min(empty.length, 64));
-            ListTag palette = tag.getList("palette", Tag.TAG_COMPOUND);
-            int[] cells = tag.getIntArray("cells");
-            long[] ticks = tag.getLongArray("ticks");
-            ObjectGraph graph = graph(dimension);
-            for (int i = 0; i < ticks.length && i * 2 + 1 < cells.length; i++) {
-                int packed = cells[i * 2], index = packed & 4095, paletteId = cells[i * 2 + 1];
-                if (packed < 0 || packed > 8191 || paletteId < 0 || paletteId >= palette.size()) continue;
-                CompoundTag item = palette.getCompound(paletteId);
-                int state = !item.contains("state") ? DARK_STATE : Block.getId(NbtUtils.readBlockState(
-                    registries.lookupOrThrow(Registries.BLOCK), item.getCompound("state")));
-                Cell cell = new Cell(state, ticks[i], new Semantics.Kind(item.getString("class"),
-                    item.getString("kind"), item.getBoolean("container")), (packed & 4096) != 0, Semantics.epoch() - 1);
-                section.cells.put(index, cell);
-                graph.put(position(key, index).asLong(), null, cell);
-            }
-            dimensions.computeIfAbsent(dimension, ignored -> new Long2ObjectLinkedOpenHashMap<>()).put(key, section);
+            dimensions.computeIfAbsent(dimension, ignored -> new Long2ObjectLinkedOpenHashMap<>()).put(key, read(dimension, key, tag, registries));
         }
         for (Tag raw : root.getList("object_refs", Tag.TAG_COMPOUND)) {
             CompoundTag tag = (CompoundTag) raw;

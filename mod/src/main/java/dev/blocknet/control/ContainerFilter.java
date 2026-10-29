@@ -24,9 +24,20 @@ public final class ContainerFilter {
             && !InventoryBehavior.isAcceptableThrowaway(stack, IBaritone.KEY.get(bot).settings());
     }
 
+    /** Gear a player keeps on them: tools, weapons, armor and food. */
+    public static boolean kit(ItemStack stack) {
+        var facts = ItemDescriber.describe(stack);
+        return stack.has(DataComponents.TOOL) || stack.is(Tags.Items.TOOLS) || !facts.kinds().isEmpty()
+            || stack.is(Tags.Items.ARMORS) || facts.armor() > 0 || facts.food() != null;
+    }
+
     public static Predicate<ItemStack> parse(BotPlayer bot, String text) {
         if (text.equals("all")) {
             return stack -> !stack.isEmpty();
+        }
+        if (text.equals("loot")) {
+            // "Put everything away" as a player means it: keep the kit (tools, weapons, armor, food).
+            return stack -> !stack.isEmpty() && !kit(stack);
         }
         if (text.equals("junk")) {
             return stack -> !stack.isEmpty() && junk(bot, stack);

@@ -33,9 +33,12 @@ public final class Blocknet {
         NeoForge.EVENT_BUS.addListener(BridgeServer::onChat);
         NeoForge.EVENT_BUS.addListener(dev.blocknet.vision.OpacityTable::reload);
         NeoForge.EVENT_BUS.addListener(dev.blocknet.debug.DebugWatch::onServerTick);
+        NeoForge.EVENT_BUS.addListener(dev.blocknet.map.MapScanner::onServerTick);
+        NeoForge.EVENT_BUS.addListener(dev.blocknet.voice.VoiceInput::onServerTick);
         NeoForge.EVENT_BUS.addListener(dev.blocknet.debug.DebugWatch::onLoggedOut);
         modEventBus.addListener(dev.blocknet.debug.DebugWatch::register);
         dev.blocknet.debug.PathTrace.install();
+        dev.blocknet.compat.Compat.init();
         LOGGER.info("Blocknet body loaded");
     }
 }

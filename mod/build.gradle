@@ -22,6 +22,11 @@ sourceSets.main.resources {
 }
 
 repositories {
+    maven {
+        name = "Simple Voice Chat API"
+        url = "https://maven.maxhenkel.de/repository/public"
+        content { includeGroup "de.maxhenkel.voicechat" }
+    }
     // Modrinth Maven: other mods for local runs and tests, as maven.modrinth:<slug>:<version>.
     exclusiveContent {
         forRepository {
@@ -135,6 +140,10 @@ dependencies {
     // Test fixture mods: real modded blocks and machines to check the mod-agnostic body against,
     // in dev runs and GameTests only. localRuntime keeps them out of the published mod.
     localRuntime "maven.modrinth:ae2:${ae2_version}"
+    // Optional adapters (dev.blocknet.compat.<mod>) compile against the fixture; nothing depends on it at runtime.
+    compileOnly "maven.modrinth:ae2:${ae2_version}"
+    // Voice (compat/voicechat): the plugin API only; players install Simple Voice Chat themselves.
+    compileOnly "de.maxhenkel.voicechat:voicechat-api:${voicechat_api_version}"
     localRuntime "maven.modrinth:guideme:${guideme_version}"
 
     // Example optional mod dependency with JEI

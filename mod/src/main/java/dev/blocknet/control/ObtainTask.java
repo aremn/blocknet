@@ -25,18 +25,32 @@ final class ObtainTask extends SkillTask {
     private final Set<Item> explored = new HashSet<>();
     private final Goal target;
     private MineOreTask mining;
+    private ExploreCavesTask caving;
+    /** Walks over drops a mined block left beyond pickup reach (ore struck from a distance). */
+    private PickupTask picking;
+    private boolean triedCave;
+    private final Set<BlockPos> unreachable = new HashSet<>();
+    private final Set<java.util.UUID> lostPrey = new HashSet<>();
+    private final Map<Item, Integer> minedKnown = new LinkedHashMap<>();
     private int operations;
     private boolean surveyed;
     @Override String depthContext() { return mining == null ? "" : mining.depthContext(); }
 
     ObtainTask(BotPlayer bot, Item item, int count, Consumer<String> report) {
+        this(bot, item, count, false, report);
+    }
+    ObtainTask(BotPlayer bot, Item item, int count, boolean world, Consumer<String> report) {
         super(bot, report, 20*60*10);
         target = new Goal(item, count); goals.push(target);
+        this.world = world;
+        if (world) controller.worldOnly(true);
     }
+    private final boolean world;
+    @Override void ended(String message) { if (world) controller.worldOnly(false); }
     private int held(Item item) { return bot.getInventory().countItem(item); }
     private String name(Item item) { return Knowledge.shortId(BuiltInRegistries.ITEM.getKey(item)); }
     @Override String describe() {
-        return mining != null ? mining.describe() : "obtaining " + target.count + " " + name(target.item) + ": " + held(target.item) + "/" + target.count
+        return mining != null ? mining.describe() : caving != null ? caving.describe() : "obtaining " + target.count + " " + name(target.item) + ": " + held(target.item) + "/" + target.count
             + (goals.isEmpty() ? "" : "; needs " + goals.peek().count + " " + name(goals.peek().item));
     }
     private boolean need(Item item, int count) {
@@ -50,11 +64,15 @@ final class ObtainTask extends SkillTask {
     }
     @Override void work() {
         if (mining != null) { mining.tick(); return; }
+        if (caving != null) { caving.tick(); return; }
+        if (picking != null) { picking.tick(); return; }
         if (busy) return;
         if (++operations > 256) { complete("stopped: acquisition operation limit; " + describe()); return; }
         while (!goals.isEmpty() && held(goals.peek().item) >= goals.peek().count) goals.pop();
         if (goals.isEmpty()) {
-            complete("obtained " + target.count + " " + name(target.item) + (actions.isEmpty() ? " (already in inventory)" : ": " + String.join(", ", actions))); return;
+            List<String> done = new ArrayList<>(actions);
+            minedKnown.forEach((item, n) -> done.add("mined " + n + " " + name(item) + " from known ore"));
+            complete("obtained " + target.count + " " + name(target.item) + (done.isEmpty() ? " (already in inventory)" : ": " + String.join(", ", done))); return;
         }
         Goal goal = goals.peek();
         bot.vision().observe(net.minecraft.world.phys.Vec3.atCenterOf(bot.blockPosition().below()));
@@ -69,6 +87,20 @@ final class ObtainTask extends SkillTask {
             }); return;
         }
         Knowledge knowledge = Knowledge.get(bot.serverLevel());
+        var prey = prey(knowledge, goal.item);
+        if (prey != null) {
+            int before = held(goal.item);
+            controller.trace("obtain", name(goal.item) + " drops from " + prey.type() + "; hunting " + prey.ref() + " nearby");
+            action(cb -> controller.attack(prey.uuid().toString(), cb), message -> {
+                if (!message.startsWith("killed")) { lostPrey.add(prey.uuid()); return; }
+                // Like a player after a kill: walk over the drops, then count what came of it.
+                picking = new PickupTask(bot, null, null, bot.position(), 6, picked -> {
+                    picking = null;
+                    if (held(goal.item) > before) actions.add("hunted " + prey.type() + " for " + (held(goal.item) - before) + " " + name(goal.item));
+                });
+            });
+            return;
+        }
         var ore = knowledge.ore(goal.item);
         boolean logs = new ItemStack(goal.item).is(ItemTags.LOGS);
         boolean ground = goal.item == Items.COBBLESTONE || goal.item == Items.DIRT || goal.item == Items.SAND;
@@ -83,6 +115,50 @@ final class ObtainTask extends SkillTask {
             }
             int before = held(goal.item);
             if (ore != null) {
+                List<BlockPos> seenOre = new ArrayList<>();
+                bot.worldMemory().observed().forEachNear(bot.level().dimension().location().toString(), bot.blockPosition(), 64, (pos, cell) -> {
+                    if (cell.stateId() >= 0 && ore.blocks().contains(net.minecraft.world.level.block.Block.stateById(cell.stateId()).getBlock())
+                        && !unreachable.contains(pos) && pos.distSqr(bot.blockPosition()) <= 64*64) seenOre.add(pos);
+                });
+                var nearest = seenOre.stream().min(java.util.Comparator.comparingDouble(p -> p.distSqr(bot.blockPosition())));
+                if (nearest.isPresent()) {
+                    BlockPos pos = nearest.get();
+                    controller.trace("obtain", "mining eye-observed ore at " + pos.toShortString() + " before searching elsewhere");
+                    action(cb -> controller.mine(pos, cb), message -> afterMining(pos, goal.item, before,
+                        gained -> actions.add("mined observed " + gained + " " + name(goal.item)))); return;
+                }
+            }
+            if (ore != null && bot.fullPerception()) {
+                // ADR-0012: the bot knows where the ore is in loaded chunks; walk (and dig) to the nearest safe one.
+                var blocks = ore.blocks();
+                var known = dev.blocknet.map.BlockFinder.nearest(bot.serverLevel(), bot.blockPosition(),
+                        s -> blocks.contains(s.getBlock()), 6, 12).stream()
+                    .filter(p -> !unreachable.contains(p) && !nearLava(p)).findFirst();
+                if (known.isPresent()) {
+                    BlockPos pos = known.get();
+                    controller.trace("obtain", "I know of " + name(goal.item) + " ore at " + pos.toShortString()
+                        + String.format(java.util.Locale.ROOT, " (%.0f blocks away); going to mine it", Math.sqrt(pos.distSqr(bot.blockPosition()))));
+                    action(cb -> controller.mine(pos, cb), message -> {
+                        if (message.startsWith("blocked:")) { complete(message + "; " + describe()); return; }
+                        afterMining(pos, goal.item, before, gained -> minedKnown.merge(goal.item, gained, Integer::sum));
+                    });
+                    return;
+                }
+                controller.trace("obtain", "no " + name(goal.item) + " ore in the loaded chunks around me; searching like a player");
+            }
+            var cave = ore != null && !triedCave ? dev.blocknet.map.WorldMap.nearestCaveEntrance(bot, 64) : null;
+            if (cave != null) {
+                // Like a player: walk into a known cave and look at its walls before digging a mine.
+                triedCave = true;
+                controller.trace("obtain", name(goal.item) + " comes from ore; the map shows " + cave.label()
+                    + " nearby, so checking the cave before digging a mine");
+                caving = new ExploreCavesTask(bot, goal.item, goal.count-before, message -> {
+                    caving = null;
+                    if (held(goal.item) > before) actions.add(message);
+                });
+                return;
+            }
+            if (ore != null) {
                 controller.trace("obtain", name(goal.item) + " comes from ore; mining it at its known depth");
                 mining = new MineOreTask(bot, goal.item, goal.count-before, budget-ticks, message -> {
                     mining = null; actions.add(message);
@@ -92,7 +168,7 @@ final class ObtainTask extends SkillTask {
             if (logs && !explored.contains(goal.item)) {
                 explored.add(goal.item);
                 controller.trace("obtain", "need logs; looking around for trees first");
-                action(cb -> controller.look("trees", true, cb), message -> {}); return;
+                action(cb -> controller.look("trees", false, cb), message -> {}); return;
             }
             controller.trace("obtain", "gathering " + (goal.count - before) + " " + name(goal.item) + " from what I can see");
             action(cb -> controller.gather(BuiltInRegistries.ITEM.getKey(goal.item).toString(), goal.count-before, cb), message -> {
@@ -123,9 +199,10 @@ final class ObtainTask extends SkillTask {
             }); return;
         }
         if (plan.status() == CraftPlan.Status.MISSING) {
+            controller.trace("obtain", "material deficit: " + plan.text().replace('\n', ';'));
             if (!surveyed && plan.missing().keySet().stream().anyMatch(k -> k.contains("logs") || k.contains("planks") || k.startsWith("fuel ("))) {
                 surveyed = true;
-                action(cb -> controller.look("trees", true, cb), ignored -> {}); return;
+                action(cb -> controller.look("trees", false, cb), ignored -> {}); return;
             }
             // Ask the SAME planner which observed raw materials it would use. These stacks exist
             // only in a forecast copy; all deficits still go through real obtain/player actions.
@@ -138,6 +215,17 @@ final class ObtainTask extends SkillTask {
                 if (new ItemStack(item).is(ItemTags.LOGS)) availableSources.add(item);
                 for (Item drop : knowledge.drops(block)) if (drop == Items.COBBLESTONE || drop == Items.DIRT || drop == Items.SAND) availableSources.add(drop);
             });
+            // What this task can always go and get: some log, ground blocks, any ore's drop. Without
+            // them the recipe search picks variants with no source (sticks from bamboo, charcoal).
+            if (availableSources.stream().noneMatch(item -> new ItemStack(item).is(ItemTags.LOGS))) availableSources.add(Items.OAK_LOG);
+            availableSources.addAll(List.of(Items.COBBLESTONE, Items.DIRT));
+            availableSources.addAll(knowledge.oreItems());
+            // Drops of creatures around (wool on a sheep) are raw materials too: a bed then needs
+            // white wool from the sheep rather than an endless chain of re-dyed wool.
+            for (var contact : bot.radar().contacts()) {
+                var creature = bot.radar().entity(contact);
+                if (creature != null && contact.category().equals("passive") && !lostPrey.contains(contact.uuid())) availableSources.addAll(knowledge.drops(creature));
+            }
             if (!availableSources.isEmpty()) {
                 var forecastInventory = new ArrayList<>(bot.getInventory().items);
                 availableSources.forEach(item -> forecastInventory.add(new ItemStack(item, Math.max(64, goal.count*16))));
@@ -153,12 +241,58 @@ final class ObtainTask extends SkillTask {
                 if (missing.getKey().startsWith("fuel (")) {
                     if (need(Items.OAK_LOG, held(Items.OAK_LOG) + (int)Math.ceil(missing.getValue()/300.0))) return;
                 }
-                Item item = resolve(missing.getKey());
+                Item item = minedForm(resolve(missing.getKey()));
                 if (item != null && need(item, held(item) + Math.toIntExact(missing.getValue()))) return;
             }
         }
         controller.trace("obtain", "no way I know to get " + name(goal.item) + "; plan was " + plan.status());
         complete(knowledge.unsupported(goal.item));
+    }
+    /** The nearest live passive creature (radar, ADR-0011) whose own loot table drops the item. */
+    private dev.blocknet.map.Radar.Contact prey(Knowledge knowledge, Item item) {
+        for (var contact : bot.radar().contacts()) {
+            if (!contact.category().equals("passive") || lostPrey.contains(contact.uuid())) continue;
+            var creature = bot.radar().entity(contact);
+            if (creature != null && knowledge.drops(creature).contains(item)) return contact;
+        }
+        return null;
+    }
+    /**
+     * Counts what a mined block gave. Ore struck from a distance leaves its drop lying in the hole,
+     * so walk over the drops around it first, like a player; only then is a block with no gain unreachable.
+     */
+    private void afterMining(BlockPos pos, Item item, int before, java.util.function.IntConsumer gained) {
+        if (held(item) > before || !bot.serverLevel().getBlockState(pos).isAir()) {
+            if (held(item) > before) gained.accept(held(item) - before); else unreachable.add(pos);
+            return;
+        }
+        picking = new PickupTask(bot, null, item, net.minecraft.world.phys.Vec3.atCenterOf(pos), 4, message -> {
+            picking = null;
+            if (held(item) > before) gained.accept(held(item) - before); else unreachable.add(pos);
+        });
+    }
+
+    /**
+     * An ore block (deepslate_iron_ore) is not what mining it gives (raw_iron) without silk touch.
+     * Ask for the drop: once owned, the next plan picks the recipe that uses it (raw_iron -> ingot).
+     */
+    private Item minedForm(Item item) {
+        if (item == null) return null;
+        var ore = Knowledge.get(bot.serverLevel()).ore(item);
+        boolean block = net.minecraft.world.level.block.Block.byItem(item) != Blocks.AIR;
+        if (ore != null && block && ore.drop() != item) {
+            controller.trace("obtain", name(item) + " only drops " + name(ore.drop()) + " without silk touch; getting that instead");
+            return ore.drop();
+        }
+        return item;
+    }
+
+    /** A player does not dig out ore that sits against lava. */
+    private boolean nearLava(BlockPos pos) {
+        for (var side : net.minecraft.core.Direction.values()) {
+            if (bot.serverLevel().getFluidState(pos.relative(side)).is(net.minecraft.tags.FluidTags.LAVA)) return true;
+        }
+        return false;
     }
     private Item resolve(String label) {
         if (!label.startsWith("#")) {

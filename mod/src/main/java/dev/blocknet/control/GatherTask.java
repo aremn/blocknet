@@ -29,6 +29,7 @@ final class GatherTask {
     private final Item item;
     private final String target;
     private final ObjectGraph.ObjectView object;
+    private final boolean wholeObject;
     private final Set<Long> columns = new HashSet<>();
     private final boolean logs;
     private boolean checked;
@@ -56,8 +57,10 @@ final class GatherTask {
         this.bot = bot;
         this.controller = controller;
         this.target = target.replace("minecraft:", "");
-        this.count = count;
         object = bot.vision().resolve(target);
+        // Count 0 with an observed object: take that object and stop (one tree, one cliff face).
+        wholeObject = count == 0 && object != null;
+        this.count = wholeObject ? Integer.MAX_VALUE : Math.max(1, count);
         logs = this.target.equals("logs") || this.target.equals("wood") || object != null && object.category().equals("tree");
         item = logs ? Items.OAK_LOG : object != null && object.category().equals("cliff") ? Items.COBBLESTONE : object != null && object.category().equals("ore") ? (object.kind().equals("iron") ? Items.RAW_IRON : BuiltInRegistries.ITEM.get(ResourceLocation.withDefaultNamespace(object.kind()))) : switch (this.target) {
             case "stone", "cobblestone" -> Items.COBBLESTONE;
@@ -228,7 +231,7 @@ final class GatherTask {
         controller.trace("gather", "mining " + (seen == null || seen.stateId() < 0 ? "block"
             : BuiltInRegistries.BLOCK.getKey(Block.stateById(seen.stateId()).getBlock()).getPath()) + " at " + pos.toShortString()
             + String.format(java.util.Locale.ROOT, " (%.1fm): ", Math.sqrt(bot.position().distanceToSqr(Vec3.atCenterOf(pos)))) + why
-            + "; have " + (held() - initial) + "/" + count + " " + name());
+            + "; have " + (held() - initial) + (wholeObject ? " (taking all of " + target + ")" : "/" + count) + " " + name());
         harvesting = matches(pos);
         var cell = bot.worldMemory().observed().cell(bot.level().dimension().location().toString(), pos);
         if (cell != null && cell.stateId() >= 0) {
@@ -382,6 +385,11 @@ final class GatherTask {
     }
 
     private void noSight() {
+        if (wholeObject && held() > initial) {
+            controller.trace("gather", "nothing left of " + target + " that I can see; that was the whole " + object.kind() + " " + object.category());
+            controller.gatherFinished("gathered " + (held() - initial) + " " + name() + ": the whole " + target + " " + object.kind() + " " + object.category());
+            return;
+        }
         controller.trace("gather", "no visible " + name() + " I can safely reach from " + bot.blockPosition().toShortString()
             + " (only blocks a ray from my eyes reaches count; " + bot.worldMemory().observed().cellCount() + " cells remembered)");
         controller.gatherFinished("none seen for " + target + (held() > initial ? "; gathered " + (held() - initial) + "/" + count : "") + "; " + controller.scene().unexplored() + "; try explore");

@@ -6,5 +6,6 @@
   "blocknet_ai.radial.follow": "Follow me",
   "blocknet_ai.radial.stop": "Stop",
   "blocknet_ai.radial.mine_this": "Mine this",
-  "blocknet_ai.radial.no_block": "Look at a block first"
+  "blocknet_ai.radial.no_block": "Look at a block first",
+  "blocknet_ai.radial.next_voice": "Next voice"
 }

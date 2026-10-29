@@ -40,6 +40,7 @@ public final class VisionSensor {
     private final long[] recentHits = new long[4096];
     private final int[] recentStates = new int[4096];
     private long recentCursor;
+    private int sweep;
     private boolean recording;
 
     public VisionSensor(BotPlayer bot) { this.bot = bot; ray = new VoxelRay(bot); }
@@ -146,6 +147,8 @@ public final class VisionSensor {
         lastTick = tick;
         beginTick();
         while (!exposed.isEmpty() && canObserve()) observe(exposed.removeFirst());
+        // Memory around the bot comes back from the disk archive before anything asks for it.
+        if (tick % 40 == 0) bot.worldMemory().observed().warm(bot.level().dimension().location().toString(), bot.blockPosition(), 4);
         if (!panorama && !frontal && cursor == 0 && tick % 4 != 0) return;
         if (!canObserve()) return;
         long start = System.nanoTime(), deadline = start + BUDGET_NANOS - tickNanos;
@@ -155,8 +158,12 @@ public final class VisionSensor {
         // Entity work is sliced too; one candidate per tick cannot monopolize the frame budget.
         observeEntity(eye, yaw, pitch);
         int total = frameWidth * frameHeight;
-        Vec3 forward = Vec3.directionFromRotation(pitch, yaw);
-        Vec3 right = Vec3.directionFromRotation(0, yaw + 90);
+        // The background camera sweeps all round (ADR-0012): each 160 degree frame turns 120 degrees
+        // from the last, so three frames cover the full circle at the same cost per tick.
+        // Frontal frames and look panoramas keep facing where the head faces.
+        float frameYaw = panorama || frontal ? yaw : yaw + 120 * (sweep % 3);
+        Vec3 forward = Vec3.directionFromRotation(pitch, frameYaw);
+        Vec3 right = Vec3.directionFromRotation(0, frameYaw + 90);
         Vec3 up = right.cross(forward);
         // A coprime permutation distributes each partial frame over the whole FOV.
         while (System.nanoTime() < deadline - 100_000) {
@@ -171,6 +178,7 @@ public final class VisionSensor {
                 long now = System.nanoTime();
                 frameNanos += now - start;
                 timing.frame(frameNanos, frameWidth == 128);
+                if (!panorama && !frontal) sweep++;
                 cursor = 0; frameNanos = 0; frameNumber++; completedFrames++; frontal = false;
                 if (!panorama) { frameWidth = 64; frameHeight = 36; }
                 tickNanos += now - start;

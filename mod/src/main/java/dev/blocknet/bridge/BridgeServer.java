@@ -26,7 +26,6 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import net.minecraft.server.MinecraftServer;
-import net.neoforged.fml.loading.FMLPaths;
 import net.neoforged.neoforge.event.ServerChatEvent;
 import net.neoforged.neoforge.event.server.ServerStartedEvent;
 import net.neoforged.neoforge.event.server.ServerStoppingEvent;
@@ -59,7 +58,7 @@ public final class BridgeServer implements AutoCloseable {
 
     public static void onServerStarted(ServerStartedEvent event) {
         try {
-            BridgeConfig config = BridgeConfig.load(FMLPaths.CONFIGDIR.get().resolve("blocknet_ai-bridge.json"));
+            BridgeConfig config = BridgeConfig.load(BridgeConfig.path());
             active = new BridgeServer(event.getServer(), config.port(), config.token());
             Blocknet.LOGGER.info("Blocknet bridge listening on 127.0.0.1:{}", active.port());
         } catch (java.net.BindException exception) {
@@ -69,15 +68,35 @@ public final class BridgeServer implements AutoCloseable {
         }
     }
 
+    public static boolean listening() {
+        return active != null;
+    }
+
     public static void onServerStopping(ServerStoppingEvent event) {
+        BrainLauncher.stopAll();
         if (active != null) active.close();
         active = null;
     }
 
     public static void onChat(ServerChatEvent event) {
         if (active == null || event.getPlayer() instanceof BotPlayer) return;
-        active.broadcast(object("type", "chat", "from", event.getPlayer().getGameProfile().getName(),
-            "text", event.getRawText()));
+        JsonObject message = playerMessage(event.getPlayer(), "chat");
+        message.addProperty("text", event.getRawText());
+        active.broadcast(message);
+    }
+
+    /** A player's message event with what they were pointing at when they said it (chat or voice). */
+    public static JsonObject playerMessage(net.minecraft.server.level.ServerPlayer player, String type) {
+        JsonObject message = object("type", type, "from", player.getGameProfile().getName());
+        var hit = player.level().clip(new net.minecraft.world.level.ClipContext(player.getEyePosition(),
+            player.getEyePosition().add(player.getViewVector(1).scale(6)), net.minecraft.world.level.ClipContext.Block.OUTLINE,
+            net.minecraft.world.level.ClipContext.Fluid.NONE, player));
+        if (hit.getType() == net.minecraft.world.phys.HitResult.Type.BLOCK) {
+            message.addProperty("pointed_ref", HintTargets.issue(player,hit.getBlockPos()));
+            message.addProperty("pointed_block", hit.getBlockPos().toShortString());
+            message.addProperty("pointed_dimension", player.level().dimension().location().toString());
+        }
+        return message;
     }
 
     public static void botsChanged() {
@@ -97,6 +116,13 @@ public final class BridgeServer implements AutoCloseable {
             if (id != null) progress.addProperty("task_id", id);
             bridge.broadcast(progress);
         });
+    }
+
+    /** A player asked a bot to list or change its voice; false when no brain is listening. */
+    public static boolean voiceRequest(BotPlayer bot, String player, String choice) {
+        if (active == null || active.clients.stream().noneMatch(client -> client.authenticated)) return false;
+        active.broadcast(object("type", "voice.choose", "bot", bot.getGameProfile().getName(), "from", player, "choice", choice));
+        return true;
     }
 
     public static void botSpoke(BotPlayer bot, String player) {
@@ -211,6 +237,12 @@ public final class BridgeServer implements AutoCloseable {
                     BotPlayer noted = BotManager.get(params.get("bot").getAsString());
                     if (noted != null) noted.trace().brainNote(params.get("source").getAsString(), params.get("text").getAsString());
                     if (!id.isJsonNull()) reply(id, object("noted", String.valueOf(noted != null)));
+                    return;
+                }
+                if (method.equals("debug.memory")) {
+                    BotPlayer viewed = BotManager.get(params.get("bot").getAsString());
+                    if (viewed == null) throw new IllegalArgumentException("Bot is not spawned");
+                    reply(id, dev.blocknet.debug.MemorySnapshot.capture(viewed, params));
                     return;
                 }
                 if (!method.equals("tool.call")) {

@@ -1,0 +1,13 @@
+{
+  "required": false,
+  "minVersion": "0.8",
+  "package": "dev.blocknet.compat.mixin",
+  "plugin": "dev.blocknet.compat.CompatMixinPlugin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "ae2.MEStorageMenuMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

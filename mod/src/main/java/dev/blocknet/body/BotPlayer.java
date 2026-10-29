@@ -33,6 +33,23 @@ public final class BotPlayer extends ServerPlayer {
         return vision;
     }
 
+    private final dev.blocknet.map.Radar radar = new dev.blocknet.map.Radar(this);
+    private boolean fullPerception;
+
+    /** ADR-0012: the bot may find blocks through walls (ores included); set from the config at spawn. */
+    public boolean fullPerception() {
+        return fullPerception;
+    }
+
+    public void fullPerception(boolean full) {
+        fullPerception = full;
+    }
+
+    /** Live creatures around the bot, without line of sight (ADR-0011). */
+    public dev.blocknet.map.Radar radar() {
+        return radar;
+    }
+
     private final BodyStateTracker bodyState = new BodyStateTracker(this);
 
     public BodyStateTracker bodyState() {
@@ -80,10 +97,12 @@ public final class BotPlayer extends ServerPlayer {
         long controlled = System.nanoTime();
         vision.tick();
         long seen = System.nanoTime();
+        // After the vision timestamp: the radar is not part of the vision budget.
+        radar.tick();
         // The pathfinder, when it has work, overrides this tick's inputs and rotation.
         IBaritone pathing = IBaritone.KEY.getNullable(this);
-        // Even idle pathing rearranges hotbar tools; defense owns hands as well as feet.
-        if (pathing != null && !controller.defending()) {
+        // Even idle pathing rearranges hotbar tools; defense and meals own hands as well as feet.
+        if (pathing != null && !controller.ownsHands()) {
             float forward = zza;
             float sideways = xxa;
             boolean jump = jumping;

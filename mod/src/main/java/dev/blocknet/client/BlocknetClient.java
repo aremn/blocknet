@@ -84,7 +84,8 @@ public final class BlocknetClient {
                     return;
                 }
                 sendCommand(minecraft, "blocknet mine " + lookedAt.getX() + " " + lookedAt.getY() + " " + lookedAt.getZ());
-            })
+            }),
+            new RadialMenuScreen.Action(Component.translatable("blocknet_ai.radial.next_voice"), () -> sendCommand(minecraft, "blocknet voice next"))
         );
     }
 

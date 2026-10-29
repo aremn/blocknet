@@ -64,7 +64,9 @@ public final class BotManager {
         bot.setYHeadRot(yaw);
         PathingDefaults.apply(IBaritone.KEY.get(bot).settings());
         dev.blocknet.debug.PathTrace.attach(bot);
-        bot.trace().add("body", "spawned at " + bot.blockPosition().toShortString());
+        bot.fullPerception(dev.blocknet.bridge.BridgeConfig.fullPerception());
+        bot.trace().add("body", "spawned at " + bot.blockPosition().toShortString()
+            + (bot.fullPerception() ? " (full perception)" : " (assisted perception)"));
         BOTS.put(key(name), bot);
         dev.blocknet.bridge.BridgeServer.botsChanged();
         Blocknet.LOGGER.info("Spawned bot {} at {}", name, pos);
@@ -78,6 +80,7 @@ public final class BotManager {
             return false;
         }
         dev.blocknet.bridge.BridgeServer.botsChanged();
+        dev.blocknet.bridge.BrainLauncher.stop(name);
         bot.moments().flushDamage();
         bot.controller().stop();
         if (bot.connection instanceof BotPacketListener listener) {
@@ -109,6 +112,7 @@ public final class BotManager {
         BotPlayer alive = (BotPlayer) dead.getServer().getPlayerList().respawn(dead, false,
             net.minecraft.world.entity.Entity.RemovalReason.KILLED);
         PathingDefaults.apply(IBaritone.KEY.get(alive).settings());
+        alive.fullPerception(dead.fullPerception());
         dev.blocknet.debug.PathTrace.attach(alive);
         alive.trace().add("body", "respawned at " + alive.blockPosition().toShortString());
         BOTS.put(key(alive.getGameProfile().getName()), alive);
@@ -119,7 +123,8 @@ public final class BotManager {
         if (event.getEntity() instanceof BotPlayer bot) {
             bot.controller().stop();
             BOTS.values().remove(bot);
-        dev.blocknet.bridge.BridgeServer.botsChanged();
+            dev.blocknet.bridge.BridgeServer.botsChanged();
+            dev.blocknet.bridge.BrainLauncher.stop(bot.getGameProfile().getName());
             // The pathfinder keeps per-entity state by UUID; a bot spawned again starts fresh.
             IBaritone.KEY.remove(bot);
             IInteractionController.KEY.remove(bot);

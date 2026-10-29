@@ -5,6 +5,7 @@ import dev.blocknet.memory.WorldMemory;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.world.InteractionHand;
+import net.minecraft.world.InteractionResult;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.BlockHitResult;
@@ -33,11 +34,25 @@ public final class BlockPlacement {
             && hit.getDirection() == face ? hit : null;
     }
 
-    public static void click(BotPlayer bot, BlockHitResult hit) {
+    /** A visible point on the {@code face} side of the block at {@code pos} itself (to attach something to it). */
+    public static BlockHitResult on(BotPlayer bot, BlockPos pos, Direction face) {
+        var level = bot.serverLevel();
+        if (!bot.canInteractWithBlock(pos, -0.5)) return null;
+        var shape = level.getBlockState(pos).getShape(level, pos);
+        if (shape.isEmpty()) return null;
+        AABB bounds = shape.bounds();
+        Vec3 center = bounds.getCenter().add(Vec3.atLowerCornerOf(pos));
+        Vec3 point = center.add(face.getStepX() * bounds.getXsize() * 0.4999,
+            face.getStepY() * bounds.getYsize() * 0.4999, face.getStepZ() * bounds.getZsize() * 0.4999);
+        var hit = WorldMemory.clip(bot, point, ClipContext.Block.OUTLINE);
+        return hit.getType() == HitResult.Type.BLOCK && hit.getBlockPos().equals(pos) && hit.getDirection() == face ? hit : null;
+    }
+
+    public static InteractionResult click(BotPlayer bot, BlockHitResult hit) {
         boolean sneaking = bot.isShiftKeyDown();
         bot.setShiftKeyDown(true);
         try {
-            bot.gameMode.useItemOn(bot, bot.serverLevel(), bot.getMainHandItem(), InteractionHand.MAIN_HAND, hit);
+            return bot.gameMode.useItemOn(bot, bot.serverLevel(), bot.getMainHandItem(), InteractionHand.MAIN_HAND, hit);
         } finally { bot.setShiftKeyDown(sneaking); }
     }
 }

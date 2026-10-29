@@ -117,11 +117,44 @@ public final class BlocknetCommands {
             })))
             .then(miningCommand("tunnel"))
             .then(skillCommand("knowledge"))
+            .then(Commands.literal("pickup").executes(c -> {
+                BotPlayer selected = nearestBot(c.getSource());
+                selected.controller().pickup("", reporter(c.getSource(), selected));
+                return 1;
+            }).then(Commands.argument("query", StringArgumentType.greedyString()).executes(c -> {
+                String[] words = StringArgumentType.getString(c, "query").trim().split("\\s+", 2);
+                BotPlayer selected = BotManager.get(words[0]);
+                String what = selected == null ? words[0] : words.length == 2 ? words[1] : "";
+                if (selected == null) selected = nearestBot(c.getSource());
+                selected.controller().pickup(what, reporter(c.getSource(), selected));
+                return 1;
+            })))
+            .then(Commands.literal("map").executes(c -> {
+                BotPlayer selected = nearestBot(c.getSource());
+                String text = dev.blocknet.map.WorldMap.text(selected, "");
+                c.getSource().sendSuccess(() -> Component.literal(text), false);
+                return 1;
+            }).then(Commands.argument("query", StringArgumentType.greedyString()).executes(c -> {
+                String[] words = StringArgumentType.getString(c, "query").trim().split("\\s+", 2);
+                BotPlayer selected = BotManager.get(words[0]);
+                String focus = selected == null ? String.join(" ", words) : words.length == 2 ? words[1] : "";
+                if (selected == null) selected = nearestBot(c.getSource());
+                String text = dev.blocknet.map.WorldMap.text(selected, focus);
+                c.getSource().sendSuccess(() -> Component.literal(text), false);
+                return 1;
+            })))
             .then(Commands.literal("wiki").then(Commands.argument("query", StringArgumentType.greedyString()).executes(c -> {
                 String text = dev.blocknet.knowledge.Wiki.get(c.getSource().getServer()).search(StringArgumentType.getString(c, "query"));
                 c.getSource().sendSuccess(() -> Component.literal(text), false);
                 return 1;
             })))
+            .then(Commands.literal("voice").executes(c -> voice(c, nearestBot(c.getSource()), ""))
+                .then(Commands.argument("query", StringArgumentType.greedyString()).executes(c -> {
+                    String[] words = StringArgumentType.getString(c, "query").trim().split("\\s+", 2);
+                    BotPlayer selected = BotManager.get(words[0]);
+                    String choice = selected == null ? String.join(" ", words) : words.length == 2 ? words[1] : "";
+                    return voice(c, selected == null ? nearestBot(c.getSource()) : selected, choice);
+                })))
             .then(Commands.literal("wiki-status").executes(c -> {
                 String text = dev.blocknet.knowledge.Wiki.get(c.getSource().getServer()).status();
                 c.getSource().sendSuccess(() -> Component.literal(text), false);
@@ -151,6 +184,10 @@ public final class BlocknetCommands {
                 var snapshot = bot.bodyState().snapshot();
                 sendSection(context.getSource(), "body", snapshot.sections().get("body"));
                 sendSection(context.getSource(), "task", snapshot.sections().get("task"));
+                String players = bot.getServer().getPlayerList().getPlayers().stream().filter(p -> p != bot)
+                    .map(p -> p.getScoreboardName() + " pos " + p.blockPosition().toShortString() + " dimension " + p.serverLevel().dimension().location())
+                    .collect(java.util.stream.Collectors.joining("; "));
+                context.getSource().sendSuccess(() -> Component.literal("players: " + players), false);
                 return 1;
             }))
             .then(withBot("inv", false, (context, bot) -> {
@@ -172,6 +209,8 @@ public final class BlocknetCommands {
                 bot.controller().come(context.getSource().getPosition(), onGround, reporter(context.getSource(), bot));
                 return 1;
             }))
+            .then(giveCommand(false))
+            .then(giveCommand(true))
             .then(withBot("follow", false, (context, bot) -> {
                 Entity sender = context.getSource().getEntity();
                 if (sender == null) {
@@ -271,12 +310,41 @@ public final class BlocknetCommands {
         return 1;
     }
 
+    private static LiteralArgumentBuilder<CommandSourceStack> giveCommand(boolean drop) {
+        String action = drop ? "drop" : "give";
+        return Commands.literal(action).then(Commands.argument("query", StringArgumentType.greedyString()).executes(c -> {
+            var words = new java.util.ArrayList<>(java.util.Arrays.asList(StringArgumentType.getString(c, "query").trim().split("\\s+")));
+            BotPlayer selected = BotManager.get(words.getFirst());
+            boolean named = selected != null && (drop || words.size() >= 3
+                && c.getSource().getServer().getPlayerList().getPlayerByName(words.get(1)) != null);
+            if (named) words.removeFirst(); else selected = nearestBot(c.getSource());
+            var report = reporter(c.getSource(), selected);
+            try {
+                if (words.size() < (drop ? 1 : 2) || words.size() > (drop ? 2 : 3))
+                    throw new IllegalArgumentException("use " + action + " [name] " + (drop ? "" : "<player> ") + "<item|all> [count]");
+                var player = drop ? null : c.getSource().getServer().getPlayerList().getPlayerByName(words.removeFirst());
+                if (!drop && player == null) throw new IllegalArgumentException("player not online");
+                String item = words.removeFirst();
+                int count = words.isEmpty() ? 0 : Integer.parseInt(words.getFirst());
+                if (count < 0 || count > 1000000 || !words.isEmpty() && count == 0) throw new IllegalArgumentException("count must be 1..1000000");
+                selected.controller().give(player, item, count, report);
+            } catch (IllegalArgumentException error) { report.accept("failed: " + error.getMessage()); }
+            return 1;
+        }));
+    }
+
     private static LiteralArgumentBuilder<CommandSourceStack> skillCommand(String action) {
         return Commands.literal(action).then(Commands.argument("query", StringArgumentType.greedyString()).executes(c -> {
             var words = new java.util.ArrayList<>(java.util.Arrays.asList(StringArgumentType.getString(c, "query").trim().split("\\s+")));
             BotPlayer bot = BotManager.get(words.getFirst());
             if (bot != null) words.removeFirst(); else bot = nearestBot(c.getSource());
             var report = reporter(c.getSource(), bot);
+            // explore_caves may name a map cave anywhere after the item: explore_caves coal 3 k2
+            String cave = action.equals("explore_caves") ? words.stream().skip(1).filter(w -> w.matches("k[0-9]+")).findFirst().orElse(null) : null;
+            if (cave != null) words.remove(cave);
+            // obtain <item> [count] [world|any]: world mines and crafts without taking from chests.
+            boolean world = action.equals("obtain") && words.size() > 1 && words.getLast().equals("world");
+            if (action.equals("obtain") && words.size() > 1 && (world || words.getLast().equals("any"))) words.removeLast();
             try {
                 if (words.isEmpty() || words.size() > (action.equals("knowledge") ? 1 : 2))
                     throw new IllegalArgumentException("use " + action + " <item|block> [count]");
@@ -291,9 +359,9 @@ public final class BlocknetCommands {
                 int count = words.size() == 2 ? Integer.parseInt(words.get(1)) : 1;
                 if (count < 1 || count > 1000000) throw new IllegalArgumentException("count must be 1..1000000");
                 if (action.equals("knowledge")) report.accept(dev.blocknet.knowledge.Knowledge.get(bot.serverLevel()).text(item));
-                else if (action.equals("explore_caves")) bot.controller().exploreCaves(item, count, report);
+                else if (action.equals("explore_caves")) bot.controller().exploreCaves(item, count, cave, report);
                 else if (action.equals("mine_ore")) bot.controller().mineOre(item, count, report);
-                else bot.controller().obtain(item, count, report);
+                else bot.controller().obtain(item, count, world, report);
             } catch (IllegalArgumentException error) { report.accept("blocked: " + error.getMessage()); }
             return 1;
         }));
@@ -339,8 +407,9 @@ public final class BlocknetCommands {
                 var report = reporter(c.getSource(), bot);
                 try {
                     if (words.isEmpty() || words.size() > 2) throw new IllegalArgumentException("use gather <ref|category|item> [count]");
-                    int count = words.size() > 1 ? Integer.parseInt(words.get(1)) : 1;
-                    if (count < 1 || count > 1000000) throw new IllegalArgumentException("count must be 1..1000000");
+                    // A ref without a count means that one object: the whole tree, not a log quota.
+                    int count = words.size() > 1 ? Integer.parseInt(words.get(1)) : words.getFirst().matches("[a-z][0-9]+") ? 0 : 1;
+                    if (count < 0 || count > 1000000) throw new IllegalArgumentException("count must be 1..1000000");
                     bot.controller().gather(words.getFirst(), count, report);
                 } catch (IllegalArgumentException error) { report.accept("blocked: " + error.getMessage()); }
                 return 1;
@@ -418,7 +487,7 @@ public final class BlocknetCommands {
 
     private static String filter(CommandContext<CommandSourceStack> context) {
         String value = context.getArgument("filter", ResourceOrTagKeyArgument.Result.class).asPrintable();
-        return value.equals("minecraft:all") ? "all" : value.equals("minecraft:junk") ? "junk" : value;
+        return value.equals("minecraft:all") ? "all" : value.equals("minecraft:junk") ? "junk" : value.equals("minecraft:loot") ? "loot" : value;
     }
 
     private static LiteralArgumentBuilder<CommandSourceStack> containerCommand(String action) {
@@ -562,6 +631,8 @@ public final class BlocknetCommands {
             return 0;
         }
         source.sendSuccess(() -> Component.literal("Spawned bot " + name), true);
+        String brain = dev.blocknet.bridge.BrainLauncher.start(name);
+        source.sendSuccess(() -> Component.literal(brain), false);
         return 1;
     }
 
@@ -585,6 +656,19 @@ public final class BlocknetCommands {
             source.sendSuccess(() -> Component.literal(line), false);
         }
         return BotManager.all().size();
+    }
+
+    /**
+     * Voices are files of the brain's speech engine, not of the body: the request goes to the
+     * brain, which answers in chat with the voice list or a line in the new voice.
+     */
+    private static int voice(CommandContext<CommandSourceStack> c, BotPlayer bot, String choice) {
+        String from = c.getSource().getEntity() instanceof net.minecraft.server.level.ServerPlayer player ? player.getGameProfile().getName() : "";
+        boolean sent = dev.blocknet.bridge.BridgeServer.voiceRequest(bot, from, choice.trim());
+        String name = bot.getGameProfile().getName();
+        c.getSource().sendSuccess(() -> Component.literal(sent ? "[" + name + "] voice " + (choice.isBlank() ? "list" : choice.trim()) + " asked"
+            : "[" + name + "] no brain connected; voices belong to the brain"), false);
+        return sent ? 1 : 0;
     }
 
     private static BotPlayer nearestBot(CommandSourceStack source) throws CommandSyntaxException {
