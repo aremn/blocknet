@@ -67,7 +67,14 @@ public final class VoiceInput {
     }
 
     public static void onServerTick(ServerTickEvent.Post event) {
-        if (!PHRASES.isEmpty()) finish(event.getServer(), System.currentTimeMillis()).forEach(BridgeServer::moment);
+        if (PHRASES.isEmpty()) return;
+        long now = System.currentTimeMillis();
+        // Bots turn to a speaker while they are still talking, not once the phrase is transcribed.
+        PHRASES.forEach((id, phrase) -> {
+            var speaker = now - phrase.lastFrame < 300 ? event.getServer().getPlayerList().getPlayer(id) : null;
+            if (speaker != null) dev.blocknet.control.IdleLife.heard(speaker);
+        });
+        finish(event.getServer(), now).forEach(BridgeServer::moment);
     }
 
     /** Phrases that ended by {@code now}, as voice events for the bots that heard them. */

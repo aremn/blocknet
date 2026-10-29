@@ -232,7 +232,7 @@ public final class BlocknetCommands {
                 return 1;
             }))
             .then(withBot("stop", false, (context, bot) -> {
-                bot.controller().stop();
+                bot.controller().stopAndStay();
                 return 1;
             })));
     }

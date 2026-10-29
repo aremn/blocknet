@@ -481,3 +481,17 @@ English to code, commands and commit messages.
   barrels, crafting tables; `CraftExecutor.queueSpareFuel` adds bag fuel when the furnace went out
   between batches (planned carry-over heat burns away); Automatone `InventoryBehavior` runs only
   while a path is active (it swapped a furnace out of the hand every tick).
+
+## Idle life (2026-10-29)
+
+- `control/IdleLife`, ticked by `BotController.tick()` only while `idle()` (no task, skill, container,
+  craft, gather, excavate, explore or open menu); reflexes and orders call `busy()`, which hands back
+  the fidget slot (only if no one chose another since) and the sneak key. No model involved.
+- Chat (`IdleLife::onChat`) and voice frames (`VoiceInput.onServerTick`, while still talking) make bots
+  within 24 blocks attend to a human speaker for 25 s: face them (player turn rate), fidget (crouch
+  first, then a hotbar swap, then random swap/strafe/crouch). Beyond 10 blocks the bot walks back to
+  4 through the pathfinder (no task, no report); after `stopAndStay()` (`/blocknet stop` and the
+  bridge's stop) it stays 3 min unless an order starts. Idle 15 s: picks up radar items within 8.
+  Mirrors a crouching player within 8. Humans only: bots are never companions, so other tests are
+  unaffected. `TestArena.human` makes a real ServerPlayer for tests; `IdleLifeGameTests` covers it.
+- `BotPlayer` keeps the sneak key across Automatone's idle input reset, as it keeps zza/xxa/jump.

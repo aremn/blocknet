@@ -1,26 +1,20 @@
 package dev.blocknet.gametest;
 
 import com.google.gson.JsonObject;
-import com.mojang.authlib.GameProfile;
 import dev.blocknet.Blocknet;
 import dev.blocknet.body.BotManager;
 import dev.blocknet.body.BotPlayer;
 import dev.blocknet.bridge.BridgeTools;
-import io.netty.channel.embedded.EmbeddedChannel;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
-import java.util.UUID;
 import java.util.function.Function;
 import java.util.regex.Pattern;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
-import net.minecraft.network.Connection;
-import net.minecraft.network.protocol.PacketFlow;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.server.network.CommonListenerCookie;
 import net.minecraft.world.Container;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.animal.Sheep;
@@ -134,23 +128,8 @@ public final class ExamGameTests {
         return player;
     }
 
-    /**
-     * A real (non-bot) player, as vanilla's GameTest mock player but with its own name: come and
-     * follow take only human players. It has no client, so it moves where the test puts it.
-     */
     private static ServerPlayer human(GameTestHelper h, String name, BlockPos at) {
-        var cookie = CommonListenerCookie.createInitial(new GameProfile(UUID.randomUUID(), name), false);
-        ServerPlayer player = new ServerPlayer(h.getLevel().getServer(), h.getLevel(), cookie.gameProfile(), cookie.clientInformation());
-        Connection connection = new Connection(PacketFlow.SERVERBOUND);
-        new EmbeddedChannel(connection);
-        h.getLevel().getServer().getPlayerList().placeNewPlayer(connection, player, cookie);
-        moveTo(h, player, Vec3.atBottomCenterOf(at));
-        return player;
-    }
-
-    private static void moveTo(GameTestHelper h, ServerPlayer player, Vec3 local) {
-        Vec3 pos = h.absoluteVec(local);
-        player.teleportTo(h.getLevel(), pos.x, pos.y, pos.z, player.getYRot(), player.getXRot());
+        return TestArena.human(h, name, Vec3.atBottomCenterOf(at));
     }
 
     private static int count(BotPlayer bot, Item item) { return bot.getInventory().countItem(item); }
@@ -229,7 +208,7 @@ public final class ExamGameTests {
             else {
                 var list = bot.getServer().getPlayerList();
                 ServerPlayer human = list.getPlayerByName(other);
-                if (human != null) list.remove(human);
+                if (human != null) TestArena.removeHuman(human);
             }
         }
     }
@@ -339,7 +318,7 @@ public final class ExamGameTests {
         for (int step = 0; step <= 18; step++) {
             int z = 24 + step;
             double y = z >= RIVER_FROM && z <= RIVER_TO ? SURFACE + 0.6 : FEET;
-            h.runAtTickTime(60 + 5L * step, () -> moveTo(h, leader, new Vec3(24.5, y, z + 0.5)));
+            h.runAtTickTime(60 + 5L * step, () -> TestArena.moveHuman(h, leader, new Vec3(24.5, y, z + 0.5)));
         }
         exam(h, "follow_across_river", 2400, bot, "follow", args("player", "ExLeadP"), r -> {
             if (leader.getZ() < h.absolutePos(new BlockPos(0, 0, 40)).getZ()) return "leader still crossing";

@@ -31,6 +31,7 @@ public final class Blocknet {
         NeoForge.EVENT_BUS.addListener(BridgeServer::onServerStarted);
         NeoForge.EVENT_BUS.addListener(BridgeServer::onServerStopping);
         NeoForge.EVENT_BUS.addListener(BridgeServer::onChat);
+        NeoForge.EVENT_BUS.addListener(dev.blocknet.control.IdleLife::onChat);
         NeoForge.EVENT_BUS.addListener(dev.blocknet.vision.OpacityTable::reload);
         NeoForge.EVENT_BUS.addListener(dev.blocknet.debug.DebugWatch::onServerTick);
         NeoForge.EVENT_BUS.addListener(dev.blocknet.map.MapScanner::onServerTick);

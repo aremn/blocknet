@@ -106,13 +106,16 @@ public final class BotPlayer extends ServerPlayer {
             float forward = zza;
             float sideways = xxa;
             boolean jump = jumping;
+            boolean sneak = isShiftKeyDown();
             pathing.serverTick();
             // Its idle input handler clears keys too. Preserve controller movement (e.g.
-            // collecting a freshly mined drop) when no navigation leg owns the feet.
+            // collecting a freshly mined drop, or crouching back at a player) when no
+            // navigation leg owns the feet.
             if (!controller.isNavigating()) {
                 zza = forward;
                 xxa = sideways;
                 setJumping(jump);
+                setShiftKeyDown(sneak);
             }
         }
         long pathed = System.nanoTime();

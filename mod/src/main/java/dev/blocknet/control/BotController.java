@@ -259,6 +259,30 @@ public final class BotController {
     public BotController(BotPlayer bot) {
         this.bot = bot;
         this.scene = new dev.blocknet.vision.Scene(bot);
+        this.idleLife = new IdleLife(bot, this);
+    }
+
+    private final IdleLife idleLife;
+
+    public IdleLife idleLife() { return idleLife; }
+
+    /** No order, skill, menu or reflex owns the body: idle life may move it. */
+    private boolean idle() {
+        return task == Task.IDLE && skill == null && containerTask == null && crafting == null && gathering == null
+            && excavating == null && exploring == null && bot.containerMenu == bot.inventoryMenu;
+    }
+
+    void idleLook(Vec3 point) { lookAt(point); }
+
+    /** One step of an idle walk; false once there or when no route is found. */
+    boolean idleWalk(Goal goal) { return pathTo(goal) == PathState.MOVING; }
+
+    void idleHalt() { if (pathGoal != null) stopPathing(); }
+
+    /** An explicit stop from a player or the brain: also stay here instead of catching up. */
+    public void stopAndStay() {
+        stop();
+        idleLife.stay();
     }
 
     /** One line of the reasoning trace: what was decided and why. */
@@ -1486,9 +1510,10 @@ public final class BotController {
 
     /** Called from {@link BotPlayer#tick()} before physics: sets this tick's inputs. */
     public void tick() {
-        if (tickSurvival()) return;
-        if (tickDanger()) return;
-        if (tickHunger()) return;
+        if (tickSurvival() || tickDanger() || tickHunger()) {
+            idleLife.busy(false);
+            return;
+        }
         if (usedContainerMenu != null) {
             if (bot.containerMenu == usedContainerMenu && usedContainerMenu.stillValid(bot)) {
                 bot.containerMemory().observe(bot, usedContainerPos);
@@ -1514,6 +1539,7 @@ public final class BotController {
         if (skill != null) {
             skill.tick();
         }
+        if (idle()) idleLife.tick(); else idleLife.busy(true);
         if (target == null) {
             return;
         }

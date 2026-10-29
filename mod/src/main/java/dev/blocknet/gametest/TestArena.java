@@ -1,13 +1,20 @@
 package dev.blocknet.gametest;
 
+import com.mojang.authlib.GameProfile;
 import dev.blocknet.body.BotManager;
 import dev.blocknet.body.BotPlayer;
 import dev.blocknet.memory.WorldMemory;
+import io.netty.channel.embedded.EmbeddedChannel;
 import java.util.Optional;
+import java.util.UUID;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.gametest.framework.GameTestHelper;
+import net.minecraft.network.Connection;
+import net.minecraft.network.protocol.PacketFlow;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.server.network.CommonListenerCookie;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.ClipContext;
@@ -59,5 +66,29 @@ final class TestArena {
     /** A block from another mod, if that mod is loaded. */
     static Optional<Block> modBlock(String id) {
         return BuiltInRegistries.BLOCK.getOptional(ResourceLocation.parse(id));
+    }
+
+    /**
+     * A real (non-bot) player, as vanilla's GameTest mock player but with its own name: come,
+     * follow and idle life treat only humans as players. It has no client, so it stays where the
+     * test puts it ({@link #moveHuman}); remove it with {@link #removeHuman}.
+     */
+    static ServerPlayer human(GameTestHelper helper, String name, Vec3 relativePos) {
+        var cookie = CommonListenerCookie.createInitial(new GameProfile(UUID.randomUUID(), name), false);
+        ServerPlayer player = new ServerPlayer(helper.getLevel().getServer(), helper.getLevel(), cookie.gameProfile(), cookie.clientInformation());
+        Connection connection = new Connection(PacketFlow.SERVERBOUND);
+        new EmbeddedChannel(connection);
+        helper.getLevel().getServer().getPlayerList().placeNewPlayer(connection, player, cookie);
+        moveHuman(helper, player, relativePos);
+        return player;
+    }
+
+    static void moveHuman(GameTestHelper helper, ServerPlayer player, Vec3 relativePos) {
+        Vec3 pos = helper.absoluteVec(relativePos);
+        player.teleportTo(helper.getLevel(), pos.x, pos.y, pos.z, player.getYRot(), player.getXRot());
+    }
+
+    static void removeHuman(ServerPlayer player) {
+        player.getServer().getPlayerList().remove(player);
     }
 }
