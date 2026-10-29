@@ -1,0 +1,4 @@
+{"time":"2026-10-29T11:34:15.507Z","passed":11,"total":16,"failed":["come_across_river","cook_mutton","follow_across_river","iron_pickaxe_from_nothing","torches"]}
+{"time":"2026-10-29T11:34:15.639Z","passed":13,"total":16,"failed":["come_across_river","cook_mutton","follow_across_river"]}
+{"time":"2026-10-29T11:34:15.782Z","passed":15,"total":16,"failed":["cook_mutton"]}
+{"time":"2026-10-29T11:34:15.911Z","passed":16,"total":16,"failed":[]}
