@@ -32,9 +32,11 @@ jobs:
           mkdir -p build
           ./gradlew :mod:runGameTestServer --console=plain > build/gametest.log 2>&1 || true
           grep -a -E "GAME TESTS COMPLETE|required tests (passed|failed)|failed at" build/gametest.log || true
+          # The exam (optional examNN tests) measures gaps; its score is printed, not enforced.
+          node brain/bench/exam-report.js build/gametest.log || true
           # Gradle's exit code is not enough: the summary line decides.
           grep -a -q -E "required tests passed" build/gametest.log
-          ! grep -a -q -E "failed at" build/gametest.log
+          ! grep -a -E "failed at" build/gametest.log | grep -a -v -E "]: exam[0-9]+" | grep -a -q .
 
       - name: Upload logs
         if: always()
