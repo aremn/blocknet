@@ -202,7 +202,7 @@
   },
   {
     "name": "look",
-    "description": "Return the scene; recent nearby looks use one frontal frame, fresh forces a 360 degree turn; optional focus: trees, ores, water, danger, built, stations, food.",
+    "description": "Return the scene; recent nearby looks use one frontal frame, fresh forces a 360 degree turn (at most once per half minute at one spot; use it after moving or when the scene is stale); optional focus: trees, ores, water, danger, built, stations, food.",
     "task": true,
     "params": {
       "type": "object",

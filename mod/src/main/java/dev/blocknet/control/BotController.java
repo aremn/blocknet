@@ -177,6 +177,8 @@ public final class BotController {
 
     private MiningTask excavating;
     private long lastPanorama = Long.MIN_VALUE;
+    /** A "fresh" look this soon after a full turn at the same spot reads one new frame instead. */
+    private static final int FRESH_TURN_AGAIN = 20 * 30;
     private Vec3 panoramaPosition;
     private String panoramaDimension;
     private boolean quickLook;
@@ -1256,8 +1258,11 @@ public final class BotController {
             && panoramaDimension.equals(bot.level().dimension().location().toString())
             && bot.position().distanceToSqr(panoramaPosition) < 36;
         // The background camera already sweeps all round (ADR-0012): once it has made a few turns,
-        // an ordinary look reads one frame instead of spinning the head. Only "fresh" spins.
-        quickLook = !fresh && (recentPanorama || bot.vision().completedFrames() >= 6);
+        // an ordinary look reads one frame instead of spinning the head. Only "fresh" spins, and not
+        // again within half a minute at the same spot: a model asking "fresh" every few seconds
+        // made the bot whirl around for nothing.
+        boolean justTurned = recentPanorama && now - lastPanorama < FRESH_TURN_AGAIN;
+        quickLook = (!fresh || justTurned) && (recentPanorama || bot.vision().completedFrames() >= 6);
         lookFrame = bot.vision().completedFrames();
         if (quickLook) bot.vision().startFrame(); else bot.vision().startPanorama();
         lookTicks = 0;

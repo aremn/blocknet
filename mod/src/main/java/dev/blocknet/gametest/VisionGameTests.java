@@ -387,36 +387,44 @@ public final class VisionGameTests {
         });
     }
 
-    @GameTest(template = "vision_field", skyAccess = true, timeoutTicks = 500)
+    @GameTest(template = "vision_field", skyAccess = true, timeoutTicks = 1100)
     public static void recentLookUsesFrameAndFreshTurns(GameTestHelper helper) {
         BotPlayer bot = field(helper, "BnLookCache");
         var reports = new ArrayList<String>();
-        double[] quickTurn = {0}, freshTurn = {0};
+        double[] quickTurn = {0}, freshTurn = {0}, againTurn = {0};
         float[] previous = {bot.getYRot()};
         int[] phase = {0};
         helper.onEachTick(() -> {
             double change = Math.abs(net.minecraft.util.Mth.wrapDegrees(bot.getYRot() - previous[0]));
             if (phase[0] == 1) quickTurn[0] += change;
             if (phase[0] == 2) freshTurn[0] += change;
+            if (phase[0] == 3) againTurn[0] += change;
             previous[0] = bot.getYRot();
         });
+        // Exercise the command syntax used by fresh:true in the bridge.
+        var fresh = new com.google.gson.JsonObject(); fresh.addProperty("fresh", true);
         bot.controller().look(first -> {
-            helper.runAfterDelay(100, () -> {
+            // Past the half minute in which a full turn counts as just made.
+            helper.runAfterDelay(620, () -> {
                 phase[0] = 1; previous[0] = bot.getYRot();
                 bot.controller().look(second -> {
                     reports.add(second);
                     phase[0] = 2; previous[0] = bot.getYRot();
-                    // Exercise the command syntax used by fresh:true in the bridge.
-                    var args = new com.google.gson.JsonObject(); args.addProperty("fresh", true);
-                    dev.blocknet.bridge.BridgeTools.run(bot, dev.blocknet.bridge.BridgeTools.get("look"), args, new HashMap<>(), reports::add);
+                    dev.blocknet.bridge.BridgeTools.run(bot, dev.blocknet.bridge.BridgeTools.get("look"), fresh, new HashMap<>(), third -> {
+                        reports.add(third);
+                        // Asked again right after a full turn at the same spot: one new frame, no second spin.
+                        phase[0] = 3; previous[0] = bot.getYRot();
+                        dev.blocknet.bridge.BridgeTools.run(bot, dev.blocknet.bridge.BridgeTools.get("look"), fresh, new HashMap<>(), reports::add);
+                    });
                 });
             });
         });
         helper.succeedWhen(() -> {
-            helper.assertTrue(reports.size() == 2, "cached and fresh reports: " + reports);
-            helper.assertTrue(reports.getFirst().matches("(?s).*\\(looked [5-9][0-9]*s ago\\).*"), reports.toString());
+            helper.assertTrue(reports.size() == 3, "cached, fresh and repeated fresh reports: " + reports);
+            helper.assertTrue(reports.getFirst().matches("(?s).*\\(looked (3[1-9]|[4-9][0-9])s ago\\).*"), reports.toString());
             helper.assertTrue(quickTurn[0] < 120, "cached yaw travel " + quickTurn[0]);
             helper.assertTrue(freshTurn[0] > 300, "fresh yaw travel " + freshTurn[0]);
+            helper.assertTrue(againTurn[0] < 120, "repeated fresh yaw travel " + againTurn[0]);
             BotManager.despawn("BnLookCache");
         });
     }

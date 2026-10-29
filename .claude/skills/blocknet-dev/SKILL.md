@@ -520,6 +520,8 @@ English to code, commands and commit messages.
   10 ticks; it used to cancel and replan the route every tick.
 - Crouch hello: counts the player's short crouches (<= 15 ticks), answers 5+ ticks after they pause
   with 1-5 crouches of its own rhythm; never mirrors. A long sneak is not a hello.
+- `look fresh` spins at most once per 30 s at one spot (`FRESH_TURN_AGAIN`); the actor asked for it
+  every few seconds and the bot whirled around.
 - Chores gather a bounded amount (wood to 16, coal to 8): a distant forest can be one huge tree object.
   Gather status says "gathering logs from t480" for a whole object instead of `Integer.MAX_VALUE`.
 - Remembered containers beyond 96 blocks (`ContainerMemory.SOURCE_RANGE`) are no source for obtain or
