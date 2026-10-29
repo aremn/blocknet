@@ -31,6 +31,7 @@ import net.minecraft.core.NonNullList;
 import net.minecraft.tags.TagKey;
 import net.minecraft.tags.ItemTags;
 import net.minecraft.world.InteractionHand;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
@@ -60,6 +61,16 @@ public final class InventoryBehavior extends Behavior {
 
    @Override
    public void onTickServer() {
+      // A player cannot rearrange the inventory with a stack on the cursor or another menu open;
+      // swapping then fills the slot a craft or transfer is about to put its stack back into.
+      if (this.ctx.entity() instanceof Player owner && (owner.containerMenu != owner.inventoryMenu || !owner.containerMenu.getCarried().isEmpty())) {
+         return;
+      }
+      // Tools and blocks matter in the hotbar for a route; while idle the body's own tasks own the
+      // hands (a furnace taken into slot 0 was swapped back for the pickaxe every tick).
+      if (!this.baritone.getPathingBehavior().isPathing()) {
+         return;
+      }
       if (this.baritone.settings().allowInventory.get()) {
          if (BotHands.of(this.ctx.entity()) instanceof BotHands player) {
             if (this.firstValidThrowaway(player) >= 9) {

@@ -83,6 +83,9 @@ public interface MovementHelper extends ActionCosts {
       Block b = state.getBlock();
       return b == Blocks.ICE
          || b instanceof InfestedBlock
+         // Blocknet: never dig through chests, furnaces, machines or any block that holds data;
+         // a route through a player's storage would destroy it.
+         || state.hasBlockEntity()
          || avoidAdjacentBreaking(bsi, x, y + 1, z, true, settings)
          || avoidAdjacentBreaking(bsi, x + 1, y, z, false, settings)
          || avoidAdjacentBreaking(bsi, x - 1, y, z, false, settings)

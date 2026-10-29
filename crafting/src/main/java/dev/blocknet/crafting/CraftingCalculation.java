@@ -20,6 +20,7 @@
 package dev.blocknet.crafting;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -265,12 +266,22 @@ public final class CraftingCalculation {
             failed.add(failureKey);
             throw new BranchFailure();
         }
-        if (!patterns.isEmpty()) {
+        for (Process process : patterns.subList(0, Math.min(patterns.size(), limits.variants))) {
+            // Inventory-backed unpacking was already tried by the strict pass. Without the
+            // packed item, asking for it would inflate the raw-material deficit through a cycle.
+            if (process.outputCount > process.inputs.size() && process.inputs.size() == 1
+                && Arrays.stream(process.inputs.getFirst().ingredient().getItems()).filter(s -> !s.isEmpty())
+                    .anyMatch(s -> processes(new ItemKey(s)).stream().anyMatch(reverse -> reverse.inputs.stream().anyMatch(i -> i.test(key)))))
+                continue;
             // The strict pass tried all viable branches. As in AE2 simulation mode, now expose
             // missing raw inputs on the preferred pattern instead of pretending crafts ran.
             var child = new CraftingSimulationState(state);
             try {
-                produce(patterns.getFirst(), key, count, child, path, true);
+                produce(process, key, count, child, path, true);
+                // A compression/decompression cycle cannot acquire its own missing ingredient.
+                // Report the original deficit (one raw iron), not a hypothetical nine-item block.
+                if (path.stream().anyMatch(ancestor -> child.missing.getOrDefault(ancestor.text(), 0L)
+                        > state.missing.getOrDefault(ancestor.text(), 0L))) continue;
                 state.apply(child);
                 return;
             } catch (BranchFailure failure) {
@@ -577,8 +588,9 @@ public final class CraftingCalculation {
             check(0);
             var fuels = state.keys()
                 .stream()
-                .filter(key -> state.available(key) > 0 && burnTicks(process, key) > 0)
-                .sorted(Comparator.comparingInt((ItemKey key) -> -burnTicks(process, key))
+                .filter(key -> state.available(key) > 0 && burnTicks(process, key) > 0 && fuelRank(key) < 3)
+                .sorted(Comparator.comparingInt(CraftingCalculation::fuelRank)
+                    .thenComparingInt((ItemKey key) -> -burnTicks(process, key))
                     .thenComparing(key -> key))
                 .toList();
             if (fuels.isEmpty()) {
@@ -601,6 +613,24 @@ public final class CraftingCalculation {
             }
         }
         state.heat.put(station, heat - requiredHeat);
+    }
+
+    /**
+     * What a player throws in a furnace: coal first, then wood, then other burnable materials.
+     * Never tools, weapons, armor (unstackable, nothing left after burning; a lava bucket leaves its
+     * bucket) or crafted storage and workstations (3 = not fuel), though vanilla burns a bow or a
+     * chest as well as a log.
+     */
+    public static int fuelRank(ItemKey fuel) {
+        ItemStack stack = fuel.stack();
+        if (stack.getMaxStackSize() == 1 && !stack.hasCraftingRemainingItem() || stack.is(net.neoforged.neoforge.common.Tags.Items.CHESTS)
+            || stack.is(net.neoforged.neoforge.common.Tags.Items.BARRELS)
+            || stack.is(net.neoforged.neoforge.common.Tags.Items.PLAYER_WORKSTATIONS_CRAFTING_TABLES)) {
+            return 3;
+        }
+        if (stack.is(net.minecraft.tags.ItemTags.COALS)) return 0;
+        if (stack.is(net.minecraft.tags.ItemTags.LOGS_THAT_BURN) || stack.is(net.minecraft.tags.ItemTags.PLANKS)) return 1;
+        return 2;
     }
 
     private static int burnTicks(Process process, ItemKey fuel) {
