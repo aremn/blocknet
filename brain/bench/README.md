@@ -64,3 +64,21 @@ tool arguments/results, answer, word count, pass and failed rule names, and any 
 Claude input totals include normal, cache-read and cache-creation input; cached is the read subset.
 Ranking sorts pass rate descending, warm p50 total latency ascending, then mean input+output tokens
 ascending. With one repeat, warm latency is unavailable.
+
+## The exam: whole player orders in the body
+
+`mod/.../gametest/ExamGameTests.java` grades the hands, where the model bench above grades the
+choices. Each exam test sends one order exactly as the planner sends a step (the bridge tool
+registry), in a lived-in 48x48 world: grass over dirt, five oaks, a three-deep river, stone cliffs
+with coal and iron, wandering sheep, a chest, a real (non-bot) player. The bot starts with the messy
+inventory of a real session and full perception, as it plays live. Exam tests are optional
+GameTests: a failure is a measured gap, not a broken build.
+
+```sh
+./gradlew :mod:runGameTestServer --console=plain > build/gametest.log 2>&1
+node brain/bench/exam-report.js build/gametest.log            # table with the failing reports
+node brain/bench/exam-report.js build/gametest.log --record   # also append to docs/exam-history.jsonl
+```
+
+Workflow: every live failure first becomes an exam order (the same world, bag and step string),
+then it is fixed until the order passes; the history shows progress and regressions.

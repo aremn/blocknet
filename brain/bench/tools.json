@@ -48,6 +48,159 @@
     }
   },
   {
+    "name": "inspect",
+    "description": "Resolve an observed object ref to its exact block and supported actions, without moving or opening it.",
+    "task": false,
+    "params": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ref"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "menu",
+    "description": "Read the currently open player menu: id, slots, cursor and synchronized data values (progress/energy where supplied by the menu). Open through use ref first. An open storage-network terminal adds a network section: exact stored amounts (craftable-only keys listed apart), or pending/disconnected/empty; filter narrows it, page continues a long list and fails when the network changed. Does not reveal closed storage.",
+    "task": false,
+    "params": {
+      "type": "object",
+      "properties": {
+        "filter": {
+          "type": "string"
+        },
+        "page": {
+          "type": "string"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "encode_pattern",
+    "description": "On an open pattern encoding terminal (use its ref first), encode a crafting pattern for an item from the game's own recipe, using a blank pattern from the inventory or terminal, and take the encoded pattern into the inventory.",
+    "task": false,
+    "params": {
+      "type": "object",
+      "properties": {
+        "item": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "item"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "speak",
+    "description": "Internal (brain voice): play a 16-bit mono WAV, base64, from the bot through voice chat.",
+    "task": false,
+    "params": {
+      "type": "object",
+      "properties": {
+        "wav": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "wav"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "heard",
+    "description": "Internal (brain voice): show a player what the bot understood from their voice.",
+    "task": false,
+    "params": {
+      "type": "object",
+      "properties": {
+        "player": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "player",
+        "text"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "job",
+    "description": "Read a saved unfinished transfer job. action forget explicitly abandons its bookkeeping; real cargo stays in inventory. Only forget when the player asks to abandon/reconcile it.",
+    "task": false,
+    "params": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "menu_click",
+    "description": "Click a slot in the currently open menu through player code; menu_id guards stale screens. click: pickup, quick_move or button. Mouse button 0/1; button mode uses the menu button id. Wait three ticks between clicks; inspect afterward.",
+    "task": false,
+    "params": {
+      "type": "object",
+      "properties": {
+        "menu_id": {
+          "type": "integer"
+        },
+        "slot": {
+          "type": "integer"
+        },
+        "button": {
+          "type": "integer"
+        },
+        "click": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "menu_id",
+        "slot"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "transfer",
+    "description": "Move ALL contents from source ref to destination ref through menu clicks and repeated trips. Keeps owned items. Success confirms source empty; failures report partial delivery. Use look stations or inspect to identify refs.",
+    "task": true,
+    "params": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "type": "string"
+        },
+        "destination": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "destination"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "look",
     "description": "Return the scene; recent nearby looks use one frontal frame, fresh forces a 360 degree turn; optional focus: trees, ores, water, danger, built, stations, food.",
     "task": true,
@@ -80,6 +233,41 @@
         }
       },
       "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "map",
+    "description": "Read the map: a 9x9 grid of 16-block cells around you, known places (structures v#, caves k# with entrances) and creatures within 48 blocks (e#) at their live positions, even behind walls; optional focus: a type, cave, structure or ref. Ores are not on the map.",
+    "task": false,
+    "params": {
+      "type": "object",
+      "properties": {
+        "focus": {
+          "type": "string"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "locate",
+    "description": "Full perception: the nearest blocks of an id or #tag (ores, logs, chests, machines, anything) through walls in loaded chunks, and which containers or machines around hold an item, with coordinates. Read-only; radius default 96, max 192.",
+    "task": false,
+    "params": {
+      "type": "object",
+      "properties": {
+        "what": {
+          "type": "string"
+        },
+        "radius": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "what"
+      ],
       "additionalProperties": false
     }
   },
@@ -137,7 +325,7 @@
   },
   {
     "name": "explore_caves",
-    "description": "Explore a seen cave mouth or dark opening, follow safe observed frontiers, gather target wall ore and place owned torches in darkness; return along breadcrumbs after five minutes or enough drops. Reports no cave seen if a fresh look finds none.",
+    "description": "Explore a seen cave mouth or dark opening, follow safe observed frontiers, gather target wall ore and place owned torches in darkness; return along breadcrumbs after five minutes or enough drops. Without cave, a fresh look then the nearest map cave entrance; cave k# (from map) walks into that cave first.",
     "task": true,
     "params": {
       "type": "object",
@@ -149,6 +337,9 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 1000000
+        },
+        "cave": {
+          "type": "string"
         }
       },
       "required": [
@@ -181,7 +372,7 @@
   },
   {
     "name": "obtain",
-    "description": "Obtain at least count items recursively from inventory, remembered containers, crafting and observed survival sources.",
+    "description": "Acquire a TOTAL count, including owned: inventory, remembered containers, supported crafting/smelting and survival sources; prepares needed tools. source world = mine/smelt/craft it yourself and never take from chests (use it for find/mine/добудь/накопай requests); any (default) may withdraw from remembered chests. Unsupported machine/network recipes return a blocker; plan and wiki explain dependencies.",
     "task": true,
     "params": {
       "type": "object",
@@ -193,6 +384,9 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 1000000
+        },
+        "source": {
+          "type": "string"
         }
       },
       "required": [
@@ -265,8 +459,56 @@
     }
   },
   {
+    "name": "give",
+    "description": "Walk next to a player and toss owned items to them; item or all, omitted count means all matching items. Does not obtain items.",
+    "task": true,
+    "params": {
+      "type": "object",
+      "properties": {
+        "player": {
+          "type": "string"
+        },
+        "item": {
+          "type": "string"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        }
+      },
+      "required": [
+        "player",
+        "item"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "drop",
+    "description": "Toss owned items where you stand; item or all, omitted count means all matching items.",
+    "task": true,
+    "params": {
+      "type": "object",
+      "properties": {
+        "item": {
+          "type": "string"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        }
+      },
+      "required": [
+        "item"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "goto",
-    "description": "Walk to an observed object ref, or supplied exact block coordinates; never invent coordinates.",
+    "description": "Walk to a ref: observed object (to the ground beside a building), map place v#/k# (cave entrance), creature e#, item i#, a player name; or exact block coordinates; never invent coordinates.",
     "task": true,
     "params": {
       "type": "object",
@@ -370,7 +612,7 @@
   },
   {
     "name": "gather",
-    "description": "Gather MORE items from an observed ref or logs/wood, stone/cobblestone, coal, iron, dirt, sand or exact item id; remembered refs are revisited and reobserved, soil is cleared by a safe staircase; requires the right tool.",
+    "description": "Harvest ONE observed thing: gather {ref} with a t#/s#/o# ref (or the player's pointed p#) and no count chops that whole tree or object, then stops. With count, or with logs/wood, stone/cobblestone, coal, iron, dirt, sand or an item id, gathers that many more. Remembered refs are revisited and reobserved; requires the right tool.",
     "task": true,
     "params": {
       "type": "object",
@@ -396,7 +638,7 @@
   },
   {
     "name": "use",
-    "description": "Walk to and right-click one block; sneak bypasses block interactions.",
+    "description": "Walk to and right-click an observed ref or exact block; sneak bypasses block interactions.",
     "task": true,
     "params": {
       "type": "object",
@@ -412,19 +654,32 @@
         },
         "sneak": {
           "type": "boolean"
+        },
+        "ref": {
+          "type": "string"
         }
       },
-      "required": [
-        "x",
-        "y",
-        "z"
-      ],
-      "additionalProperties": false
+      "required": [],
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": [
+            "ref"
+          ]
+        },
+        {
+          "required": [
+            "x",
+            "y",
+            "z"
+          ]
+        }
+      ]
     }
   },
   {
     "name": "attack",
-    "description": "Attack an observed entity ref or type with the best weapon; retreat when overwhelmed.",
+    "description": "Hunt a creature by ref e# (from map or look), type or player name: chase its live position, fight with the best weapon, retreat when overwhelmed, then pick up its drops; reports killed (with drops) or lost.",
     "task": true,
     "params": {
       "type": "object",
@@ -436,6 +691,24 @@
       "required": [
         "target"
       ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "pickup",
+    "description": "Pick up dropped items within 24 blocks: an item ref i# (from map or look), an item id, or all when omitted. Kills already collect their own drops.",
+    "task": true,
+    "params": {
+      "type": "object",
+      "properties": {
+        "item": {
+          "type": "string"
+        },
+        "ref": {
+          "type": "string"
+        }
+      },
+      "required": [],
       "additionalProperties": false
     }
   },
@@ -456,7 +729,7 @@
   },
   {
     "name": "place",
-    "description": "Place an inventory block at x y z; optional clicked face: up/down/north/south/east/west. Sneaks automatically.",
+    "description": "Place an inventory block, or any item that goes on by right-click (cables, pipes, parts), at x y z; optional face: up/down/north/south/east/west. If x y z is already occupied (a cable) and the item is a part (terminal, bus), it is attached to that block's given face. Sneaks automatically.",
     "task": true,
     "params": {
       "type": "object",
@@ -532,7 +805,7 @@
   },
   {
     "name": "look-in",
-    "description": "Open a container, remember its visible menu slots and close it.",
+    "description": "Open a container by ref or coordinates, report its visible contents and close it. A storage-network terminal reports the network contents.",
     "task": true,
     "params": {
       "type": "object",
@@ -545,19 +818,32 @@
         },
         "z": {
           "type": "integer"
+        },
+        "ref": {
+          "type": "string"
         }
       },
-      "required": [
-        "x",
-        "y",
-        "z"
-      ],
-      "additionalProperties": false
+      "required": [],
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": [
+            "ref"
+          ]
+        },
+        {
+          "required": [
+            "x",
+            "y",
+            "z"
+          ]
+        }
+      ]
     }
   },
   {
     "name": "deposit",
-    "description": "Put items into a container; filter is item id, #tag, all or junk; omitted count means all.",
+    "description": "Put items into a container; filter is item id, #tag, loot (everything except your tools, weapons, armor and food: use it for 'put everything away'), all (literally everything) or junk; omitted count means all. A storage-network terminal takes them into the network; a full network reports what was moved.",
     "task": true,
     "params": {
       "type": "object",
@@ -578,20 +864,34 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 1000000
+        },
+        "ref": {
+          "type": "string"
         }
       },
       "required": [
-        "x",
-        "y",
-        "z",
         "filter"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": [
+            "ref"
+          ]
+        },
+        {
+          "required": [
+            "x",
+            "y",
+            "z"
+          ]
+        }
+      ]
     }
   },
   {
     "name": "withdraw",
-    "description": "Take items from a container through menu clicks; omitted count means all matching items.",
+    "description": "Take items from a container through menu clicks; omitted count means all matching items. Works on a storage-network terminal (exact count, network items only).",
     "task": true,
     "params": {
       "type": "object",
@@ -612,13 +912,61 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 1000000
+        },
+        "ref": {
+          "type": "string"
         }
       },
       "required": [
-        "x",
-        "y",
-        "z",
         "filter"
+      ],
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": [
+            "ref"
+          ]
+        },
+        {
+          "required": [
+            "x",
+            "y",
+            "z"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "autocraft",
+    "description": "Ask a storage network to craft items it has a pattern for, through its terminal (ref or x, y, z) like a player: the network plans and runs the job. Reports submitted or what the network is short of; withdraw the result later.",
+    "task": true,
+    "params": {
+      "type": "object",
+      "properties": {
+        "x": {
+          "type": "integer"
+        },
+        "y": {
+          "type": "integer"
+        },
+        "z": {
+          "type": "integer"
+        },
+        "item": {
+          "type": "string"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        },
+        "ref": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "item"
       ],
       "additionalProperties": false
     }

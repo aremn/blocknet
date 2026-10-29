@@ -6,7 +6,7 @@ import { dirname, resolve } from 'node:path';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const registry = resolve(here, '../../mod/src/main/java/dev/blocknet/bridge/BridgeTools.java');
-const integers = new Set(['count', 'length', 'x', 'y', 'z', 'distance']);
+const integers = new Set(['count', 'length', 'x', 'y', 'z', 'distance', 'menu_id', 'slot', 'button']);
 const booleans = new Set(['sneak', 'delta', 'fresh']);
 
 export function parseRegistry(source) {
@@ -23,7 +23,7 @@ export function parseRegistry(source) {
       if (!optional) required.push(key);
     }
     const schema = { type: 'object', properties, required, additionalProperties: false };
-    if (name === 'goto') schema.oneOf = [{ required: ['ref'] }, { required: ['x', 'y', 'z'] }];
+    if (['goto', 'use', 'look-in', 'deposit', 'withdraw'].includes(name)) schema.oneOf = [{ required: ['ref'] }, { required: ['x', 'y', 'z'] }];
     return { name, description, task: task === 'true', params: schema };
   });
 }

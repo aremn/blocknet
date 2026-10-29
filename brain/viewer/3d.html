@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Blocknet · Память в 3D</title><link rel="stylesheet" href="/3d.css"></head>
+<body>
+<canvas id="scene" aria-label="Память бота в 3D"></canvas>
+<div id="crosshair">+</div>
+<section id="panel">
+  <div class="row"><b>Память бота · 3D</b> <a href="/">2D-карта</a></div>
+  <div class="row"><label>Бот <select id="bot" aria-label="Бот"></select></label>
+    <label>Радиус <select id="radius"><option value="32">32</option><option value="64" selected>64</option><option value="96">96</option></select></label></div>
+  <div class="row"><button id="refresh">Обновить</button><button id="home">К боту (F)</button><label><input id="live" type="checkbox"> Авто 10 с</label></div>
+  <p id="connection">Подключение…</p>
+  <p id="stats"></p>
+  <p id="task"></p>
+  <pre id="picked">Наведи прицел на блок</pre>
+  <p class="hint">Вращение: тяни мышью или стрелки; клик — обзор мышью как в игре (Esc — отпустить) · WASD — полёт · Пробел / C — вверх / вниз · Shift — быстрее · колесо — скорость · F — к боту</p>
+  <p class="legend"><span class="fresh">■</span> видел ≤ 10 с назад · <span class="old">■</span> помнит дольше · <span class="dark">■</span> видел, но было темно · <span class="bot">■</span> бот</p>
+  <p class="note">Только память зрения: пустота означает «не видел или воздух». Карта структур, радар и поиск руды сюда не подмешиваются.</p>
+  <div id="error" role="status"></div>
+</section>
+<script type="module" src="/3d.js"></script>
+</body></html>

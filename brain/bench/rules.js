@@ -17,6 +17,10 @@ export function evaluate(scenario, calls, answer) {
       case 'planQuality': {
         try {
           const plan = validatePlan(answer);
+            if (rule.target === 'shelter') {
+              passed = plan.status === 'blocked' && /blueprint|shelter|building|постро|укрыт/iu.test(plan.reason ?? '') && calls.length === 0;
+              break;
+            }
           const steps = plan.steps.map(s => ({ ...s, call: parseTool(s.do) }));
           const indexOf = (tool, item) => steps.findIndex(s => s.call?.tool === tool && itemIs(s.call, item));
           const acquisition = steps.some(s => ['obtain', 'mine_ore'].includes(s.call?.tool));

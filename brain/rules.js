@@ -12,7 +12,13 @@ export function addressed(text, bot, aliases = []) {
 export function routeRule(text, player) {
   const order = text.toLowerCase().trim().replace(/[.!?]+$/u, '').trim();
   const result = (tool, args) => ({ tool, args });
-  if (/^(stop|стоп)$/u.test(order)) return result('stop', {});
+  const stop = /(?:^|[^\p{L}\p{N}_])(стоп|хватит|не\s+надо|отмена|остановись|stop|cancel)(?=$|[^\p{L}\p{N}_])/u.exec(order);
+  if (stop) {
+    const tail = order.slice(stop.index + stop[0].length);
+    let nextOrder = /(?:[,;]|\s+(?:and|then|и|потом)\s+)\s*(.+)/u.exec(tail)?.[1]?.trim();
+    if (/^(?:(?:бля(?:ть)?|нахуй|сука|fuck|fucking|please|пожалуйста)[\s,!?.;]*)+$/u.test(nextOrder ?? '')) nextOrder = undefined;
+    return { ...result('stop', {}), ...(nextOrder && { nextOrder }) };
+  }
   if (/^(come|come here|come to me|ко мне|сюда)$/u.test(order)) return result('come', { player });
   if (/^(follow|follow me|за мной|следуй|следуй за мной)$/u.test(order)) return result('follow', { player });
   if (/^(look|look around|осмотрись)$/u.test(order)) return result('look', {});

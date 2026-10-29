@@ -55,6 +55,8 @@ export class ClaudeBackend {
   onEvent(event) {
     const turn = this.active;
     if (!turn) return;
+    if (event.type === 'stream_event' && event.event?.type === 'content_block_start' && event.event.content_block?.type === 'tool_use')
+      this.onTrace?.('tool', { tool: event.event.content_block.name, arguments: null, status: 'started' });
     if (event.type === 'stream_event' && event.event?.delta?.type === 'text_delta') {
       turn.ttftMs ??= Date.now() - turn.started;
       turn.streamed = true;

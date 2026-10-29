@@ -5,6 +5,8 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { appendSession, ResultSummary, failed } from './session-log.js';
 import { Body, option } from './body.js';
+import { ACTOR_TOOLS } from './tool-policy.js';
+import { handleSkillTool, skillTools } from './skills.js';
 
 export const PROTOCOL_VERSION = '2026-07-28';
 const LEGACY_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
@@ -83,8 +85,8 @@ export function serveMcp(body, bot, input = process.stdin, output = process.stdo
         case 'tools/list': {
           if (!initialized && !version) throw new Error('Initialize first');
           const hello = await body.ready();
-          reply({ tools: hello.tools.filter(t => !plannerOnly || ['knowledge', 'wiki'].includes(t.name))
-            .map(tool => ({ name: tool.name, description: tool.description, inputSchema: tool.params })).concat(plannerOnly ? [] : feedbackTool) });
+          reply({ tools: hello.tools.filter(t => plannerOnly ? ['knowledge', 'wiki'].includes(t.name) : ACTOR_TOOLS.includes(t.name))
+            .map(tool => ({ name: tool.name, description: tool.description, inputSchema: tool.params })).concat(plannerOnly ? [] : [feedbackTool, ...skillTools]) });
           break;
         }
         case 'tools/call': {
@@ -111,6 +113,9 @@ export function serveMcp(body, bot, input = process.stdin, output = process.stdo
               await appendFile(feedbackFile, `${JSON.stringify({ time: new Date().toISOString(), ...feedback })}\n`);
               log(feedback);
               text = 'Feedback recorded';
+            } else if (!plannerOnly && skillTools.some(t => t.name === name)) {
+              const hello = await body.ready();
+              text = await handleSkillTool(name, args, { call: (tool, toolArgs) => body.action(bot, tool, toolArgs), tools: hello.tools });
             } else text = await body.action(bot, name, args);
             const isError = failed(text);
             log({ type: 'tool_result', id, tool: name, result: summary.summarize(name, text), failed: isError, ms: Date.now()-started });

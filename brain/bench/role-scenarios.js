@@ -7,12 +7,7 @@ export const pickaxePlan = {
   ],
 };
 export const shelterPlan = {
-  goal: 'дом до ночи', budget_min: 10,
-  steps: [
-    { id: 1, do: 'obtain oak_planks 64', done: 'inv oak_planks >= 64' },
-    { id: 2, do: 'craft oak_door 1', done: 'inv oak_door >= 1' },
-    { id: 3, do: 'Build a small shelter with walls, roof and door on the observed empty site, then enter at 2 64 2.', done: 'pos 2 64 2' },
-  ],
+  status: 'blocked', reason: 'Building needs a verified blueprint result; arrival and an owned door do not prove a shelter.',
 };
 const common = {
   state: 'pos 0 64 0; inventory: empty', inventory: 'empty inventory',

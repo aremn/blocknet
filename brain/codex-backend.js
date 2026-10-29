@@ -45,7 +45,7 @@ export class CodexBackend {
       model: this.model, serviceTier: this.options.serviceTier ?? 'priority', cwd: this.options.cwd,
       approvalPolicy: 'never', sandbox: 'read-only', baseInstructions: this.options.prompt,
       developerInstructions: this.options.role === 'chat'
-        ? 'Classify player messages using only the supplied context. Return the requested JSON; never call tools or act in Minecraft.'
+        ? 'Answer using only the supplied context, in exactly the requested format (JSON or one spoken line); never call tools or act in Minecraft.'
         : 'Use only the blocknet MCP tools to act in Minecraft.', ephemeral: true,
     });
     this.threadId = result.thread.id;
@@ -108,6 +108,7 @@ export class CodexBackend {
       turn.deltas += p.delta;
       this.onText?.(p.delta);
     }
+    if (event.method === 'item/started' && p.item?.type === 'mcpToolCall') this.trace(p.item);
     if (event.method === 'item/completed') {
       this.trace(p.item);
       if (p.item?.type === 'agentMessage') {
