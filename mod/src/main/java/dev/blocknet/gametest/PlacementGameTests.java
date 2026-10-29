@@ -85,7 +85,24 @@ public final class PlacementGameTests {
         });
     }
 
-    @GameTest(template = "arena", timeoutTicks = 500)
+    @GameTest(template = "arena", timeoutTicks = 100)
+    public static void placementWithNothingToClickFailsAtOnce(GameTestHelper h) {
+        var bot = setup(h, "BnPlaceAir");
+        bot.getInventory().setItem(0, new ItemStack(Items.DIRT, 2));
+        List<String> reports = new ArrayList<>();
+        long started = h.getTick();
+        // UP means on top of the block below, and below this spot is air: no wait can make support appear.
+        bot.controller().place(new ItemStack(Items.DIRT), h.absolutePos(SPOT.above()), Direction.UP, reports::add);
+        h.succeedWhen(() -> {
+            h.assertTrue(reports.size() == 1 && reports.getFirst().startsWith("failed: nothing to place against"), "honest reason: " + reports);
+            h.assertTrue(h.getTick() - started < 10, "fails at once, not after the 20 s timeout");
+            h.assertTrue(h.getBlockState(SPOT.above()).isAir() && bot.getInventory().countItem(Items.DIRT) == 2, "no mutation");
+            BotManager.despawn("BnPlaceAir");
+        });
+    }
+
+    // 150 ticks: standing beside a refused placement gives up in seconds, not after the 400-tick timeout.
+    @GameTest(template = "arena", timeoutTicks = 150)
     public static void rejectedItemNeverReportsPlacement(GameTestHelper h) {
         var bot = setup(h, "BnPlaceReject");
         bot.getInventory().setItem(0, new ItemStack(Items.STICK, 2));

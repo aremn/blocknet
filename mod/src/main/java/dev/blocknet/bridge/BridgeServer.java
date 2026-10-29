@@ -271,8 +271,9 @@ public final class BridgeServer implements AutoCloseable {
                             bot.trace().add("tool", tool.name() + " finished: " + oneLine(result));
                             runningTasks.remove(bot.getUUID(), taskId);
                             // All authenticated connections receive outcomes (main brain and MCP process).
+                            // The tool lets a brain tell progress (place, craft) from perception (look).
                             JsonObject event = object("type", "task.finished", "bot", bot.getGameProfile().getName(),
-                                "task_id", taskId, "result", oneLine(result));
+                                "task_id", taskId, "tool", tool.name(), "result", oneLine(result));
                             broadcast(event);
                         }
                     };

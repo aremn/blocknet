@@ -1064,6 +1064,9 @@ public final class BotController {
     private ItemStack actionItem = ItemStack.EMPTY;
     private int foodBefore, itemBefore, actionTicks;
     private Direction placeFace;
+    /** Ticks spent standing beside a placement without a visible face; walking further cannot help. */
+    private int placeStuckTicks;
+    private static final int PLACE_STUCK_TICKS = 40;
 
     public void use(BlockPos pos, Consumer<String> reporter) { use(pos, false, reporter); }
 
@@ -1176,6 +1179,7 @@ public final class BotController {
         // Anything placed by right-click counts: cables, pipes and parts are items, not BlockItems.
         placeFace = face;
         actionTicks = 0;
+        placeStuckTicks = 0;
     }
 
     private void tickPlace(BlockPos pos) {
@@ -1185,6 +1189,12 @@ public final class BotController {
         // A part (terminal, bus) goes ONTO an occupied block such as a cable: right-click that block's face.
         boolean attach = !blockItem && !before.canBeReplaced();
         if (!attach && !before.canBeReplaced()) { fail("position occupied"); return; }
+        if (!attach) {
+            // A new block is clicked onto a neighbour; with none there, waiting only burned 20 s.
+            String unsupported = unsupportedPlacement(pos);
+            if (unsupported != null) { fail(unsupported); return; }
+        }
+        Direction refused = null;
         for (Direction face : Direction.values()) {
             if (placeFace != null && face != placeFace) continue;
             BlockHitResult hit = attach ? BlockPlacement.on(bot, pos, face) : BlockPlacement.face(bot, pos, face);
@@ -1228,8 +1238,32 @@ public final class BotController {
                     + pos.getX() + " " + pos.getY() + " " + pos.getZ());
                 return;
             }
+            refused = face;
         }
-        if (pathTo(new GoalGetToBlock(pos)) == PathState.FAILED) fail("cannot reach placement at " + pos.toShortString());
+        PathState approach = pathTo(new GoalGetToBlock(pos));
+        if (approach == PathState.FAILED) fail("cannot reach placement at " + pos.toShortString());
+        // Clicking again or standing longer beside it changes nothing: a player gives up in seconds.
+        else if ((refused != null || approach == PathState.ARRIVED) && ++placeStuckTicks > PLACE_STUCK_TICKS) {
+            String item = BuiltInRegistries.ITEM.getKey(actionItem.getItem()).getPath();
+            if (refused != null) fail("clicked the " + refused.getName() + " face for " + pos.toShortString() + " but " + item + " did not go on there");
+            else fail("no visible free placement face at " + pos.toShortString() + ": standing beside it, "
+                + (placeFace == null ? "every face" : "the " + placeFace.getName() + " face") + " is out of sight"
+                + (attach ? "; choose a side face of that block the bot can see" : ""));
+        }
+    }
+
+    /** Why a whole block cannot go at {@code pos} at all (nothing to click on), or null. */
+    private String unsupportedPlacement(BlockPos pos) {
+        var level = bot.level();
+        if (placeFace != null) {
+            BlockPos support = pos.relative(placeFace.getOpposite());
+            if (!level.getBlockState(support).canBeReplaced()) return null;
+            return "nothing to place against: face " + placeFace.getName() + " puts the block on the " + placeFace.getName()
+                + " side of " + support.getX() + " " + support.getY() + " " + support.getZ() + ", which is "
+                + BuiltInRegistries.BLOCK.getKey(level.getBlockState(support).getBlock()).getPath() + "; omit face or pick a side with a block";
+        }
+        for (Direction side : Direction.values()) if (!level.getBlockState(pos.relative(side)).canBeReplaced()) return null;
+        return "nothing to place against at " + pos.toShortString() + ": no block on any side";
     }
 
     public void lookIn(BlockPos pos, Consumer<String> reporter) {
