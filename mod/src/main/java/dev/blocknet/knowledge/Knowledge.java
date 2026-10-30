@@ -171,6 +171,20 @@ public final class Knowledge {
     }
     /** Every item some ore drops in this world's generation (coal, raw iron, diamond, ...). */
     public Set<Item> oreItems() { return Collections.unmodifiableSet(ores.keySet()); }
+
+    /**
+     * The ore drop whose furnace result is {@code result} (raw iron for an iron ingot, a mod's raw
+     * osmium for its osmium ingot), or null: what a player mines to smelt that item. From the
+     * world's ores and the server's smelting recipes, so modded metals work the same way.
+     */
+    public @javax.annotation.Nullable Item smeltedFrom(net.minecraft.server.level.ServerLevel level, Item result) {
+        for (Item drop : ores.keySet()) {
+            var cooked = level.getRecipeManager().getRecipeFor(net.minecraft.world.item.crafting.RecipeType.SMELTING,
+                new net.minecraft.world.item.crafting.SingleRecipeInput(new net.minecraft.world.item.ItemStack(drop)), level);
+            if (drop != result && cooked.isPresent() && cooked.get().value().getResultItem(level.registryAccess()).is(result)) return drop;
+        }
+        return null;
+    }
     public Ore ore(Block block) { return ores.values().stream().filter(o -> o.blocks.contains(block)).findFirst().orElse(null); }
     public String text(Block block) {
         Ore ore = ore(block);

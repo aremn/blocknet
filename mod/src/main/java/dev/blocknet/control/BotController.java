@@ -441,6 +441,36 @@ public final class BotController {
         return best;
     }
 
+    /** Block light under which a player working underground sets the next torch (about nine blocks from the last). */
+    private static final int TORCH_LIGHT = 6;
+    /** Feet positions a torch was already tried from; a refused placement is not retried there. */
+    private final java.util.Set<BlockPos> torchTried = new java.util.HashSet<>();
+
+    /**
+     * Where a player digging underground would stick a torch now, or null: torches in the bag, no sky
+     * above, darker than a torch leaves nine blocks away, and a free floor spot beside the feet.
+     */
+    @Nullable
+    BlockPos torchSpot() {
+        if (bot.getInventory().countItem(net.minecraft.world.item.Items.TORCH) == 0 || !inTheDark()) return null;
+        BlockPos feet = bot.blockPosition();
+        var level = bot.level();
+        if (torchTried.size() > 256) torchTried.clear();
+        if (!torchTried.add(feet.immutable())) return null;
+        for (Direction side : Direction.Plane.HORIZONTAL) {
+            BlockPos spot = feet.relative(side);
+            if (level.getBlockState(spot).getFluidState().isEmpty() && BlockPlacement.face(bot, spot, Direction.UP) != null) return spot;
+        }
+        return null;
+    }
+
+    /** Underground (no sky light at the feet) and darker than a torch leaves nine blocks away. */
+    boolean inTheDark() {
+        BlockPos feet = bot.blockPosition();
+        return bot.level().getBrightness(net.minecraft.world.level.LightLayer.SKY, feet) == 0
+            && bot.level().getBrightness(net.minecraft.world.level.LightLayer.BLOCK, feet) < TORCH_LIGHT;
+    }
+
     /** The nearest block to stand on that is neither lava nor fire, with solid ground under it. */
     @Nullable
     private BlockPos dryFooting() {
@@ -2165,9 +2195,24 @@ public final class BotController {
         if (Math.abs(Mth.wrapDegrees(yaw - bot.getYRot())) < 45.0F) {
             bot.zza = 1.0F;
         }
-        if ((bot.horizontalCollision && bot.onGround()) || bot.isInWater()) {
+        // A jump climbs a step only with room above the head; under a tunnel ceiling it was a hop
+        // against the stone, twenty times while collecting one drop. Ankle-deep water is walked.
+        if (bot.horizontalCollision && bot.onGround() && headroom() || bot.isInWater() && !wading()) {
             bot.setJumping(true);
         }
+    }
+
+    /** Nothing solid in the block above the head: a jump can rise. */
+    private boolean headroom() {
+        BlockPos above = bot.blockPosition().above(2);
+        return bot.level().getBlockState(above).getCollisionShape(bot.level(), above).isEmpty();
+    }
+
+    /** Feet in shallow water on a floor, head in the air: walking, not swimming. */
+    boolean wading() {
+        BlockPos feet = bot.blockPosition();
+        return bot.isInWater() && !bot.isEyeInFluid(net.minecraft.tags.FluidTags.WATER)
+            && bot.level().getBlockState(feet.below()).isFaceSturdy(bot.level(), feet.below(), Direction.UP);
     }
 
     private boolean hasArrived(Vec3 goal) {

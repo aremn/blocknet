@@ -578,3 +578,16 @@ English to code, commands and commit messages.
   (`ContainerTask.OPEN_TIMEOUT` 6000 ticks, as `CraftExecutor`); `storesIntoAChestFarAway` proves it.
 - Brain: jobs of one order share a batch; a failed or partial job drops the rest of its batch and the
   explanation mentions what was not started.
+- Live 2026-10-30 (iron run): furnace loading moves a stack like a player (`pickUpFor`: one left click
+  for the whole stack, right clicks only for part of one, then the rest back), not a trip per item.
+  `walkTowards` jumps only with headroom (`headroom()`), and wades ankle-deep water on a floor
+  (`wading()`); Automatone's `Movement.update` no longer holds jump in such water (the body floated,
+  broke blocks at 1/5 speed and replanned the same route for 10 minutes). `torchSpot()`/`inTheDark()`:
+  ObtainTask and MineOreTask set a torch beside the feet when there is no sky light and block light < 6;
+  ObtainTask makes 4 torches from one coal only when already in the dark with >= 2 coal.
+- `SmeltTask` shares more than 12 items of one kind between up to 4 furnaces (crafts the missing ones
+  from cobblestone, fetches coal, deposits ore and coal by quick placement, waits, withdraws ingots and
+  mines the furnaces back). `Knowledge.smeltedFrom(level, item)` names the raw ore of any smelted item
+  (modded too); bridge `raw {item}`. Brain `get` has `as: raw|smelted`: smelted = dig raw, come, smelt
+  beside the player, give. The brain waits up to 2 h for a task (`JOB_WAIT_MS`); `ObtainTask.budget`
+  grows by 10 s per item past 16 (cap 40 min). The user prefers 1-2 GameTests plus an in-game check.

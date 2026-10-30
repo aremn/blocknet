@@ -31,20 +31,97 @@ public final class WorkerJobsGameTests {
         return bot;
     }
 
-    /** "Переплавь руду": both raw ores in the bag go through a furnace the bot places itself. */
-    @GameTest(template = "arena", timeoutTicks = 3000)
+    /**
+     * "Переплавь руду": 30 raw iron is shared between three furnaces (one carried, two crafted from
+     * cobblestone), which are taken back afterwards; the 3 raw copper goes through one furnace, the
+     * stack dropped into it with one click. One furnace would have needed 300 s for the iron alone.
+     */
+    @GameTest(template = "arena", timeoutTicks = 6000)
     public static void smeltsTheRawOreInTheBag(GameTestHelper h) {
-        BotPlayer bot = bot(h, "BnJobSmelt", new Vec3(4.5, 1, 2.5), new ItemStack(Items.RAW_IRON, 3), new ItemStack(Items.RAW_COPPER, 2),
-            new ItemStack(Items.COAL, 2), new ItemStack(Items.FURNACE), new ItemStack(Items.STONE_PICKAXE));
+        BotPlayer bot = bot(h, "BnJobSmelt", new Vec3(4.5, 1, 4.5), new ItemStack(Items.RAW_IRON, 30), new ItemStack(Items.RAW_COPPER, 3),
+            new ItemStack(Items.COAL, 8), new ItemStack(Items.FURNACE), new ItemStack(Items.COBBLESTONE, 16),
+            new ItemStack(Items.CRAFTING_TABLE), new ItemStack(Items.STONE_PICKAXE));
         List<String> reports = new ArrayList<>();
         bot.controller().smelt(null, reports::add);
+        // The most ore that went into one furnace's input slot in one tick: a player drops the stack at once.
+        java.util.Map<BlockPos, Integer> lastInput = new java.util.HashMap<>();
+        int[] biggestLoad = {0}, mostFurnaces = {0};
+        h.onEachTick(() -> {
+            int furnaces = 0;
+            for (BlockPos pos : BlockPos.betweenClosed(h.absolutePos(new BlockPos(0, 0, 0)), h.absolutePos(new BlockPos(8, 3, 8)))) {
+                if (h.getLevel().getBlockEntity(pos) instanceof net.minecraft.world.level.block.entity.AbstractFurnaceBlockEntity furnace) {
+                    furnaces++;
+                    int input = furnace.getItem(0).getCount();
+                    biggestLoad[0] = Math.max(biggestLoad[0], input - lastInput.getOrDefault(pos.immutable(), 0));
+                    lastInput.put(pos.immutable(), input);
+                }
+            }
+            mostFurnaces[0] = Math.max(mostFurnaces[0], furnaces);
+        });
         h.succeedWhen(() -> {
             h.assertTrue(reports.size() == 1, "one report: " + reports);
-            h.assertTrue(reports.getFirst().equals("smelted 3 raw_iron into iron_ingot, 2 raw_copper into copper_ingot"), "report: " + reports);
-            h.assertTrue(bot.getInventory().countItem(Items.IRON_INGOT) == 3 && bot.getInventory().countItem(Items.COPPER_INGOT) == 2, "ingots made");
+            h.assertTrue(reports.getFirst().equals("smelted 30 raw_iron into iron_ingot in 3 furnaces, 3 raw_copper into copper_ingot"), "report: " + reports);
+            h.assertTrue(mostFurnaces[0] == 3, "three furnaces side by side: " + mostFurnaces[0]);
+            h.assertTrue(biggestLoad[0] >= 3, "the copper went in with one click, not one by one: " + biggestLoad[0]);
+            h.assertTrue(bot.getInventory().countItem(Items.IRON_INGOT) == 30 && bot.getInventory().countItem(Items.COPPER_INGOT) == 3, "ingots made");
             h.assertTrue(bot.getInventory().countItem(Items.RAW_IRON) == 0 && bot.getInventory().countItem(Items.RAW_COPPER) == 0, "ore used up");
-            h.assertTrue(h.getTick() >= 5 * 200, "five real furnace smelts");
+            h.assertTrue(bot.getInventory().countItem(Items.FURNACE) >= 3, "took its furnaces back");
+            h.assertTrue(h.getTick() < 30 * 200, "faster than one furnace: " + h.getTick() + " ticks");
             BotManager.despawn("BnJobSmelt");
+        });
+    }
+
+    /** A dark stone room: walls, floor and roof, nothing lit. */
+    private static void darkRoom(GameTestHelper h) {
+        for (int x = 0; x < 9; x++) for (int z = 0; z < 9; z++) for (int y = 0; y <= 3; y++) {
+            boolean shell = y == 0 || y == 3 || x == 0 || z == 0 || x == 8 || z == 8;
+            h.setBlock(new BlockPos(x, y, z), shell ? Blocks.STONE : Blocks.AIR);
+        }
+    }
+
+    /** Down in the dark for ore, a player sticks a torch beside them; the bot does it from its bag. */
+    @GameTest(template = "arena", timeoutTicks = 1200)
+    public static void lightsTheMineWithATorch(GameTestHelper h) {
+        darkRoom(h);
+        h.setBlock(new BlockPos(6, 1, 6), Blocks.COAL_ORE);
+        BotPlayer bot = TestArena.spawnBot(h, "BnJobTorch", new Vec3(2.5, 1, 2.5));
+        bot.fullPerception(true);
+        bot.getInventory().clearContent();
+        bot.getInventory().add(new ItemStack(Items.STONE_PICKAXE));
+        bot.getInventory().add(new ItemStack(Items.TORCH, 3));
+        List<String> reports = new ArrayList<>();
+        h.runAfterDelay(10, () -> bot.controller().obtain(Items.COAL, 1, true, reports::add));
+        h.succeedWhen(() -> {
+            h.assertTrue(reports.size() == 1 && reports.getFirst().contains("obtained 1 coal"), "report: " + reports);
+            int torches = 0;
+            for (BlockPos pos : BlockPos.betweenClosed(new BlockPos(1, 1, 1), new BlockPos(7, 2, 7))) if (h.getBlockState(pos).is(Blocks.TORCH)) torches++;
+            h.assertTrue(torches >= 1 && bot.getInventory().countItem(Items.TORCH) == 3 - torches, "lit the dark room with its own torch: " + torches);
+            BotManager.despawn("BnJobTorch");
+        });
+    }
+
+    /**
+     * Ankle-deep water on a stone floor is waded: the bot walks through it and breaks the wall from
+     * the ground. Swimming there (holding jump) kept it afloat for ten minutes in a live mine.
+     */
+    @GameTest(template = "arena", timeoutTicks = 400)
+    public static void wadesThroughShallowWaterAndDigs(GameTestHelper h) {
+        TestArena.floor(h);
+        for (int x = 0; x <= 5; x++) for (int z = 0; z <= 8; z++) for (int y = 1; y <= 2; y++) {
+            boolean wall = x == 0 || x == 5 || z == 0 || z == 8;
+            h.setBlock(new BlockPos(x, y, z), wall ? Blocks.STONE : y == 1 ? Blocks.WATER : Blocks.AIR);
+        }
+        BotPlayer bot = TestArena.spawnBot(h, "BnJobWade", new Vec3(1.5, 1, 4.5));
+        bot.getInventory().clearContent();
+        bot.getInventory().add(new ItemStack(Items.STONE_PICKAXE));
+        List<String> reports = new ArrayList<>();
+        int[] afloat = {0};
+        h.runAfterDelay(10, () -> bot.controller().mine(h.absolutePos(new BlockPos(5, 1, 4)), reports::add));
+        h.onEachTick(() -> { if (h.getTick() > 10 && reports.isEmpty() && bot.isInWater() && !bot.onGround()) afloat[0]++; });
+        h.succeedWhen(() -> {
+            h.assertTrue(reports.size() == 1 && reports.getFirst().startsWith("mined block"), "report: " + reports);
+            h.assertTrue(afloat[0] < 15, "walked and dug on the floor, not afloat: " + afloat[0] + " ticks off the ground in water");
+            BotManager.despawn("BnJobWade");
         });
     }
 

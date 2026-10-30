@@ -116,7 +116,11 @@ public abstract class Movement implements IMovement, MovementHelper {
          ((Player)this.ctx.entity()).getAbilities().flying = false;
       }
 
-      if (!this.ctx.baritone().settings().allowSwimming.get() && MovementHelper.isLiquid(this.ctx, this.ctx.feetPos())) {
+      // Blocknet: ankle-deep water on a floor is waded, not swum. Holding jump there kept the body
+      // afloat, so it broke blocks off the ground at a fifth of the speed, every movement overran its
+      // time and the same route was replanned for ten minutes in one puddle.
+      if (!this.ctx.baritone().settings().allowSwimming.get() && MovementHelper.isLiquid(this.ctx, this.ctx.feetPos())
+         && (MovementHelper.isLiquid(this.ctx, this.ctx.feetPos().up()) || !MovementHelper.canWalkOn(this.ctx, this.ctx.feetPos().down()))) {
          this.currentState.setInput(Input.JUMP, true);
       }
 

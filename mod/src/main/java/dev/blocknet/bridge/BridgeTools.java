@@ -41,6 +41,7 @@ public final class BridgeTools {
         add("explore_caves", "Explore a seen cave mouth or dark opening, follow safe observed frontiers, gather target wall ore and place owned torches in darkness; return along breadcrumbs after five minutes or enough drops. Without cave, a fresh look then the nearest map cave entrance; cave k# (from map) walks into that cave first.", true, "item", "count?", "cave?");
         add("mine_ore", "Descend to a known ore peak, bypass observed fluids, then mine a main tunnel and side branches until count or a ten minute budget; progress reports depth and actual drops.", true, "item", "count?");
         add("obtain", "Acquire a TOTAL count, including owned: inventory, remembered containers, supported crafting/smelting and survival sources; prepares needed tools. source world = mine/smelt/craft it yourself and never take from chests (use it for find/mine/добудь/накопай requests); any (default) may withdraw from remembered chests. Unsupported machine/network recipes return a blocker; plan and wiki explain dependencies.", true, "item", "count?", "source?");
+        add("raw", "Name the mined raw form of an item that is smelted from ore (iron_ingot -> raw_iron; works for modded metals), or none.", false, "item");
         add("smelt", "Smelt the raw ore and ore blocks in the inventory (or only item) in a furnace, placing one and finding fuel as needed; reports what was smelted.", true, "item?");
         add("clear", "Clear a square of radius around a player (or around the floor block x y z) to that floor height: break natural blocks above it (trees, soil, stone, plants), fill holes from the bag; builds are left alone.", true, "radius", "player?", "x?", "y?", "z?");
         add("plan", "Plan recipes without acting; mode craft makes new items, get counts owned items.", false,
@@ -241,6 +242,14 @@ public final class BridgeTools {
                 case "withdraw" -> bot.controller().withdraw(pos, word(args, "filter", null), args.has("count") ? args.get("count").getAsInt() : 0, report);
                 case "autocraft" -> bot.controller().autocraft(pos, word(args, "item", null), args.has("count") ? args.get("count").getAsInt() : 1, report);
             }
+            return;
+        }
+        if (tool.name().equals("raw")) {
+            var id = net.minecraft.resources.ResourceLocation.tryParse(word(args, "item", null));
+            if (id == null || !net.minecraft.core.registries.BuiltInRegistries.ITEM.containsKey(id)) throw new IllegalArgumentException("unknown item: " + word(args, "item", null));
+            var item = net.minecraft.core.registries.BuiltInRegistries.ITEM.get(id);
+            var raw = dev.blocknet.knowledge.Knowledge.get(bot.serverLevel()).smeltedFrom(bot.serverLevel(), item);
+            report.accept(raw == null ? "none" : net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(raw).toString());
             return;
         }
         if (tool.name().equals("smelt")) {

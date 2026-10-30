@@ -32,6 +32,8 @@ export function parseModel(spec) {
 }
 
 const itemId = id => String(id).replace(/^minecraft:/u, '');
+/** How long the brain waits for one body task; the body's own budgets end a stuck one sooner. */
+export const JOB_WAIT_MS = 2 * 60 * 60_000;
 
 /** Item counts from the body's inv text (main, armor and offhand slots). */
 export function inventoryCounts(text) {
@@ -54,7 +56,7 @@ const ref = value => typeof value === 'string' && /^p\d+$/u.test(value);
 export function checkJob(job) {
   if (!job || typeof job !== 'object' || !KINDS.includes(job.job)) return `unknown job ${JSON.stringify(job?.job)}`;
   const bad = {
-    get: () => !id(job.item) || !count(job.count),
+    get: () => !id(job.item) || !count(job.count) || job.as != null && !['raw', 'smelted'].includes(job.as),
     smelt: () => job.item != null && !id(job.item),
     store: () => !ref(job.target) || !(id(job.what) || ['loot', 'all'].includes(job.what)),
     take: () => !ref(job.target) || !id(job.item) || job.count != null && !count(job.count),
@@ -90,7 +92,7 @@ export function shortLine(text, words = 14) {
 export function describeJob(job) {
   const n = job.count ? `${job.count} ` : '';
   return {
-    get: () => `${job.deliver ? 'bring' : 'get'} ${n}${job.item}${job.source === 'world' ? ' (mine it yourself)' : ''}`,
+    get: () => `${job.deliver ? 'bring' : 'get'} ${n}${job.item}${job.source === 'world' ? ' (mine it yourself)' : ''}${job.as ? ` as ${job.as}` : ''}`,
     smelt: () => `smelt ${job.item ?? 'the ore in the bag'}`,
     store: () => `put ${job.what} into ${job.target}`,
     take: () => `take ${n}${job.item} from ${job.target}`,
@@ -255,13 +257,12 @@ export class Worker {
     const optional = (key, value) => value == null ? {} : { [key]: value };
     switch (job.job) {
       case 'get': {
-        const owned = inventoryCounts((await this.call('inv')).result)[itemId(job.item)] ?? 0;
-        // Bringing N means handing over N (owned ones count); getting N means N more than now.
-        const total = job.deliver ? job.count : owned + job.count;
-        let report = owned >= total ? `already have ${owned} ${job.item}`
-          : await this.task('obtain', { item: job.item, count: total, ...(job.source === 'world' && { source: 'world' }) });
-        if (failed(report) || !job.deliver) return report;
-        return this.task('give', { player, item: job.item, count: job.count });
+        // "as": the player chose raw or smelted ore. The body names the raw form (raw_iron for
+        // iron_ingot, a mod's raw osmium for its ingot), so no metal is spelled out here.
+        const raw = job.as ? (await this.call('raw', { item: job.item })).result : 'none';
+        if (raw === 'none') return this.obtain(job, player);
+        if (job.as === 'raw') return this.obtain({ ...job, item: raw, source: 'world' }, player);
+        return this.smeltNear(job, raw, player);
       }
       case 'smelt': return this.task('smelt', optional('item', job.item));
       case 'store': return this.task('deposit', { ref: job.target, filter: job.what });
@@ -276,6 +277,28 @@ export class Worker {
       default: return `failed: unknown job ${job.job}`;
     }
   }
+  /** Bringing N means handing over N (owned ones count); getting N means N more than now. */
+  async obtain(job, player) {
+    const owned = inventoryCounts((await this.call('inv')).result)[itemId(job.item)] ?? 0;
+    const total = job.deliver ? job.count : owned + job.count;
+    const report = owned >= total ? `already have ${owned} ${job.item}`
+      : await this.task('obtain', { item: job.item, count: total, ...(job.source === 'world' && { source: 'world' }) });
+    if (failed(report) || !job.deliver) return report;
+    return this.task('give', { player, item: job.item, count: job.count });
+  }
+  /** Smelted where the player sees it: dig the raw ore, come back, smelt it beside them, hand it over. */
+  async smeltNear(job, raw, player) {
+    const counts = inventoryCounts((await this.call('inv')).result);
+    const need = job.deliver ? Math.max(0, job.count - (counts[itemId(job.item)] ?? 0)) : job.count;
+    if (need > (counts[itemId(raw)] ?? 0)) {
+      const dug = await this.task('obtain', { item: raw, count: need, source: 'world' });
+      if (failed(dug)) return dug;
+    }
+    await this.task('come', { player }).catch(() => {});
+    const smelted = need > 0 ? await this.task('smelt', { item: raw }) : 'nothing to smelt';
+    if (failed(smelted) || !job.deliver) return smelted;
+    return this.task('give', { player, item: job.item, count: job.count });
+  }
   async task(tool, args) {
     const response = await this.call(tool, args);
     return response.outcome ? await response.outcome : response.result;
@@ -286,7 +309,8 @@ export class Worker {
     try {
       const result = await this.body.call(this.bot, tool, args);
       if (result.task_id) {
-        const outcome = this.body.waitTask(result.task_id);
+        // The body ends its own jobs (budgets, stop); a big order (64 iron, smelted) runs past ten minutes.
+        const outcome = this.body.waitTask(result.task_id, JOB_WAIT_MS);
         outcome.then(text => this.log?.write('tool_result', { tool, result: oneLine(text).slice(0, 1000), ms: Date.now() - started }),
           error => this.log?.write('tool_result', { tool, result: error.message, failed: true, ms: Date.now() - started }));
         return { ...result, outcome };

@@ -688,35 +688,48 @@ final class CraftExecutor {
         });
     }
 
+    /**
+     * Like a player: pick a stack up, drop it all with one left click, or, when only part of it is
+     * wanted, right-click that many while holding it, then put the rest back. A trip per item (pick
+     * up, place one, put back) made twenty raw iron sixty clicks and looked like a bot.
+     */
     private void queueMove(ItemKey key, long count, int destination) {
-        // One item per right click bounds the transfer to exactly the planner's amount.
-        for (long moved = 0; moved < count; moved++) {
-            int[] sourceSlot = {-1};
-            clicks.add(() -> {
-                int slot = findInventoryItem(key);
-                if (slot < 0) {
-                    fail("input disappeared while loading " + key);
-                    return;
-                }
-                sourceSlot[0] = inventoryMenuSlot(slot);
-                bot.containerMenu.clicked(sourceSlot[0], 0, ClickType.PICKUP, bot);
-            });
-            clicks.add(() -> {
-                int before = bot.containerMenu.getSlot(destination).getItem().getCount();
-                bot.containerMenu.clicked(destination, 1, ClickType.PICKUP, bot);
-                if (bot.containerMenu.getSlot(destination).getItem().getCount() != before + 1) {
-                    fail("slot rejected " + key);
-                }
-            });
-            clicks.add(() -> {
-                if (!bot.containerMenu.getCarried().isEmpty()) {
-                    returnCarried(sourceSlot[0]);
-                    if (!bot.containerMenu.getCarried().isEmpty()) {
-                        fail("inventory changed while returning cursor");
-                    }
-                }
-            });
+        if (count > 0) clicks.add(() -> pickUpFor(key, count, destination));
+    }
+
+    private void pickUpFor(ItemKey key, long count, int destination) {
+        int slot = findInventoryItem(key);
+        if (slot < 0) {
+            fail("input disappeared while loading " + key);
+            return;
         }
+        int source = inventoryMenuSlot(slot);
+        bot.containerMenu.clicked(source, 0, ClickType.PICKUP, bot);
+        ItemStack carried = bot.containerMenu.getCarried();
+        long here = Math.min(count, carried.getCount());
+        ItemStack there = bot.containerMenu.getSlot(destination).getItem();
+        List<Runnable> next = new ArrayList<>();
+        if (here == carried.getCount() && (there.isEmpty() || ItemStack.isSameItemSameComponents(there, carried))) {
+            next.add(() -> place(destination, key, here, 0));
+        } else {
+            for (long one = 0; one < here; one++) next.add(() -> place(destination, key, 1, 1));
+        }
+        next.add(() -> {
+            if (!bot.containerMenu.getCarried().isEmpty()) {
+                returnCarried(source);
+                if (!bot.containerMenu.getCarried().isEmpty()) fail("inventory changed while returning cursor");
+            }
+        });
+        if (count > here) next.add(() -> pickUpFor(key, count - here, destination));
+        // These go before anything queued later (the fuel after the ore).
+        for (int i = next.size() - 1; i >= 0; i--) clicks.addFirst(next.get(i));
+    }
+
+    /** One click on the destination: button 0 drops the carried stack, button 1 drops one item. */
+    private void place(int destination, ItemKey key, long amount, int button) {
+        int before = bot.containerMenu.getSlot(destination).getItem().getCount();
+        bot.containerMenu.clicked(destination, button, ClickType.PICKUP, bot);
+        if (bot.containerMenu.getSlot(destination).getItem().getCount() != before + amount) fail("slot rejected " + key);
     }
 
     private void cook() {

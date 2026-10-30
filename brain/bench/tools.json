@@ -396,6 +396,23 @@
     }
   },
   {
+    "name": "raw",
+    "description": "Name the mined raw form of an item that is smelted from ore (iron_ingot -> raw_iron; works for modded metals), or none.",
+    "task": false,
+    "params": {
+      "type": "object",
+      "properties": {
+        "item": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "item"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "smelt",
     "description": "Smelt the raw ore and ore blocks in the inventory (or only item) in a furnace, placing one and finding fuel as needed; reports what was smelted.",
     "task": true,

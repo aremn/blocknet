@@ -60,6 +60,11 @@ final class MineOreTask extends SkillTask {
     }
     @Override void work() {
         if (busy) return;
+        var torch = controller.torchSpot();
+        if (torch != null) {
+            controller.trace("mine", "dark in the tunnel; a torch at " + torch.toShortString());
+            action(cb -> controller.place(new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.TORCH), torch, net.minecraft.core.Direction.UP, cb), message -> {}); return;
+        }
         if (ore == null) { complete("unsupported: no ore generation for this item"); return; }
         if (held()-initial >= count) { complete("mined " + (held()-initial) + " " + name() + " at y=" + y + "; " + describe()); return; }
         if (y == Integer.MIN_VALUE) { complete("unsupported: no known ore peak reachable below the bot (unknown range or another dimension)"); return; }

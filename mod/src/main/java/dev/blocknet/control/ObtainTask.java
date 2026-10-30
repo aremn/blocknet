@@ -33,14 +33,17 @@ final class ObtainTask extends SkillTask {
     private final Set<java.util.UUID> lostPrey = new HashSet<>();
     private final Map<Item, Integer> minedKnown = new LinkedHashMap<>();
     private int operations;
-    private boolean surveyed;
+    private boolean surveyed, torchesMade;
     @Override String depthContext() { return mining == null ? "" : mining.depthContext(); }
 
     ObtainTask(BotPlayer bot, Item item, int count, Consumer<String> report) {
         this(bot, item, count, false, report);
     }
+    /** Ten minutes, plus ten seconds for every item past sixteen (64 raw iron is a long dig), at most forty. */
+    static int budget(int count) { return 20 * (600 + 10 * Math.max(0, Math.min(count, 196) - 16)); }
+
     ObtainTask(BotPlayer bot, Item item, int count, boolean world, Consumer<String> report) {
-        super(bot, report, 20*60*10);
+        super(bot, report, budget(count));
         target = new Goal(item, count); goals.push(target);
         this.world = world;
         if (world) controller.worldOnly(true);
@@ -67,6 +70,11 @@ final class ObtainTask extends SkillTask {
         if (caving != null) { caving.tick(); return; }
         if (picking != null) { picking.tick(); return; }
         if (busy) return;
+        BlockPos torch = controller.torchSpot();
+        if (torch != null) {
+            controller.trace("obtain", "dark down here; a torch at " + torch.toShortString());
+            action(cb -> controller.place(new ItemStack(Items.TORCH), torch, net.minecraft.core.Direction.UP, cb), message -> {}); return;
+        }
         if (++operations > 256) { complete("stopped: acquisition operation limit; " + describe()); return; }
         while (!goals.isEmpty() && held(goals.peek().item) >= goals.peek().count) goals.pop();
         if (goals.isEmpty()) {
@@ -112,6 +120,17 @@ final class ObtainTask extends SkillTask {
                 if (tool == null) { complete("unsupported: no known harvest tool for " + name(goal.item)); return; }
                 if (tool == Items.STONE_PICKAXE && held(Items.WOODEN_PICKAXE) == 0 && need(Items.WOODEN_PICKAXE, 1)) return;
                 if (need(tool, 1)) return;
+            }
+            // In the dark underground with no torches, a player spends one coal on four of them; the
+            // rest stays fuel (spending the only coal on torches left nothing to smelt with).
+            int coal = held(Items.COAL) + held(Items.CHARCOAL);
+            if (ore != null && !torchesMade && held(Items.TORCH) == 0 && coal >= 2 && controller.inTheDark()
+                    && held(Items.STICK) + bot.getInventory().items.stream().filter(s -> s.is(ItemTags.PLANKS) || s.is(ItemTags.LOGS)).mapToInt(ItemStack::getCount).sum() > 0) {
+                torchesMade = true;
+                controller.trace("obtain", "dark down here and no torches; making 4 from one coal");
+                action(cb -> controller.craft(new ItemStack(Items.TORCH), 4, cb), message -> {
+                    if (held(Items.TORCH) > 0) actions.add("made " + held(Items.TORCH) + " torches");
+                }); return;
             }
             int before = held(goal.item);
             if (ore != null) {
@@ -249,7 +268,7 @@ final class ObtainTask extends SkillTask {
             }
             // What a player does for an ingot or gem: mine the ore whose drop smelts into it.
             // Only while the bag lacks it: with the drop in hand a failing search must not mine forever.
-            Item drop = smeltedFrom(goal.item, knowledge.oreItems());
+            Item drop = knowledge.smeltedFrom(bot.serverLevel(), goal.item);
             int wanted = goal.count - held(goal.item);
             if (drop != null && held(drop) < wanted) {
                 controller.trace("obtain", name(goal.item) + " smelts from " + name(drop) + "; getting that first");
@@ -287,17 +306,6 @@ final class ObtainTask extends SkillTask {
      * An ore block (deepslate_iron_ore) is not what mining it gives (raw_iron) without silk touch.
      * Ask for the drop: once owned, the next plan picks the recipe that uses it (raw_iron -> ingot).
      */
-    /** The ore drop (raw iron) whose furnace result is {@code result} (iron ingot), or null. */
-    private Item smeltedFrom(Item result, Set<Item> drops) {
-        var level = bot.serverLevel();
-        for (Item drop : drops) {
-            var cooked = level.getRecipeManager().getRecipeFor(net.minecraft.world.item.crafting.RecipeType.SMELTING,
-                new net.minecraft.world.item.crafting.SingleRecipeInput(new ItemStack(drop)), level);
-            if (cooked.isPresent() && cooked.get().value().getResultItem(level.registryAccess()).is(result)) return drop;
-        }
-        return null;
-    }
-
     private Item minedForm(Item item) {
         if (item == null) return null;
         var ore = Knowledge.get(bot.serverLevel()).ore(item);

@@ -164,7 +164,7 @@ export class Body extends EventEmitter {
     return new Promise((resolveTask, rejectTask) => {
       const timer = setTimeout(() => {
         this.tasks.delete(id);
-        rejectTask(new Error('Task timed out after 10 minutes; use status or stop'));
+        rejectTask(new Error(`Task timed out after ${Math.round(timeout / 60_000)} minutes; use status or stop`));
       }, timeout);
       const settle = fn => value => { clearTimeout(timer); fn(value); };
       this.tasks.set(id, { resolve: settle(resolveTask), reject: settle(rejectTask) });
