@@ -39,6 +39,17 @@ public final class BridgeServer implements AutoCloseable {
     private final String token;
     private final ServerSocket listener;
     private final Map<UUID, String> runningTasks = new HashMap<>();
+    /**
+     * The report of each bot's running task. Every task ends with exactly one report, also when the
+     * controller drops it without one (a walk cut short by death, a stop or the next order): live, a
+     * bot died on its way to the player and the brain waited for that walk's outcome forever.
+     */
+    private final Map<UUID, java.util.function.Consumer<String>> runningFinish = new HashMap<>();
+
+    private void finishRunning(BotPlayer bot, String result) {
+        var finish = runningFinish.get(bot.getUUID());
+        if (finish != null) finish.accept(result);
+    }
     private final Set<Client> clients = ConcurrentHashMap.newKeySet();
     private volatile boolean closed;
 
@@ -139,7 +150,10 @@ public final class BridgeServer implements AutoCloseable {
                 : net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE.getKey(source.getEntity().getType()).getPath(),
             "position", bot.getBlockX() + " " + bot.getBlockY() + " " + bot.getBlockZ());
         event.addProperty("items_dropped", !bot.level().getGameRules().getBoolean(net.minecraft.world.level.GameRules.RULE_KEEPINVENTORY));
-        SERVERS.forEach(bridge -> bridge.broadcast(event));
+        SERVERS.forEach(bridge -> {
+            bridge.finishRunning(bot, "failed: died (" + event.get("cause").getAsString() + ")");
+            bridge.broadcast(event);
+        });
     }
 
     public static void botRespawned(BotPlayer bot) {
@@ -254,15 +268,19 @@ public final class BridgeServer implements AutoCloseable {
                 BridgeTools.Tool tool = BridgeTools.get(params.get("tool").getAsString());
                 JsonObject args = params.has("args") ? params.getAsJsonObject("args") : new JsonObject();
                 bot.trace().add("tool", tool.name() + (args.size() == 0 ? "" : " " + args));
+                // The task this order replaces, or a stop ends, reports now if its controller did not.
+                if (tool.task() || tool.name().equals("stop")) finishRunning(bot, tool.task() ? "failed: replaced by " + tool.name() : "failed: stopped");
                 if (tool.task()) {
                     String taskId = UUID.randomUUID().toString();
                     reply(id, object("task_id", taskId));
                     runningTasks.put(bot.getUUID(), taskId);
                     AtomicBoolean reported = new AtomicBoolean();
-                    java.util.function.Consumer<String> finish = result -> {
+                    @SuppressWarnings("unchecked") java.util.function.Consumer<String>[] self = new java.util.function.Consumer[1];
+                    java.util.function.Consumer<String> finish = self[0] = result -> {
                         if (reported.compareAndSet(false, true)) {
                             bot.trace().add("tool", tool.name() + " finished: " + oneLine(result));
                             runningTasks.remove(bot.getUUID(), taskId);
+                            runningFinish.remove(bot.getUUID(), self[0]);
                             // All authenticated connections receive outcomes (main brain and MCP process).
                             // The tool lets a brain tell progress (place, craft) from perception (look).
                             JsonObject event = object("type", "task.finished", "bot", bot.getGameProfile().getName(),
@@ -270,6 +288,7 @@ public final class BridgeServer implements AutoCloseable {
                             broadcast(event);
                         }
                     };
+                    runningFinish.put(bot.getUUID(), finish);
                     try {
                         BridgeTools.run(bot, tool, args, baselines, finish);
                     } catch (RuntimeException exception) {

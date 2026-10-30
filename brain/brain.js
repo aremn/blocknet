@@ -227,6 +227,9 @@ export class Worker {
     this.generation++;
     this.log?.write('jobs_cancelled', { reason, current: this.current && describeJob(this.current), queued: this.queue.length });
     this.queue.length = 0;
+    // The running job stops being waited for at once: a lost outcome (a walk cut short by death)
+    // must not hold the queue, and its later steps refuse to start (task() checks the generation).
+    this.abortJob?.();
   }
   async pump() {
     if (this.running) return;
@@ -236,7 +239,10 @@ export class Worker {
         const job = this.current = this.queue.shift(), generation = this.generation, started = Date.now();
         this.log?.write('job_start', { job, what: describeJob(job) });
         this.note(`job: ${describeJob(job)}`);
-        const report = await this.run(job).catch(error => `failed: ${error.message}`);
+        this.jobGeneration = generation;
+        const aborted = new Promise(resolve => { this.abortJob = () => resolve('cancelled'); });
+        const report = await Promise.race([this.run(job).catch(error => `failed: ${error.message}`), aborted]);
+        this.abortJob = null;
         this.log?.write('job_end', { job, report: oneLine(report).slice(0, 600), ms: Date.now() - started, cancelled: generation !== this.generation });
         if (generation !== this.generation || this.closed) continue;
         if (job.job === 'follow') continue;
@@ -300,6 +306,7 @@ export class Worker {
     return this.task('give', { player, item: job.item, count: job.count });
   }
   async task(tool, args) {
+    if (this.jobGeneration !== this.generation) throw new Error('cancelled');
     const response = await this.call(tool, args);
     return response.outcome ? await response.outcome : response.result;
   }

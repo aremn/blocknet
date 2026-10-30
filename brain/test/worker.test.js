@@ -87,6 +87,16 @@ test('a failed or partial job is told once in plain words, never as "done"', asy
   w.close();
 });
 
+test('dying mid-job never holds the queue, even when the walk reports nothing', async () => {
+  const { body, w, chat } = await worker([{ reply: 'Ща.', jobs: [{ job: 'smelt' }] }], b => b.hold.add('come'));
+  chat('сюда');
+  await until(() => body.actions().some(([tool]) => tool === 'come'));
+  body.emit('event', { type: 'bot.died', bot: 'Kirill', cause: 'player' });
+  chat('переплавь руду');
+  await until(() => body.actions().some(([tool]) => tool === 'smelt'));
+  w.close();
+});
+
 test('a failed job drops the rest of its own order, not the next order', async () => {
   const { body, backend, w, chat, idle } = await worker([
     { reply: 'Ща.', jobs: [{ job: 'store', target: 'p1', what: 'minecraft:coal' }, { job: 'store', target: 'p1', what: 'minecraft:iron_ingot' }] },
