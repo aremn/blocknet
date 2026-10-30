@@ -163,6 +163,27 @@ public final class BlocknetCommands {
             .then(skillCommand("mine_ore"))
             .then(skillCommand("explore_caves"))
             .then(skillCommand("obtain"))
+            .then(Commands.literal("smelt").executes(c -> smelt(c, nearestBot(c.getSource()), ""))
+                .then(Commands.argument("query", StringArgumentType.greedyString()).executes(c -> {
+                    String query = StringArgumentType.getString(c, "query").trim();
+                    String first = query.split("\s+")[0];
+                    BotPlayer named = BotManager.get(first);
+                    return named != null ? smelt(c, named, query.substring(first.length()).trim()) : smelt(c, nearestBot(c.getSource()), query);
+                })))
+            .then(Commands.literal("clear").then(Commands.argument("query", StringArgumentType.greedyString()).executes(c -> {
+                var words = new java.util.ArrayList<>(java.util.Arrays.asList(StringArgumentType.getString(c, "query").trim().split("\s+")));
+                BotPlayer bot = BotManager.get(words.getFirst());
+                if (bot != null) words.removeFirst(); else bot = nearestBot(c.getSource());
+                var report = reporter(c.getSource(), bot);
+                try {
+                    if (words.size() != 1) throw new IllegalArgumentException("use clear [name] <radius>");
+                    int radius = Integer.parseInt(words.getFirst());
+                    if (radius < 1 || radius > dev.blocknet.control.BotController.CLEAR_MAX_RADIUS) throw new IllegalArgumentException("radius must be 1.." + dev.blocknet.control.BotController.CLEAR_MAX_RADIUS);
+                    // Around whoever runs it: the floor is the block under their feet.
+                    bot.controller().clear(net.minecraft.core.BlockPos.containing(c.getSource().getPosition()), radius, report);
+                } catch (IllegalArgumentException error) { report.accept("blocked: " + error.getMessage()); }
+                return 1;
+            })))
             .then(miningCommand("descend"))
             .then(eatCommand(buildContext))
             .then(placeCommand(buildContext))
@@ -365,6 +386,18 @@ public final class BlocknetCommands {
             } catch (IllegalArgumentException error) { report.accept("blocked: " + error.getMessage()); }
             return 1;
         }));
+    }
+
+    private static int smelt(CommandContext<CommandSourceStack> c, BotPlayer bot, String item) {
+        var report = reporter(c.getSource(), bot);
+        net.minecraft.world.item.Item only = null;
+        if (!item.isEmpty()) {
+            var id = net.minecraft.resources.ResourceLocation.tryParse(item);
+            if (id == null || !net.minecraft.core.registries.BuiltInRegistries.ITEM.containsKey(id)) { report.accept("blocked: unknown item: " + item); return 1; }
+            only = net.minecraft.core.registries.BuiltInRegistries.ITEM.get(id);
+        }
+        bot.controller().smelt(only, report);
+        return 1;
     }
 
     private static LiteralArgumentBuilder<CommandSourceStack> miningCommand(String action) {

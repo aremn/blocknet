@@ -22,13 +22,13 @@ import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
 
 /**
  * A bot with no order behaves like a companion: it faces whoever talks and nods, looks where its
- * player looks, walks alongside, and does small jobs near a player who stays busy in one place.
+ * player looks and walks alongside. It never works on its own initiative (ADR-0016).
  */
 @GameTestHolder(Blocknet.MOD_ID)
 @PrefixGameTestTemplate(false)
 public final class IdleLifeGameTests {
     private static final Vec3 BOT = new Vec3(24.5, 1, 24.5);
-    /** Attention after a word lasts 25 s; chores wait for it to end and for 12 s of idling. */
+    /** Attention after a word lasts 25 s; the old chores started 12 s of idling after it ended. */
     private static final int CHORES_FROM = 20 * 25 + 40;
 
     private IdleLifeGameTests() {}
@@ -195,56 +195,6 @@ public final class IdleLifeGameTests {
         });
     }
 
-    /** Its player stands busy nearby, the bag has no wood, a tree is in sight: it chops the tree and says so. */
-    @GameTest(template = "vision_field", skyAccess = true, timeoutTicks = 2400)
-    public static void chopsATreeWhileItsPlayerIsBusy(GameTestHelper h) {
-        BotPlayer bot = bot(h, "BnIdleChop");
-        tree(h, 31, 24);
-        ServerPlayer player = TestArena.human(h, "IdleBuilder", new Vec3(26.5, 1, 20.5));
-        h.runAfterDelay(5, () -> IdleLife.heard(player));
-        h.succeedWhen(() -> {
-            h.assertTrue(logs(bot) >= 3, "chopped the tree: " + logs(bot) + " logs");
-            h.assertTrue(said(bot, "chore"), "said what it was doing");
-            h.assertTrue(h.getTick() >= CHORES_FROM, "not while it was being talked to");
-            done("BnIdleChop", player);
-        });
-    }
-
-    @GameTest(template = "vision_field", skyAccess = true, timeoutTicks = 1200)
-    public static void craftsTorchesFromCoalWhenIdle(GameTestHelper h) {
-        BotPlayer bot = bot(h, "BnIdleTorch");
-        bot.getInventory().setItem(3, new ItemStack(Items.COAL, 2));
-        bot.getInventory().setItem(4, new ItemStack(Items.STICK, 2));
-        ServerPlayer player = TestArena.human(h, "IdleCrafter", new Vec3(26.5, 1, 20.5));
-        h.runAfterDelay(5, () -> IdleLife.heard(player));
-        h.succeedWhen(() -> {
-            h.assertTrue(bot.getInventory().countItem(Items.TORCH) >= 8, "crafted torches: " + bot.getInventory().countItem(Items.TORCH));
-            done("BnIdleTorch", player);
-        });
-    }
-
-    /** A person drops a job to go with a friend who walks away. */
-    @GameTest(template = "vision_field", skyAccess = true, timeoutTicks = 2400)
-    public static void dropsAChoreWhenItsPlayerLeaves(GameTestHelper h) {
-        BotPlayer bot = bot(h, "BnIdleDrop");
-        tree(h, 31, 24);
-        ServerPlayer player = TestArena.human(h, "IdleRover", new Vec3(26.5, 1, 20.5));
-        boolean[] left = {false};
-        h.runAfterDelay(5, () -> IdleLife.heard(player));
-        h.onEachTick(() -> {
-            if (!left[0] && said(bot, "chore")) {
-                left[0] = true;
-                TestArena.moveHuman(h, player, new Vec3(8.5, 1, 6.5));
-            }
-        });
-        h.succeedWhen(() -> {
-            h.assertTrue(left[0], "a chore started");
-            h.assertTrue(bot.distanceTo(player) <= 5.5, "went after its player: " + bot.distanceTo(player));
-            h.assertTrue(h.getBlockState(new BlockPos(31, 5, 24)).is(Blocks.OAK_LOG) || logs(bot) < 5, "left the tree unfinished");
-            done("BnIdleDrop", player);
-        });
-    }
-
     /**
      * A crouch hello is answered after the player's, not mirrored: nothing while the player bobs,
      * then a few crouches of the bot's own, and it ends standing.
@@ -274,54 +224,26 @@ public final class IdleLifeGameTests {
         });
     }
 
-    /** While the brain works on an order (planning, between steps) no chore starts; afterwards it does. */
-    @GameTest(template = "vision_field", skyAccess = true, timeoutTicks = 2400)
-    public static void noChoresWhileTheBrainWorks(GameTestHelper h) {
-        BotPlayer bot = bot(h, "BnIdleWait");
-        tree(h, 31, 24);
-        ServerPlayer player = TestArena.human(h, "IdleOrderer", new Vec3(26.5, 1, 20.5));
-        bot.controller().idleLife().brainWorking(true);
-        h.runAfterDelay(5, () -> IdleLife.heard(player));
-        h.runAtTickTime(CHORES_FROM + 300, () -> {
-            h.assertTrue(logs(bot) == 0 && !said(bot, "chore"), "no chore while the brain was working");
-            bot.controller().idleLife().brainWorking(false);
-        });
-        h.succeedWhen(() -> {
-            h.assertTrue(h.getTick() > CHORES_FROM + 300, "after the brain finished");
-            h.assertTrue(logs(bot) >= 3, "chopped the tree once the brain was done: " + logs(bot) + " logs");
-            done("BnIdleWait", player);
-        });
-    }
-
-    /** With a full bag an item lying nearby is left alone (it used to walk onto it every tick); with room it is picked up. */
-    @GameTest(template = "vision_field", skyAccess = true, timeoutTicks = 1200)
-    public static void leavesItemsItsBagCannotTake(GameTestHelper h) {
-        BotPlayer bot = bot(h, "BnIdleFull");
-        for (int slot = 1; slot < 36; slot++) bot.getInventory().setItem(slot, new ItemStack(Items.WOODEN_SWORD));
-        ServerPlayer player = TestArena.human(h, "IdleWatcher", new Vec3(24.5, 1, 20.5));
-        h.spawnItem(Items.COBBLESTONE, 24.5F, 1.2F, 28.5F);
-        h.runAtTickTime(600, () -> {
-            h.assertTrue(moved(h, bot) < 1, "did not walk to an item the bag cannot take: moved " + moved(h, bot));
-            bot.getInventory().setItem(35, ItemStack.EMPTY);
-        });
-        h.succeedWhen(() -> {
-            h.assertTrue(h.getTick() > 600, "after a slot was freed");
-            h.assertTrue(bot.getInventory().countItem(Items.COBBLESTONE) == 1, "picked it up once there was room");
-            done("BnIdleFull", player);
-        });
-    }
-
-    /** No human around (other bots are not companions): nothing happens by itself. */
-    @GameTest(template = "vision_field", skyAccess = true, timeoutTicks = 1000)
-    public static void noChoresWithoutAPlayer(GameTestHelper h) {
-        BotPlayer bot = bot(h, "BnIdleAlone");
+    /**
+     * A worker takes no job it was not given (ADR-0016): its player stands busy nearby, a tree, coal
+     * for torches and an item on the ground are right there, and long after the old chores would
+     * have started it has chopped, crafted and picked up nothing.
+     */
+    @GameTest(template = "vision_field", skyAccess = true, timeoutTicks = CHORES_FROM + 700)
+    public static void doesNothingUnasked(GameTestHelper h) {
+        BotPlayer bot = bot(h, "BnIdleUnasked");
         bot.getInventory().setItem(3, new ItemStack(Items.COAL, 2));
         bot.getInventory().setItem(4, new ItemStack(Items.STICK, 2));
         tree(h, 31, 24);
-        h.runAtTickTime(900, () -> {
-            h.assertTrue(bot.getInventory().countItem(Items.TORCH) == 0 && logs(bot) == 0, "did nothing on its own");
-            h.assertTrue(moved(h, bot) < 1, "stayed put");
-            done("BnIdleAlone");
+        ServerPlayer player = TestArena.human(h, "IdleBusy", new Vec3(26.5, 1, 20.5));
+        h.spawnItem(Items.COBBLESTONE, 25.5F, 1.2F, 28.5F);
+        h.runAfterDelay(5, () -> IdleLife.heard(player));
+        h.runAtTickTime(CHORES_FROM + 600, () -> {
+            h.assertTrue(logs(bot) == 0 && h.getBlockState(new BlockPos(31, 1, 24)).is(Blocks.OAK_LOG), "chopped nothing");
+            h.assertTrue(bot.getInventory().countItem(Items.TORCH) == 0, "crafted nothing");
+            h.assertTrue(bot.getInventory().countItem(Items.COBBLESTONE) == 0, "picked nothing up");
+            h.assertTrue(!said(bot, "chore"), "announced no job of its own");
+            done("BnIdleUnasked", player);
             h.succeed();
         });
     }

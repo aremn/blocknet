@@ -118,6 +118,21 @@ public final class BotController {
         skill = new ObtainTask(bot, item, count, world, report);
     }
 
+    /** Smelt the raw ore and ore blocks in the bag (or only {@code item}) into their furnace results. */
+    public void smelt(@Nullable net.minecraft.world.item.Item item, Consumer<String> report) {
+        stop();
+        skill = new SmeltTask(bot, item, report);
+    }
+
+    /** The largest square {@link #clear} takes: 33 by 33 blocks. */
+    public static final int CLEAR_MAX_RADIUS = 16;
+
+    /** Bring the square around {@code centre} (where a player stands) to the floor under it; natural blocks only. */
+    public void clear(BlockPos centre, int radius, Consumer<String> report) {
+        stop();
+        skill = new ClearTask(bot, centre, radius, report);
+    }
+
     private boolean worldOnly;
 
     /** While a world-only obtain runs, remembered containers are not item sources. */
@@ -1598,7 +1613,6 @@ public final class BotController {
             skill.tick();
         }
         if (idle()) idleLife.tick();
-        else if (idleLife.choring()) idleLife.superviseChore();
         else idleLife.busy(true);
         if (target == null) {
             return;

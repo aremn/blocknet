@@ -41,6 +41,8 @@ public final class BridgeTools {
         add("explore_caves", "Explore a seen cave mouth or dark opening, follow safe observed frontiers, gather target wall ore and place owned torches in darkness; return along breadcrumbs after five minutes or enough drops. Without cave, a fresh look then the nearest map cave entrance; cave k# (from map) walks into that cave first.", true, "item", "count?", "cave?");
         add("mine_ore", "Descend to a known ore peak, bypass observed fluids, then mine a main tunnel and side branches until count or a ten minute budget; progress reports depth and actual drops.", true, "item", "count?");
         add("obtain", "Acquire a TOTAL count, including owned: inventory, remembered containers, supported crafting/smelting and survival sources; prepares needed tools. source world = mine/smelt/craft it yourself and never take from chests (use it for find/mine/добудь/накопай requests); any (default) may withdraw from remembered chests. Unsupported machine/network recipes return a blocker; plan and wiki explain dependencies.", true, "item", "count?", "source?");
+        add("smelt", "Smelt the raw ore and ore blocks in the inventory (or only item) in a furnace, placing one and finding fuel as needed; reports what was smelted.", true, "item?");
+        add("clear", "Clear a square of radius around a player (or around the floor block x y z) to that floor height: break natural blocks above it (trees, soil, stone, plants), fill holes from the bag; builds are left alone.", true, "radius", "player?", "x?", "y?", "z?");
         add("plan", "Plan recipes without acting; mode craft makes new items, get counts owned items.", false,
             "item", "count?", "mode?");
         add("come", "Walk near an online player in the same dimension.", true, "player");
@@ -90,7 +92,7 @@ public final class BridgeTools {
             boolean optional = field.endsWith("?");
             String key = optional ? field.substring(0, field.length() - 1) : field;
             JsonObject property = new JsonObject();
-            boolean number = List.of("x", "y", "z", "count", "distance", "length", "menu_id", "slot", "button").contains(key);
+            boolean number = List.of("x", "y", "z", "count", "distance", "length", "menu_id", "slot", "button", "radius").contains(key);
             property.addProperty("type", number ? "integer" : List.of("sneak", "delta", "fresh").contains(key) ? "boolean" : "string");
             if (key.equals("count")) {
                 property.addProperty("minimum", 1);
@@ -239,6 +241,32 @@ public final class BridgeTools {
                 case "withdraw" -> bot.controller().withdraw(pos, word(args, "filter", null), args.has("count") ? args.get("count").getAsInt() : 0, report);
                 case "autocraft" -> bot.controller().autocraft(pos, word(args, "item", null), args.has("count") ? args.get("count").getAsInt() : 1, report);
             }
+            return;
+        }
+        if (tool.name().equals("smelt")) {
+            net.minecraft.world.item.Item item = null;
+            if (args.has("item")) {
+                var id = net.minecraft.resources.ResourceLocation.tryParse(word(args, "item", null));
+                if (id == null || !net.minecraft.core.registries.BuiltInRegistries.ITEM.containsKey(id)) throw new IllegalArgumentException("unknown item: " + word(args, "item", null));
+                item = net.minecraft.core.registries.BuiltInRegistries.ITEM.get(id);
+            }
+            bot.controller().smelt(item, report);
+            return;
+        }
+        if (tool.name().equals("clear")) {
+            int radius = args.get("radius").getAsInt();
+            if (radius < 1 || radius > dev.blocknet.control.BotController.CLEAR_MAX_RADIUS) throw new IllegalArgumentException("radius must be 1.." + dev.blocknet.control.BotController.CLEAR_MAX_RADIUS);
+            boolean coords = args.has("x") && args.has("y") && args.has("z");
+            if (args.has("player") == coords) throw new IllegalArgumentException("clear needs player OR x, y, z");
+            net.minecraft.core.BlockPos centre;
+            if (coords) centre = new net.minecraft.core.BlockPos(args.get("x").getAsInt(), args.get("y").getAsInt() + 1, args.get("z").getAsInt());
+            else {
+                ServerPlayer player = bot.getServer().getPlayerList().getPlayerByName(word(args, "player", null));
+                if (player == null || player instanceof BotPlayer) throw new IllegalArgumentException("Player not online");
+                if (player.serverLevel() != bot.serverLevel()) throw new IllegalArgumentException("Player is in another dimension");
+                centre = player.blockPosition();
+            }
+            bot.controller().clear(centre, radius, report);
             return;
         }
         if (tool.name().equals("attack")) { bot.controller().attack(word(args, "target", null), report); return; }

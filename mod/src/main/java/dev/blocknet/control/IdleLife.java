@@ -4,21 +4,15 @@ import dev.blocknet.body.BotManager;
 import dev.blocknet.body.BotPlayer;
 import dev.blocknet.map.Radar;
 import dev.blocknet.pathing.api.pathing.goals.Goal;
-import dev.blocknet.pathing.api.pathing.goals.GoalBlock;
 import dev.blocknet.pathing.api.pathing.goals.GoalNear;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
-import java.util.UUID;
 import javax.annotation.Nullable;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.util.Mth;
-import net.minecraft.world.entity.item.ItemEntity;
-import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
@@ -27,7 +21,7 @@ import net.neoforged.neoforge.event.ServerChatEvent;
 /**
  * What the bot does while nobody's order is running, so it behaves like a companion rather than a
  * statue: it turns to whoever speaks and nods, looks where its player looks, walks alongside when
- * they walk, and when they stay busy in one place it does small useful jobs nearby ({@link Chores}).
+ * they walk. It never works on its own initiative (ADR-0016): no chores, no picking things up.
  * No model is involved; every move is a player input (an eased head turn no faster than a
  * player's, the sneak key, walking through the same pathfinder). Any order, reflex or open menu
  * takes over at once.
@@ -40,30 +34,18 @@ public final class IdleLife {
     static final double ALONGSIDE = 6, KEEP_NEAR = 10, COME_TO = 3;
     /** After an explicit stop the bot stays where it was told, unless given a new order. */
     static final int STAY_TICKS = 20 * 60 * 3;
-    /** Chores wait until the bot has had nothing to do, and its player has stood still, this long. */
-    static final int CHORES_AFTER = 20 * 12, PLAYER_SETTLED = 20 * 5;
-    private static final double LOOK_RANGE = 16, MIRROR_RANGE = 8, COMPANION_RANGE = 48, PICKUP_RANGE = 8;
+    private static final double LOOK_RANGE = 16, MIRROR_RANGE = 8, COMPANION_RANGE = 48;
     /** A player looking at the same spot this long makes the bot look there too. */
     private static final int SHARED_LOOK_TICKS = 15, SHARED_LOOK_HOLD = 60;
-    /** Looking for a chore is not free (it reads the observed objects): at most this often. */
-    private static final int CHORE_SEARCH_EVERY = 40;
-    /** An item the bot walked to but did not get (bag full, out of reach) is left alone this long. */
-    private static final int PASS_OVER_ITEM = 20 * 30;
-    /** A brain that said it is working and then went quiet (crashed, disconnected) is ignored after this. */
-    private static final long BRAIN_WORKING_MS = 10 * 60 * 1000;
 
     private final BotPlayer bot;
     private final BotController controller;
-    private final Chores chores;
     private ServerPlayer companion;
-    private long attendedAt = Long.MIN_VALUE / 2, idleSince, stayUntil, nextWalk, nextGlance = 100, glanceUntil, nextChoreSearch;
-    /** Set from the bridge thread while the brain plans or acts on an order (wall-clock, 0 = not working). */
-    private volatile long brainWorkingSince;
+    private long attendedAt = Long.MIN_VALUE / 2, stayUntil, nextWalk, nextGlance = 100, glanceUntil;
     private Vec3 glance;
     /** Where the player was a moment ago, and since when they have stood (roughly) still. */
     private Vec3 lastPlayerPos;
     private ServerPlayer tracked;
-    private long playerStillSince;
     private boolean playerMoving;
     /** What the player keeps looking at, and how long; the shared point while the bot looks too. */
     private Vec3 playerGaze, sharedLook;
@@ -75,9 +57,8 @@ public final class IdleLife {
     private boolean playerCrouched;
     private long playerCrouchedAt, lastPlayerCrouch, nextCrouch;
     private int playerCrouches, crouchesLeft;
-    private final Map<UUID, Long> passedOver = new HashMap<>();
     private Walk walk = Walk.NONE;
-    private enum Walk { NONE, TO_PLAYER, TO_ITEM }
+    private enum Walk { NONE, TO_PLAYER }
     /** The running idle walk's goal and the spot it was made for (kept until the spot moves). */
     private Goal walkGoal;
     private BlockPos walkSpot;
@@ -86,7 +67,6 @@ public final class IdleLife {
     IdleLife(BotPlayer bot, BotController controller) {
         this.bot = bot;
         this.controller = controller;
-        this.chores = new Chores(bot, controller);
     }
 
     /** Chat near bots: each of them turns to the speaker (a voice phrase does the same). */
@@ -117,51 +97,20 @@ public final class IdleLife {
         return now() - attendedAt < ATTENTION_TICKS;
     }
 
-    boolean choring() {
-        return chores.running();
-    }
-
-    /**
-     * The brain says it is working on an order (planning, between steps, acting) or done. While it
-     * works the bot keeps company but starts no chore and picks nothing up: the next step is coming.
-     */
-    public void brainWorking(boolean working) {
-        brainWorkingSince = working ? System.currentTimeMillis() : 0;
-    }
-
-    private boolean brainWorking() {
-        long since = brainWorkingSince;
-        return since != 0 && System.currentTimeMillis() - since < BRAIN_WORKING_MS;
-    }
-
     /**
      * Something else owns the body. Hands back the sneak key and stops an idle walk. A new order
      * (not a reflex) also ends a stop's "stay here".
      */
     void busy(boolean order) {
         if (order) stayUntil = 0;
-        idleSince = now();
         crouchesLeft = 0;
         playerCrouches = 0;
         sneak(false);
         if (walk != Walk.NONE) stopWalking(false);
     }
 
-    /** A chore is running: it ends when its player walks off, as a person would drop it and follow. */
-    void superviseChore() {
-        sneak(false);
-        ServerPlayer focus = focus();
-        track(focus);
-        if (focus == null || bot.distanceTo(focus) > KEEP_NEAR + 4 || playerMoving && bot.distanceTo(focus) > KEEP_NEAR) {
-            chores.abandon(focus == null ? "its player left" : focus.getGameProfile().getName() + " walked off");
-            idleSince = now();
-        }
-    }
-
     void tick() {
         long now = now();
-        // A chore can end without a word (a task replaced by the brain); idle again means it is over.
-        if (chores.running()) chores.abandon("the body is idle again");
         ServerPlayer focus = focus();
         track(focus);
         if (focus == null) {
@@ -170,15 +119,7 @@ public final class IdleLife {
             return;
         }
         double distance = bot.distanceTo(focus);
-        if (keepNear(focus, distance) || pickUp(now)) return;
-        if (focus == companion && !attending() && !brainWorking() && now >= stayUntil && now - idleSince >= CHORES_AFTER
-                && now - playerStillSince >= PLAYER_SETTLED && distance <= KEEP_NEAR && now >= nextChoreSearch) {
-            nextChoreSearch = now + CHORE_SEARCH_EVERY;
-            if (chores.start(focus)) {
-                sneak(false);
-                return;
-            }
-        }
+        if (keepNear(focus, distance)) return;
         look(focus, distance, now);
         crouchBack(focus, distance, now);
     }
@@ -240,7 +181,6 @@ public final class IdleLife {
         if (focus == null) return;
         if (bot.tickCount % 10 == 0) {
             playerMoving = lastPlayerPos != null && focus.position().distanceTo(lastPlayerPos) > 0.8;
-            if (playerMoving || lastPlayerPos == null) playerStillSince = now();
             lastPlayerPos = focus.position();
         }
         Vec3 gaze = gazePoint(focus);
@@ -350,46 +290,6 @@ public final class IdleLife {
         Vec3 forward = new Vec3(-Mth.sin(yaw), 0, Mth.cos(yaw)), right = new Vec3(-forward.z, 0, forward.x);
         double side = Math.signum(bot.position().subtract(focus.position()).dot(right));
         return focus.position().add(right.scale((side == 0 ? 1 : side) * COME_TO)).subtract(forward);
-    }
-
-    /** With time on its hands and its player around, the bot picks up items lying close by. */
-    private boolean pickUp(long now) {
-        if (walk == Walk.TO_ITEM) {
-            Radar.Contact item = nearestItem();
-            if (item == null) stopWalking(false);
-            else {
-                step(BlockPos.containing(item.position()), GoalBlock::new);
-                // Walked onto it (or could not) and it is still lying there: the bag did not take it.
-                if (walk == Walk.NONE) passedOver.put(item.uuid(), now + PASS_OVER_ITEM);
-            }
-            return walk != Walk.NONE;
-        }
-        if (attending() || brainWorking() || now - idleSince < CHORES_AFTER || now < stayUntil || now < nextWalk) return false;
-        Radar.Contact item = nearestItem();
-        if (item == null) return false;
-        controller.trace("idle", "nothing to do; picking up " + item.count() + " " + item.type() + " lying nearby");
-        walk = Walk.TO_ITEM;
-        step(BlockPos.containing(item.position()), GoalBlock::new);
-        return true;
-    }
-
-    /** The nearest item lying close by that the bag has room for and that the bot has not given up on. */
-    @Nullable
-    private Radar.Contact nearestItem() {
-        passedOver.values().removeIf(until -> until <= now());
-        for (Radar.Contact contact : bot.radar().contacts()) {
-            if (contact.live() && contact.category().equals("item") && contact.position().distanceTo(bot.position()) <= PICKUP_RANGE
-                    && Math.abs(contact.position().y - bot.getY()) <= 2 && !passedOver.containsKey(contact.uuid())
-                    && bot.serverLevel().getEntity(contact.uuid()) instanceof ItemEntity entity && fits(entity.getItem())) {
-                return contact;
-            }
-        }
-        return null;
-    }
-
-    private boolean fits(ItemStack stack) {
-        var inventory = bot.getInventory();
-        return inventory.getFreeSlot() >= 0 || inventory.getSlotWithRemainingSpace(stack) >= 0;
     }
 
     /** Ends an idle walk; after a failed route the next one waits a few seconds instead of every tick. */

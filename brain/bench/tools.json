@@ -396,6 +396,50 @@
     }
   },
   {
+    "name": "smelt",
+    "description": "Smelt the raw ore and ore blocks in the inventory (or only item) in a furnace, placing one and finding fuel as needed; reports what was smelted.",
+    "task": true,
+    "params": {
+      "type": "object",
+      "properties": {
+        "item": {
+          "type": "string"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "clear",
+    "description": "Clear a square of radius around a player (or around the floor block x y z) to that floor height: break natural blocks above it (trees, soil, stone, plants), fill holes from the bag; builds are left alone.",
+    "task": true,
+    "params": {
+      "type": "object",
+      "properties": {
+        "radius": {
+          "type": "string"
+        },
+        "player": {
+          "type": "string"
+        },
+        "x": {
+          "type": "integer"
+        },
+        "y": {
+          "type": "integer"
+        },
+        "z": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "radius"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "plan",
     "description": "Plan recipes without acting; mode craft makes new items, get counts owned items.",
     "task": false,
