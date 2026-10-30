@@ -45,6 +45,8 @@ public final class Knowledge {
     }
     private static void rebuild(MinecraftServer server) {
         long start = System.nanoTime();
+        // The recipe index for crafting plans builds meanwhile on its own thread (45 s in a big pack).
+        dev.blocknet.crafting.PlannerCatalogs.warm(server.overworld());
         CACHE.put(server, new Knowledge(server));
         Blocknet.LOGGER.info("KNOWLEDGE built {} ore groups in {} ms", CACHE.get(server).ores.size(), (System.nanoTime()-start)/1_000_000);
     }
@@ -129,6 +131,17 @@ public final class Knowledge {
                     present.size() == biomes.size() ? Set.of() : Set.copyOf(present));
                 for (Item drop : featureDrops) ranges.computeIfAbsent(drop, k -> new ArrayList<>()).add(range);
             });
+        }
+        // Ores a mod generates with its own feature (Mekanism's osmium, many in All the Ores) are not
+        // OreConfiguration: the c:ores tag and the blocks' loot still say what they drop. No height
+        // range is known for them; the body finds them in loaded chunks instead.
+        for (Block block : BuiltInRegistries.BLOCK) {
+            if (!block.defaultBlockState().is(net.neoforged.neoforge.common.Tags.Blocks.ORES)) continue;
+            Set<Item> candidates = drops.getOrDefault(block, Set.of());
+            List<Item> normal = candidates.stream().filter(i -> !(i instanceof BlockItem)).toList();
+            if (normal.isEmpty()) normal = candidates.stream().filter(i -> i != block.asItem()).toList();
+            if (normal.isEmpty() && block.asItem() != Items.AIR) normal = List.of(block.asItem());
+            for (Item drop : normal) blocks.computeIfAbsent(drop, k -> new LinkedHashSet<>()).add(block);
         }
         blocks.forEach((item, values) -> {
             Map<String, Range> combined = new LinkedHashMap<>();

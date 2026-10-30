@@ -41,6 +41,7 @@ public final class BridgeTools {
         add("explore_caves", "Explore a seen cave mouth or dark opening, follow safe observed frontiers, gather target wall ore and place owned torches in darkness; return along breadcrumbs after five minutes or enough drops. Without cave, a fresh look then the nearest map cave entrance; cave k# (from map) walks into that cave first.", true, "item", "count?", "cave?");
         add("mine_ore", "Descend to a known ore peak, bypass observed fluids, then mine a main tunnel and side branches until count or a ten minute budget; progress reports depth and actual drops.", true, "item", "count?");
         add("obtain", "Acquire a TOTAL count, including owned: inventory, remembered containers, supported crafting/smelting and survival sources; prepares needed tools. source world = mine/smelt/craft it yourself and never take from chests (use it for find/mine/добудь/накопай requests); any (default) may withdraw from remembered chests. Unsupported machine/network recipes return a blocker; plan and wiki explain dependencies.", true, "item", "count?", "source?");
+        add("item", "The registry id of the item a guessed id or name means in this modpack (thermal:silver_ingot -> alltheores:silver_ingot, osmium_ingot -> mekanism:ingot_osmium), or none.", false, "query");
         add("raw", "Name the mined raw form of an item that is smelted from ore (iron_ingot -> raw_iron; works for modded metals), or none.", false, "item");
         add("smelt", "Smelt the raw ore and ore blocks in the inventory (or only item) in a furnace, placing one and finding fuel as needed; reports what was smelted.", true, "item?");
         add("clear", "Clear a square of radius around a player (or around the floor block x y z) to that floor height: break natural blocks above it (trees, soil, stone, plants), fill holes from the bag; builds are left alone.", true, "radius", "player?", "x?", "y?", "z?");
@@ -112,6 +113,29 @@ public final class BridgeTools {
         schema.add("required", required);
         schema.addProperty("additionalProperties", false);
         TOOLS.put(name, new Tool(name, description, task, schema));
+    }
+
+    /**
+     * What a guessed item id means here. A model knows item names, not this pack's ids: it said
+     * thermal:silver_ingot in a pack whose silver is alltheores:silver_ingot. An existing id stays;
+     * otherwise the same path in another namespace, then the same words in any order
+     * (osmium_ingot -> ingot_osmium); "none" when nothing fits.
+     */
+    public static String resolveItem(String query) {
+        var registry = net.minecraft.core.registries.BuiltInRegistries.ITEM;
+        var id = net.minecraft.resources.ResourceLocation.tryParse(query.contains(":") ? query : "minecraft:" + query);
+        if (id != null && registry.containsKey(id)) return id.toString();
+        String path = query.substring(query.indexOf(':') + 1);
+        var words = new java.util.TreeSet<>(List.of(path.split("_")));
+        String samePath = null, sameWords = null;
+        for (var key : registry.keySet()) {
+            if (key.getPath().equals(path)) {
+                if (samePath == null || key.getNamespace().equals("minecraft")) samePath = key.toString();
+            } else if (sameWords == null && new java.util.TreeSet<>(List.of(key.getPath().split("_"))).equals(words)) {
+                sameWords = key.toString();
+            }
+        }
+        return samePath != null ? samePath : sameWords != null ? sameWords : "none";
     }
 
     public static Tool get(String name) {
@@ -242,6 +266,10 @@ public final class BridgeTools {
                 case "withdraw" -> bot.controller().withdraw(pos, word(args, "filter", null), args.has("count") ? args.get("count").getAsInt() : 0, report);
                 case "autocraft" -> bot.controller().autocraft(pos, word(args, "item", null), args.has("count") ? args.get("count").getAsInt() : 1, report);
             }
+            return;
+        }
+        if (tool.name().equals("item")) {
+            report.accept(resolveItem(word(args, "query", null)));
             return;
         }
         if (tool.name().equals("raw")) {

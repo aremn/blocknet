@@ -396,6 +396,23 @@
     }
   },
   {
+    "name": "item",
+    "description": "The registry id of the item a guessed id or name means in this modpack (thermal:silver_ingot -> alltheores:silver_ingot, osmium_ingot -> mekanism:ingot_osmium), or none.",
+    "task": false,
+    "params": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "raw",
     "description": "Name the mined raw form of an item that is smelted from ore (iron_ingot -> raw_iron; works for modded metals), or none.",
     "task": false,

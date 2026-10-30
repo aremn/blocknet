@@ -241,7 +241,7 @@ export class Worker {
         this.note(`job: ${describeJob(job)}`);
         this.jobGeneration = generation;
         const aborted = new Promise(resolve => { this.abortJob = () => resolve('cancelled'); });
-        const report = await Promise.race([this.run(job).catch(error => `failed: ${error.message}`), aborted]);
+        const report = await Promise.race([this.resolve(job).then(ready => this.run(ready)).catch(error => `failed: ${error.message}`), aborted]);
         this.abortJob = null;
         this.log?.write('job_end', { job, report: oneLine(report).slice(0, 600), ms: Date.now() - started, cancelled: generation !== this.generation });
         if (generation !== this.generation || this.closed) continue;
@@ -256,6 +256,22 @@ export class Worker {
         else await this.say(shortLine(job.done, 8) || (job.job === 'come' ? '' : 'Готово.'), job.player);
       }
     } finally { this.current = null; this.running = false; }
+  }
+  /**
+   * The model knows item names, not this pack's ids (it said thermal:silver_ingot where silver is
+   * alltheores:silver_ingot); the body names the item each id means before the job runs.
+   */
+  async resolve(job) {
+    const ready = { ...job };
+    for (const key of ['item', 'what']) {
+      if (typeof job[key] !== 'string' || ['all', 'loot'].includes(job[key])) continue;
+      const id = (await this.call('item', { query: job[key] }).catch(() => ({}))).result;
+      if (typeof id === 'string' && id !== 'none' && itemId(id) !== itemId(job[key])) {
+        this.log?.write('item_resolved', { from: job[key], to: id });
+        ready[key] = id;
+      }
+    }
+    return ready;
   }
   /** One job through the body's own tasks; resolves with the body's final report. */
   async run(job) {

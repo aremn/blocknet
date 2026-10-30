@@ -17,6 +17,8 @@ class FakeBody extends EventEmitter {
     this.calls.push({ tool, args });
     if (tool === 'inv') return { result: `inventory r1: selected 0\n${this.bag}\nsummary: free slots 30` };
     if (tool === 'status') return { result: 'health 20/20, food 20, pos 0, 64, 0; task: idle' };
+    if (tool === 'item') return { result: this.items?.[args.query] ?? args.query };
+    if (tool === 'raw') return { result: 'none' };
     if (['say', 'speak', 'heard', 'stop', 'follow'].includes(tool)) {
       if (tool === 'stop') for (const task of this.tasks.values()) this.settle(task, 'failed: cancelled');
       return { result: 'ok' };
@@ -35,7 +37,7 @@ class FakeBody extends EventEmitter {
   }
   close() {}
   said() { return this.calls.filter(c => c.tool === 'say').map(c => c.args.text); }
-  actions() { return this.calls.filter(c => !['say', 'inv', 'status', 'speak', 'heard'].includes(c.tool)).map(c => [c.tool, c.args]); }
+  actions() { return this.calls.filter(c => !['say', 'inv', 'status', 'speak', 'heard', 'item', 'raw'].includes(c.tool)).map(c => [c.tool, c.args]); }
 }
 function model(answers) {
   const prompts = [];
@@ -94,6 +96,15 @@ test('dying mid-job never holds the queue, even when the walk reports nothing', 
   body.emit('event', { type: 'bot.died', bot: 'Kirill', cause: 'player' });
   chat('переплавь руду');
   await until(() => body.actions().some(([tool]) => tool === 'smelt'));
+  w.close();
+});
+
+test('a guessed item id becomes the one this pack uses before the job runs', async () => {
+  const { body, w, chat, idle } = await worker([{ reply: 'Ща.', jobs: [{ job: 'get', item: 'thermal:silver_ingot', count: 7, source: 'world' }] }],
+    b => { b.items = { 'thermal:silver_ingot': 'alltheores:silver_ingot' }; });
+  chat('накопай серебра штук семь');
+  await until(() => body.said().length === 2); await idle();
+  assert.deepEqual(body.actions(), [['obtain', { item: 'alltheores:silver_ingot', count: 7, source: 'world' }]]);
   w.close();
 });
 
