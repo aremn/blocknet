@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { BrainSession } from '../brain.js';
+import { Worker } from '../brain.js';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -73,10 +73,10 @@ test('a phrase heard near the bot becomes chat, is echoed back, and the reply is
   }
   const body = new Body(), prompts = [];
   const backend = { backend: 'fake', model: 'fake', maxTurns: 3, close() {},
-    send: async text => { prompts.push(text); return { text: 'Сейчас сделаю.' }; } };
+    send: async text => { prompts.push(text); return { text: '{"reply":"Ща.","jobs":[]}' }; } };
   const hearing = { transcribe: async () => 'Кирилл, принеси уголь', close() {} };
   const speech = { synthesize: async text => Buffer.from(`WAV:${text}`) };
-  const session = new BrainSession({ body, backend, bot: 'Kirill', pauseMs: 5, hearing, speech });
+  const session = new Worker({ body, backend, bot: 'Kirill', hearing, speech });
   await session.start();
   body.emit('event', { type: 'voice', from: 'Aremnchan', bots: ['Someone'], ms: 900, wav: 'AAAA' });
   body.emit('event', { type: 'voice', from: 'Aremnchan', bots: ['Kirill'], ms: 900, wav: 'AAAA', pointed_ref: 'p1' });
@@ -113,7 +113,7 @@ test('/blocknet voice switches the voice at once, remembers it and says so in th
   const backend = { backend: 'fake', model: 'fake', maxTurns: 3, close() {}, send: async () => ({ text: '<silent>' }) };
   const speech = new Speech({ piper: 'piper.exe', voice: join(dir, 'ru_RU-dmitri-medium.onnx'), voices: dir });
   speech.synthesize = async text => { spoken.push([voiceName(speech.voice), text]); return Buffer.from('WAV'); };
-  const session = new BrainSession({ body, backend, bot: 'Kirill', pauseMs: 5, speech });
+  const session = new Worker({ body, backend, bot: 'Kirill', speech });
   await session.start();
   body.emit('event', { type: 'voice.choose', bot: 'Someone', from: 'Aremnchan', choice: 'next' });
   body.emit('event', { type: 'voice.choose', bot: 'Kirill', from: 'Aremnchan', choice: '' });
@@ -131,66 +131,4 @@ test('/blocknet voice switches the voice at once, remembers it and says so in th
   assert.equal(voiceName(speech.voice), 'irina', 'an unknown name keeps the voice');
   session.close();
   await rm(dir, { recursive: true, force: true });
-});
-
-test('the quick mouth answers first with a tiny prompt; the model preamble does not repeat it', async () => {
-  class Body extends EventEmitter {
-    hello = { bots: ['Kirill'], tools: [] }; calls = [];
-    async ready() { return this.hello; }
-    async call(bot, tool, args) { this.calls.push({ tool, args }); return { result: tool === 'changes' ? 'body r1: health 20/20' : 'ok' }; }
-    close() {}
-  }
-  const said = body => body.calls.filter(c => c.tool === 'say').map(c => c.args.text);
-  let release;
-  const actorGate = new Promise(resolve => { release = resolve; });
-  const quickPrompts = [];
-  const make = (quickText, quickDelay) => {
-    const body = new Body();
-    const backend = { backend: 'fake', model: 'fake', maxTurns: 3, close() {},
-      send: async () => { await actorGate; return { text: 'Ща, иду.\n<silent>' }; } };
-    const quickBackend = { close() {}, send: async text => { quickPrompts.push(text); await sleep(quickDelay); return { text: quickText }; } };
-    return { body, session: new BrainSession({ body, backend, bot: 'Kirill', pauseMs: 5, quickBackend }) };
-  };
-  const fast = make('Ага, бегу.', 1);
-  await fast.session.start();
-  fast.body.emit('event', { type: 'chat', from: 'Aremnchan', text: 'Кирилл, иди сюда к дому' });
-  await until(() => said(fast.body).length === 1);
-  assert.deepEqual(said(fast.body), ['Ага, бегу.'], 'the quick line is out before the actor answers');
-  assert.ok(quickPrompts[0].length < 3000, `tiny prompt: ${quickPrompts[0].length} chars`);
-  assert.match(quickPrompts[0], /иди сюда к дому/u);
-  release();
-  await until(() => !fast.session.busy);
-  assert.deepEqual(said(fast.body), ['Ага, бегу.'], 'the actor preamble duplicate is dropped');
-  fast.session.close();
-
-  const slow = make('Ага, бегу.', 80);
-  await slow.session.start();
-  slow.body.emit('event', { type: 'chat', from: 'Aremnchan', text: 'Кирилл, иди сюда к дому' });
-  await until(() => !slow.session.busy);
-  await sleep(120);
-  assert.deepEqual(said(slow.body), ['Ща, иду.'], 'a quick line later than the preamble stays silent');
-  slow.session.close();
-});
-
-test('a chore the body took on is voiced once in a casual line, not while a turn is talking', async () => {
-  class Body extends EventEmitter {
-    hello = { bots: ['Kirill'], tools: [] }; calls = [];
-    async ready() { return this.hello; }
-    async call(bot, tool, args) { this.calls.push({ tool, args }); return { result: 'ok' }; }
-    close() {}
-  }
-  const body = new Body(), prompts = [];
-  const backend = { backend: 'fake', model: 'fake', maxTurns: 3, close() {}, send: async () => ({ text: '<silent>' }) };
-  const chatBackend = { backend: 'fake', model: 'fake', close() {}, send: async text => { prompts.push(text); return { text: 'Пойду дерева нарублю.' }; } };
-  const session = new BrainSession({ body, backend, chatBackend, bot: 'Kirill', pauseMs: 5 });
-  await session.start();
-  const chore = note => body.emit('event', { type: 'moment', bot: 'Kirill', kind: 'chore', note });
-  chore('low on wood (2 logs); chopping the oak tree t3 nearby');
-  await until(() => body.calls.some(c => c.tool === 'say'));
-  assert.equal(body.calls.find(c => c.tool === 'say').args.text, 'Пойду дерева нарублю.');
-  assert.match(prompts[0], /chopping the oak tree t3/u);
-  chore('no torches left; crafting 8 from coal and sticks');
-  await sleep(30);
-  assert.equal(prompts.length, 1, 'at most one chore line in 20 s');
-  session.close();
 });

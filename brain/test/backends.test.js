@@ -5,7 +5,6 @@ import { PassThrough } from 'node:stream';
 import { createInterface } from 'node:readline';
 import { ClaudeBackend } from '../claude-backend.js';
 import { CodexBackend, buildCodexArgs } from '../codex-backend.js';
-import { sendWithAck, CompactState } from '../brain.js';
 import { routeRule } from '../rules.js';
 
 function fakeProcess(receive) {
@@ -122,37 +121,3 @@ for (const Backend of [ClaudeBackend, CodexBackend]) {
     await assert.rejects(second, /cancelled|closed/);
   });
 }
-
-test('preamble streams from a fake child before the final result; absent text stays quiet', async () => {
-  for (const streaming of [false, true]) {
-    const said = [];
-    const backend = new ClaudeBackend({ spawnProcess: () => fakeProcess((message, send) => {
-      if (streaming) send({ type: 'stream_event', event: { delta: { type: 'text_delta', text: 'Checking the cave.\n' } } });
-      setTimeout(() => { assert.equal(said.length, streaming ? 1 : 0); send({ type: 'result', result: 'Done.', usage: {} }); }, 10);
-    }) });
-    try {
-      assert.equal((await sendWithAck(backend, 'Dig', text => said.push(text))).text, 'Done.');
-      assert.deepEqual(said, streaming ? ['Checking the cave.'] : []);
-    } finally { backend.close(); }
-  }
-});
-
-test('compact state emits inventory/held and low health only when meaningful state changes', () => {
-  const state = new CompactState();
-  const first = state.update('body r1: health 20/20, food 20, pos 1, 2, 3\ninventory r1: selected 0\nmain: wooden_pickaxe\nwooden_pickaxe slots [0]\n3 cobblestone slots [1]\nsummary: free slots 34\ntask r1: idle');
-  assert.equal(first, '\nState: inventory: 1 wooden_pickaxe, 3 cobblestone; held: wooden_pickaxe; health 20/20, food 20/20');
-  assert.equal(state.update('body r2: health 20/20, food 20, pos 2, 2, 3'), '', 'moving alone is not news');
-  assert.match(state.update('body r3: health 3/20, food 9, air 40/300, in_water'), /health 3\/20 \(low\), food 9\/20, air 40\/300, in water/u);
-  assert.equal(state.update('no changes'), '');
-  state.reset();
-  assert.match(state.update('no changes'), /inventory:/);
-});
-
-test('compact state preserves mining depth on inventory-only deltas and clears the ore hint when idle', () => {
-  const state = new CompactState();
-  assert.match(state.update('body r1: health 20/20, pos 2, 72, 3, y=72, surface y=72, iron best ~16, 56 below; task r1: mining'), /y=72, surface y=72, iron best ~16, 56 below/);
-  assert.match(state.update('inventory r2: selected 0; main: stone_pickaxe; 3 cobblestone slots [1]'), /iron best ~16, 56 below/);
-  assert.match(state.update('body r2: health 20/20, pos 2, 16, 3, y=16, surface y=72; task r2: idle'), /y=16, surface y=72/);
-  assert.doesNotMatch(state.previous, /iron best/);
-  assert.match(state.update('- body r2: health 20/20, y=16, surface y=72; + body r3: health 20/20, y=12, surface y=72, iron best ~-16, 28 below'), /y=12, surface y=72, iron best ~-16, 28 below/);
-});

@@ -136,11 +136,6 @@ export class Body extends EventEmitter {
     this.notify('debug.note', { bot, source, text: String(text ?? '') });
   }
 
-  /** Fire-and-forget: whether the brain is working on an order; the body's idle life holds its own chores meanwhile. */
-  working(bot, working) {
-    this.notify('brain.working', { bot, working: !!working });
-  }
-
   notify(method, params) {
     if (!this.hello || !this.socket || this.socket.destroyed) return;
     try {

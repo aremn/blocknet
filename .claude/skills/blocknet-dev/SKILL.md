@@ -70,9 +70,10 @@ with `--no-configuration-cache` once. Do not alter cache ACLs or stop the runnin
 | `mixin/` | `PlayerListMixin` installs `BotPacketListener` during `placeNewPlayer` |
 | `gametest/` | GameTests on `arena`/`arena_tall`; sixteen `VisionGameTests` on the 48x24x48 `vision_field` (helper floor at y=0); `skyAccess = true` keeps daylight deterministic, the dark-room test builds its own roof; `TestArena` sets the bare GameTest PlayerList view distance to 4 chunks |
 
-`brain/` is dependency-free Node 22 ES modules: `body.js` is the reconnecting TCP client,
-`mcp-server.js` wraps tools with task-outcome waiting, `rules.js` routes short ru/en orders,
-`brain.js` queues chat and builds Claude Haiku arguments/sessions/logs, and `prompt.md` is stable.
+`brain/` is dependency-free Node 22 ES modules (ADR-0016, the worker): `body.js` is the reconnecting
+TCP client, `rules.js` routes short ru/en orders, `brain.js` (`Worker`) translates each player message
+with ONE tool-free model call (`persona.md` + `jobs.md`) into checked jobs, queues them and runs each
+through one or two body tasks, saying a line at the start and at the end.
 Run `node brain/brain.js --bot Kirill --config <minecraft>/config/blocknet_ai-bridge.json`;
 dev config defaults to `mod/run/config/blocknet_ai-bridge.json`. Tests: `node --test brain/test/`.
 With `"brain": "<repo>/brain"` in that config, `/blocknet spawn` starts the brain itself
@@ -81,7 +82,16 @@ process tree; the Prism "Blocknet Dev" instance is set up this way, so don't sta
 hand for the same bot. `BrainLauncherGameTests` checks start, one-per-bot and tree stop with a fake brain.js.
 `BridgeGameTests` proves authentication, discovery, status and physical goto through a TCP socket.
 See `brain/README.md`, architecture section 5 and ADR-0008. No `claude --bare`; preserve subscription
-auth, disable built-in tools and use strict MCP. Generated configs, sessions and logs stay ignored.
+auth and disable built-in tools. Generated configs, sessions and logs stay ignored.
+
+**ADR-0016 (2026-10-30): the bot is a worker.** The model only translates speech into jobs
+(`get`, `smelt`, `store`, `take`, `move`, `give`, `drop`, `come`, `follow`, `stop`, `clear`); the body does
+each job completely (`ObtainTask`, `SmeltTask`, `ClearTask`, `ContainerTask`, `TransferTask`, `GiveTask`)
+and reports once. No planner, step actor, MCP server, skill scripts, quick mouth, chat classifier or
+IdleLife chores any more: sections below that describe them are history (tag `before-worker`). A new
+capability is a new body job with a GameTest plus one line in `jobs.md` and `Worker.run`, never a prompt
+that teaches the model to drive low-level tools. Brain tests: `node --test brain/test/ brain/bench/test/`
+(`worker.test.js` fakes the body and the model).
 
 The LGPL `pathing/` module (Automatone) lives next to `mod/`: `BotController` drives it through
 `IBaritone.KEY.get(bot).getCustomGoalProcess()`, `BotPlayer.tick()` ticks it, and it acts through
@@ -546,3 +556,18 @@ English to code, commands and commit messages.
 - Defaults: planner `codex:gpt-6.1-sol:medium`, actor `codex:gpt-6.1-sol:low`.
 - `place` fails at once when the chosen face (or every side) has nothing to click on, and after 40
   ticks standing beside the spot without a visible face (both used to wait 400 ticks).
+
+## Worker jobs (ADR-0016, 2026-10-30)
+
+- `smelt {item?}` (`SmeltTask`): raw ore / ore blocks in the bag (tags `c:raw_materials`, `c:ores`) or one
+  item; each kind is a nested world-only `ObtainTask` of its SMELTING result, so the furnace and fuel come
+  the usual way. A skill nests a child skill by holding and ticking it: `controller.obtain()` inside
+  `action()` would be overwritten by `skillAction`'s owner restore.
+- `clear {radius, player | x y z}` (`ClearTask`, radius 1-16): floor = block under the player's feet;
+  natural blocks above it (tags: logs, leaves, dirt, sand, base stone, gravels, ores, flowers, saplings,
+  replaceable_by_trees, snow, ice, clay, mushrooms, cobweb) up to 12 high are mined, logs first, leaves
+  only up to 3 above the floor (higher ones decay); holes up to 4 deep are filled from bag dirt/stone.
+  Other blocks are builds and stay; unbreakable ones (barriers) are not counted. Reports `cleared ...`
+  or `partly cleared ...`, which the brain treats as incomplete. `/blocknet clear [name] <radius>`.
+- `WorkerJobsGameTests` (smelt, nothing to smelt, clear with a tree/soil/hole/build) and
+  `IdleLifeGameTests.doesNothingUnasked` prove the jobs and the no-initiative rule.
