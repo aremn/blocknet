@@ -214,7 +214,9 @@ export class Worker {
   async add(jobs, player, now) {
     // The body stops before the new jobs queue up, so the stop cannot hit the job meant to replace.
     if (now && (this.current || this.queue.length)) { this.cancel('replaced'); await this.call('stop').catch(error => this.diagnostic(error)); }
-    this.queue.push(...jobs.map(job => ({ ...job, player })));
+    // Jobs of one order share a batch: "dig coal, then put it in the chest" stops at the first failure.
+    const batch = this.batches = (this.batches ?? 0) + 1;
+    this.queue.push(...jobs.map(job => ({ ...job, player, batch })));
     this.pump().catch(error => this.diagnostic(error));
   }
   /** Drops the running job and the queue; the body is stopped by the caller. */
@@ -236,7 +238,12 @@ export class Worker {
         this.log?.write('job_end', { job, report: oneLine(report).slice(0, 600), ms: Date.now() - started, cancelled: generation !== this.generation });
         if (generation !== this.generation || this.closed) continue;
         if (job.job === 'follow') continue;
-        if (incomplete(report)) await this.serial(() => this.explain(job, report));
+        if (incomplete(report)) {
+          const dropped = this.queue.filter(next => next.batch === job.batch);
+          this.queue = this.queue.filter(next => next.batch !== job.batch);
+          if (dropped.length) this.log?.write('jobs_dropped', { after: describeJob(job), dropped: dropped.map(describeJob) });
+          await this.serial(() => this.explain(job, report, dropped));
+        }
         // Arriving speaks for itself; any other finished job gets its line.
         else await this.say(shortLine(job.done, 8) || (job.job === 'come' ? '' : 'Готово.'), job.player);
       }
@@ -289,10 +296,11 @@ export class Worker {
     } catch (error) { this.log?.write('tool_result', { tool, result: error.message, failed: true, ms: Date.now() - started }); throw error; }
   }
   /** A job that failed or did only part of its work is told in plain words, once. */
-  async explain(job, report) {
+  async explain(job, report, dropped = []) {
     let line = '';
     try {
       const prompt = `${await this.context(null, '')}\nNo new message: the job "${describeJob(job)}" just ended. The body reported: ${oneLine(report).slice(0, 600)}.\n`
+        + (dropped.length ? `The rest of that order was not started: ${dropped.map(describeJob).join('; ')}.\n` : '')
         + 'Return {"reply": "...", "jobs": []} where reply tells the player in ONE short line, in character, what went wrong or what is left, '
         + 'in plain words (no item ids, tool names or English error text), and what would help, if anything.';
       line = parseReply((await this.ask(prompt)).text).reply;

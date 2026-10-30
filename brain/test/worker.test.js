@@ -87,6 +87,19 @@ test('a failed or partial job is told once in plain words, never as "done"', asy
   w.close();
 });
 
+test('a failed job drops the rest of its own order, not the next order', async () => {
+  const { body, backend, w, chat, idle } = await worker([
+    { reply: 'Ща.', jobs: [{ job: 'store', target: 'p1', what: 'minecraft:coal' }, { job: 'store', target: 'p1', what: 'minecraft:iron_ingot' }] },
+    text => { assert.match(text, /not started: put minecraft:iron_ingot into p1/u); return '{"reply":"До сундука не дошёл.","jobs":[]}'; },
+  ], b => { b.reports.deposit = 'failed: step 1: stuck in open'; });
+  chat('закинь уголь и железо в сундук', { pointed_ref: 'p1', pointed_block: '1, 64, 2' });
+  await until(() => body.said().length === 2); await idle();
+  assert.deepEqual(body.actions(), [['deposit', { ref: 'p1', filter: 'minecraft:coal' }]], 'the iron was not tried the same broken way');
+  assert.deepEqual(body.said(), ['Ща.', 'До сундука не дошёл.']);
+  assert.equal(backend.prompts.length, 2);
+  w.close();
+});
+
 test('orders queue behind the running job; "вместо этого" replaces it; "стоп" drops everything', async () => {
   const { body, w, chat } = await worker([
     { reply: 'Иду копать.', jobs: [{ job: 'get', item: 'minecraft:coal', count: 8, source: 'world', done: 'Уголь есть.' }] },

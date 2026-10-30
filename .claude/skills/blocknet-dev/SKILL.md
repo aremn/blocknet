@@ -571,3 +571,10 @@ English to code, commands and commit messages.
   or `partly cleared ...`, which the brain treats as incomplete. `/blocknet clear [name] <radius>`.
 - `WorkerJobsGameTests` (smelt, nothing to smelt, clear with a tree/soil/hole/build) and
   `IdleLifeGameTests.doesNothingUnasked` prove the jobs and the no-initiative rule.
+- Live 2026-10-30: ATM10 has more than 32 processes for iron_ingot, so the recipe search truncates
+  (`LIMIT`, worse once an iron pickaxe in the bag adds recycling variants). `ObtainTask` treats LIMIT
+  like MISSING (forecast with raw sources) and falls back to mining the ore drop that smelts into the
+  goal (`smeltedFrom`), only while the bag lacks it. Opening a container includes the walk there
+  (`ContainerTask.OPEN_TIMEOUT` 6000 ticks, as `CraftExecutor`); `storesIntoAChestFarAway` proves it.
+- Brain: jobs of one order share a batch; a failed or partial job drops the rest of its batch and the
+  explanation mentions what was not started.

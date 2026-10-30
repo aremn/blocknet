@@ -29,6 +29,8 @@ final class ContainerTask {
     private enum Phase { OPEN, SELECT, PLACE, RETURN, CRAFTING }
     /** Network planning runs on a background thread; a large job can take a while. */
     private static final int CRAFT_PLAN_TIMEOUT = 1200;
+    /** Walking to the container and opening it, like CraftExecutor's own open phase. */
+    private static final int OPEN_TIMEOUT = 6000;
 
     private final BotPlayer bot;
     private final BotController controller;
@@ -109,7 +111,10 @@ final class ContainerTask {
     }
 
     boolean checkTimeout() {
-        if (++phaseTicks > (phase == Phase.CRAFTING ? CRAFT_PLAN_TIMEOUT : CraftExecutor.PHASE_TIMEOUT)) {
+        // Opening includes the walk there (from the bottom of a mine to a chest at the surface took
+        // longer than the menu timeout); an unreachable container fails through navigation instead.
+        int timeout = phase == Phase.CRAFTING ? CRAFT_PLAN_TIMEOUT : phase == Phase.OPEN && menu == null ? OPEN_TIMEOUT : CraftExecutor.PHASE_TIMEOUT;
+        if (++phaseTicks > timeout) {
             fail("step 1: stuck in " + phase.name().toLowerCase(java.util.Locale.ROOT));
             return false;
         }

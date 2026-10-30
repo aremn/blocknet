@@ -198,9 +198,12 @@ final class ObtainTask extends SkillTask {
                 if (held(goal.item) < goal.count) complete(message + "; " + describe());
             }); return;
         }
-        if (plan.status() == CraftPlan.Status.MISSING) {
-            controller.trace("obtain", "material deficit: " + plan.text().replace('\n', ';'));
-            if (!surveyed && plan.missing().keySet().stream().anyMatch(k -> k.contains("logs") || k.contains("planks") || k.startsWith("fuel ("))) {
+        // LIMIT: the recipe search drowned in a modpack's variants (live: iron_ingot once the bot held an
+        // iron pickaxe); the forecast with plenty of raw sources and the ore-drop path below still find a way.
+        if (plan.status() == CraftPlan.Status.MISSING || plan.status() == CraftPlan.Status.LIMIT) {
+            controller.trace("obtain", (plan.status() == CraftPlan.Status.LIMIT ? "recipe search hit its limit: " : "material deficit: ")
+                + plan.text().replace('\n', ';'));
+            if (plan.status() == CraftPlan.Status.MISSING && !surveyed && plan.missing().keySet().stream().anyMatch(k -> k.contains("logs") || k.contains("planks") || k.startsWith("fuel ("))) {
                 surveyed = true;
                 action(cb -> controller.look("trees", false, cb), ignored -> {}); return;
             }
@@ -244,6 +247,14 @@ final class ObtainTask extends SkillTask {
                 Item item = minedForm(resolve(missing.getKey()));
                 if (item != null && need(item, held(item) + Math.toIntExact(missing.getValue()))) return;
             }
+            // What a player does for an ingot or gem: mine the ore whose drop smelts into it.
+            // Only while the bag lacks it: with the drop in hand a failing search must not mine forever.
+            Item drop = smeltedFrom(goal.item, knowledge.oreItems());
+            int wanted = goal.count - held(goal.item);
+            if (drop != null && held(drop) < wanted) {
+                controller.trace("obtain", name(goal.item) + " smelts from " + name(drop) + "; getting that first");
+                if (need(drop, wanted)) return;
+            }
         }
         controller.trace("obtain", "no way I know to get " + name(goal.item) + "; plan was " + plan.status());
         complete(knowledge.unsupported(goal.item));
@@ -276,6 +287,17 @@ final class ObtainTask extends SkillTask {
      * An ore block (deepslate_iron_ore) is not what mining it gives (raw_iron) without silk touch.
      * Ask for the drop: once owned, the next plan picks the recipe that uses it (raw_iron -> ingot).
      */
+    /** The ore drop (raw iron) whose furnace result is {@code result} (iron ingot), or null. */
+    private Item smeltedFrom(Item result, Set<Item> drops) {
+        var level = bot.serverLevel();
+        for (Item drop : drops) {
+            var cooked = level.getRecipeManager().getRecipeFor(net.minecraft.world.item.crafting.RecipeType.SMELTING,
+                new net.minecraft.world.item.crafting.SingleRecipeInput(new ItemStack(drop)), level);
+            if (cooked.isPresent() && cooked.get().value().getResultItem(level.registryAccess()).is(result)) return drop;
+        }
+        return null;
+    }
+
     private Item minedForm(Item item) {
         if (item == null) return null;
         var ore = Knowledge.get(bot.serverLevel()).ore(item);

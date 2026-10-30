@@ -60,6 +60,31 @@ public final class WorkerJobsGameTests {
     }
 
     /**
+     * "Сложи в сундук" from far away: the walk there takes longer than the 10 s menu timeout, which
+     * live sent "stuck in open" from the bottom of a mine. Opening now includes the walk.
+     */
+    @GameTest(template = "vision_field", skyAccess = true, timeoutTicks = 1600)
+    public static void storesIntoAChestFarAway(GameTestHelper h) {
+        for (int x = 0; x < 48; x++) for (int z = 0; z < 48; z++) {
+            h.setBlock(new BlockPos(x, 0, z), Blocks.STONE);
+            for (int y = 1; y <= 4; y++) h.setBlock(new BlockPos(x, y, z), Blocks.AIR);
+        }
+        BlockPos chest = new BlockPos(45, 1, 45);
+        h.setBlock(chest, Blocks.CHEST);
+        BotPlayer bot = TestArena.spawnBot(h, "BnJobStore", new Vec3(2.5, 1, 2.5));
+        bot.getInventory().clearContent();
+        bot.getInventory().add(new ItemStack(Items.COAL, 13));
+        List<String> reports = new ArrayList<>();
+        bot.controller().deposit(h.absolutePos(chest), "minecraft:coal", 0, reports::add);
+        h.succeedWhen(() -> {
+            h.assertTrue(reports.size() == 1 && reports.getFirst().startsWith("deposited 13 coal"), "report: " + reports);
+            h.assertTrue(h.getTick() > 200, "the walk alone took longer than the old open timeout");
+            h.assertTrue(bot.getInventory().countItem(Items.COAL) == 0, "coal is in the chest");
+            BotManager.despawn("BnJobStore");
+        });
+    }
+
+    /**
      * "Расчисти площадку": a tree, soil and a hole in a 5x5 square around the player's spot are taken
      * to the floor height; the planks and chest of a build inside it and a log outside it stay.
      */
