@@ -24,6 +24,9 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Public check (no personal paths, e-mails or secrets)
+        run: node tools/check-public.mjs
+
       - name: Brain tests
         run: node --test brain/test/ brain/bench/test/
 

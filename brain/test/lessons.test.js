@@ -10,6 +10,7 @@ import { Notebook, Refused, NOTES_MAX } from '../notebook.js';
 import { Instincts, hint } from '../instincts.js';
 import { pickTurn, seancePrompt, sessionModel } from '../seance.js';
 import { isolationProblems } from '../check-isolation.js';
+import { findings } from '../../tools/check-public.mjs';
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(predicate, timeout = 3000) {
@@ -137,4 +138,15 @@ test('the isolation check fails on anything loaded beyond the prompt', () => {
     memory_paths: { auto: 'memory/' }, cwd: join(process.cwd(), 'brain') };
   assert.deepEqual(isolationProblems(leaky).map(p => p.split(':')[0]), ['skills', 'plugins', 'memory', 'working folder inside the repo']);
   assert.deepEqual(isolationProblems(undefined), ['the CLI sent no init report']);
+});
+
+test('the public check catches home paths, e-mails and tokens, not placeholders or noreply', () => {
+  const what = text => findings('f', text).map(f => f.what);
+  assert.deepEqual(what('export JAVA_HOME="/c/Users/alice/.jdks/jdk-21"'), ['user home path']); // public-check: allow
+  assert.deepEqual(what('C:\\Users\\alice\\AppData\\Roaming'), ['user home path']); // public-check: allow
+  assert.deepEqual(what('mail me: alice@mail.example.ru'), ['e-mail']); // public-check: allow
+  assert.deepEqual(what(`token sk-ant-${'x'.repeat(20)}`), ['anthropic key']);
+  assert.deepEqual(what('C:/Users/alice/x // public-check: allow'), [], 'the marker lets a fixture through');
+  for (const fine of ['export JAVA_HOME="$HOME/.jdks/jdk-21"', 'C:/Users/<ты>/AppData', '46087989+aremn@users.noreply.github.com',
+    '@Override', 'Co-Authored-By: Claude <noreply@anthropic.com>', 'C:\\Projects\\blocknet\\brain']) assert.deepEqual(what(fine), [], fine);
 });
