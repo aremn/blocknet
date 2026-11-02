@@ -159,7 +159,7 @@ test('questions are answered from state without jobs; unknown work is declined h
 });
 
 test('the model text is checked: bad or unknown jobs never reach the body', () => {
-  const parsed = parseReply('Вот: ```json\n{"reply":"Ок","jobs":[{"job":"get","item":"minecraft:coal","count":8},{"job":"build","what":"house"},{"job":"clear","radius":40},{"job":"store","target":"chest","what":"loot"}]}\n```');
+  const parsed = parseReply('Вот: ```json\n{"reply":"Ок","jobs":[{"job":"get","item":"minecraft:coal","count":8},{"job":"build","what":"house"},{"job":"clear","radius":40},{"job":"store","target":{"x":1},"what":"loot"}]}\n```');
   assert.equal(parsed.reply, 'Ок');
   assert.deepEqual(parsed.jobs, [{ job: 'get', item: 'minecraft:coal', count: 8 }]);
   assert.equal(parsed.invalid.length, 3);

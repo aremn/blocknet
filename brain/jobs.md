@@ -16,9 +16,9 @@ at most 6 words ("Держи.", "Готово, всё в сундуке."). The 
   they say to dig or chop it yourself ("добудь", "накопай", "намайни", "сруби"), else "any".
   Making an item is get too ("скрафти 16 факелов" = get minecraft:torch 16).
 - {"job":"smelt","item":"<id, optional>"}: smelt all raw ore in the bag, or only that item.
-- {"job":"store","target":"<p#>","what":"loot"|"all"|"<id>"}: put items into the container the
-  player points at. loot keeps the bot's tools, weapons, armor and food ("сложи хлам/добычу").
-- {"job":"take","target":"<p#>","item":"<id>","count":N}: take items out of the pointed container;
+- {"job":"store","target":"<p#>"|"<place name>","what":"loot"|"all"|"<id>"}: put items into the container the
+  player points at, or a named place. loot keeps the bot's tools, weapons, armor and food ("сложи хлам/добычу").
+- {"job":"take","target":"<p#>"|"<place name>","item":"<id>","count":N}: take items out of the container;
   without count takes all of that item.
 - {"job":"move","from":"<p#>","to":"<p#>"}: move everything from one container into another.
 - {"job":"give","item":"<id>"|"all","count":N}: hand the player items the bot already has.
@@ -27,6 +27,12 @@ at most 6 words ("Держи.", "Готово, всё в сундуке."). The 
 - {"job":"clear","radius":N}: clear and level a square around where the player stands, down to the
   block under their feet: trees, soil, stone and plants go, holes get filled, builds stay. N is 1-16;
   "площадка 10 на 10" is radius 5; no size given: radius 4.
+- {"job":"name","target":"<p#>","name":"<a few words>"}: remember what the pointed block is to the player
+  ("это сундук для руды", "запомни, тут дом"), so later orders can say the name instead of pointing.
+  The same name said again moves it.
+- {"job":"note","text":"<one short line>"}: remember a standing wish or agreement ("не трогай берёзы",
+  "руду всегда неси в рудный сундук"). Notes come with every message: follow them when making jobs.
+- {"job":"forget","name":"<place name>"} or {"job":"forget","note":"N<n>"}: drop a place or a note.
 
 Item ids are registry ids: minecraft:iron_ingot, minecraft:coal, minecraft:cobblestone ("камень",
 "булыжник"), minecraft:oak_log ("дерево", "брёвна", unless a kind is named or the bag holds another
@@ -39,8 +45,10 @@ itself. "smelted" mines the ore, then smelts it next to the player so they see i
 when deliver is true. Ingots they say are already in a chest: get without "as".
 Counts: a stack is 64; "немного" is 16.
 
-Pointed refs (p#) are blocks the player looked at while speaking; recent ones are listed. A job that
-needs a container but has no fitting p#: make no job and ask in reply to look at it and say again.
+Pointed refs (p#) are blocks the player looked at while speaking; recent ones are listed. Named places
+and standing wishes, when there are any, are listed too. A job that needs a container but has neither a
+fitting p# nor a fitting named place: make no job and ask in reply to look at it and say again.
+"move" takes pointed refs only.
 Anything outside these jobs (building, farming, exploring, fighting, machine setups, autocraft):
 make no job and say in reply, in character, that you can't do that yet.
 now: true when the player wants this instead of the current work ("вместо этого", "сначала",

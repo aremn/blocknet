@@ -1,17 +1,31 @@
 import { spawn } from 'node:child_process';
-import { JsonProcess, processOptions } from './json-process.js';
+import { fileURLToPath } from 'node:url';
+import { JsonProcess, modelHome, processOptions } from './json-process.js';
 
-export function buildClaudeArgs({ mcpConfig = 'brain/mcp.json', promptFile = 'brain/prompt.md', model = 'haiku', effort, role = 'actor' } = {}) {
-  return ['-p', '--model', model, '--mcp-config', mcpConfig, '--strict-mcp-config',
-    '--tools', role === 'planner' ? 'WebSearch' : '', '--allowedTools', role === 'planner' ? 'mcp__blocknet,WebSearch' : role === 'chat' ? '' : 'mcp__blocknet', '--permission-mode', 'dontAsk',
+/** Plugins, auto-memory and tools the translator's CLI must not load; brain/check-isolation.js proves it. */
+export const MODEL_SETTINGS = fileURLToPath(new URL('./model-settings.json', import.meta.url));
+
+/**
+ * The translator sees its prompt and the message, nothing else (ADR-0017): no tools, MCP servers, skills
+ * or slash commands, no host settings, CLAUDE.md/AGENTS.md or memory, no saved session. Subscription
+ * auth stays in the user's normal config (no --bare).
+ */
+export function buildClaudeArgs({ promptFile = 'brain/prompt.md', model = 'haiku', effort, settings = MODEL_SETTINGS } = {}) {
+  return ['-p', '--model', model, '--mcp-config', '{"mcpServers":{}}', '--strict-mcp-config',
+    '--tools', '', '--allowedTools', '', '--permission-mode', 'dontAsk',
+    '--setting-sources', 'local', '--settings', settings, '--disable-slash-commands', '--no-session-persistence',
     '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
     '--include-partial-messages', '--system-prompt-file', promptFile, ...(effort ? ['--effort', effort] : [])];
 }
 
+/** No update checks, telemetry or error reports from a process that only translates. */
+export const modelEnv = (env = process.env) => ({ ...env, DISABLE_AUTOUPDATER: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' });
+
 // The only spawning site for Claude; injectable for protocol tests, never invokes a shell.
 function startProcess(options, spawnProcess) {
   const prefix = process.env.CLAUDE_SCRIPT ? [process.env.CLAUDE_SCRIPT] : [];
-  return spawnProcess(process.env.CLAUDE_BIN ?? 'claude', [...prefix, ...buildClaudeArgs(options)], processOptions(options.cwd));
+  return spawnProcess(process.env.CLAUDE_BIN ?? 'claude', [...prefix, ...buildClaudeArgs(options)],
+    processOptions(options.cwd ?? modelHome(), modelEnv()));
 }
 
 export class ClaudeBackend {
@@ -53,6 +67,8 @@ export class ClaudeBackend {
   }
 
   onEvent(event) {
+    // What the CLI loaded (tools, servers, skills, plugins, memory): the isolation check reads it.
+    if (event.type === 'system' && event.subtype === 'init') this.init = event;
     const turn = this.active;
     if (!turn) return;
     if (event.type === 'stream_event' && event.event?.type === 'content_block_start' && event.event.content_block?.type === 'tool_use')

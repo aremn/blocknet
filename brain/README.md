@@ -22,6 +22,14 @@ Jobs (`jobs.md` is the model's whole instruction, after `persona.md`):
 | `give` / `drop {item, count?}` | `give` / `drop` | done line |
 | `come`, `follow`, `stop` | `come`, `follow` (not waited for), `stop` | nothing |
 | `clear {radius}` | `clear` around the player | done line |
+| `name {target p#, name}`, `note {text}`, `forget {name or note}` | none: the brain's notebook | done line |
+
+`store` and `take` accept a notebook place name instead of a p# (the brain sends its coordinates).
+The notebook (`notebook.js`, ADR-0017) holds named places and the player's standing wishes, written only
+through these jobs (fixed fields, limits, a repeated wish updates the old one) and shown to the model
+with every message. A failed job's explanation gets an instinct hint (`instincts.js`): where to look,
+and "repeating will not help" when the same job failed the same way again. A death stays in the
+context for 30 minutes.
 
 Anything else gets an honest "can't do that yet" and no job. Orders queue; "вместо этого" (`now`)
 replaces the current work; `стоп` drops everything. A failed or partial report (`failed:`, `partly`,
@@ -48,15 +56,31 @@ brain by hand for the same bot.
 {"port": 25599, "token": "...", "brain": "C:/Projects/blocknet/brain"}
 ```
 
+## Isolation
+
+The model sees its prompt and the message, nothing else: no tools, MCP servers, skills, slash commands,
+host settings, `AGENTS.md`/`CLAUDE.md` or memory, no saved session, and it runs in an empty folder
+outside the repo (`<tmp>/blocknet-model`). `model-settings.json` switches off what `--setting-sources`
+does not cover. After updating Claude Code, check it with one tiny turn:
+
+```sh
+node brain/check-isolation.js            # ISOLATION PASS, or what leaked in
+```
+
 ## Logs
 
-- `brain/logs/session-<date>-<bot>.jsonl`: chat, `translate` (the model's reply, jobs and rejected
-  jobs), `job_start`/`job_end` with the body's report and time, tool calls and results, voice.
+- `brain/logs/session-<date>-<bot>.jsonl`: chat, `translate` (the prompt, the model's raw answer, its
+  reply, jobs and rejected jobs), `explain` (the same for failure lines, with the instinct hint),
+  `job_start`/`job_end` with the body's report and time, tool calls and results, voice.
   Segments of 5 MB continue as `.jsonl.1`...; the last 20 sessions are kept.
 - `brain/logs/usage.jsonl`: each model call's backend, model, ms, time to first token and tokens.
 - `node brain/timeline.js [session] [--config ...]` merges a session with the body trace
   `logs/blocknet/<bot>-trace.log`; brain notes also show in `/blocknet debug`.
 - `node brain/report.js [session]` prints a compact report of a session.
+- `brain/logs/notebook.<bot>.json`: the bot's notebook (places and wishes).
+- `node brain/seance.js [--session <file>] [--turn N] "почему ты так понял?"` puts a logged model turn
+  (its prompt and raw answer; default the last one) back in front of the same model with your question,
+  and appends the answer to `brain/logs/seance-<session>.md`.
 
 ## Backends
 

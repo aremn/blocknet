@@ -85,13 +85,22 @@ See `brain/README.md`, architecture section 5 and ADR-0008. No `claude --bare`; 
 auth and disable built-in tools. Generated configs, sessions and logs stay ignored.
 
 **ADR-0016 (2026-10-30): the bot is a worker.** The model only translates speech into jobs
-(`get`, `smelt`, `store`, `take`, `move`, `give`, `drop`, `come`, `follow`, `stop`, `clear`); the body does
+(`get`, `smelt`, `store`, `take`, `move`, `give`, `drop`, `come`, `follow`, `stop`, `clear`; the notebook jobs `name`, `note`, `forget` stay in the brain); the body does
 each job completely (`ObtainTask`, `SmeltTask`, `ClearTask`, `ContainerTask`, `TransferTask`, `GiveTask`)
 and reports once. No planner, step actor, MCP server, skill scripts, quick mouth, chat classifier or
 IdleLife chores any more: sections below that describe them are history (tag `before-worker`). A new
 capability is a new body job with a GameTest plus one line in `jobs.md` and `Worker.run`, never a prompt
 that teaches the model to drive low-level tools. Brain tests: `node --test brain/test/ brain/bench/test/`
 (`worker.test.js` fakes the body and the model).
+
+**ADR-0017 (2026-11-02): lessons from GregTech Arena.** The model's CLI loads nothing but the prompt
+(`--setting-sources local`, `brain/model-settings.json`, no slash commands or saved session, cwd
+`<tmp>/blocknet-model`); run `node brain/check-isolation.js` after a Claude Code update (a cwd inside the
+repo used to pull in AGENTS.md, the dev memory and 37 skills). Failed-job explanations get instinct
+hints (`instincts.js`). The notebook (`notebook.js`) is written only by the `name`/`note`/`forget` jobs;
+`store`/`take` accept a place name. `node brain/seance.js "question"` asks the model about a logged turn.
+Codex: `gpt-6.1-sol` was refused for the ChatGPT account on 2026-11-02 ("not supported when using Codex
+with a ChatGPT account"); `--model claude:haiku` works.
 
 The LGPL `pathing/` module (Automatone) lives next to `mod/`: `BotController` drives it through
 `IBaritone.KEY.get(bot).getCustomGoalProcess()`, `BotPlayer.tick()` ticks it, and it acts through

@@ -5,3 +5,4 @@ import './worker.test.js';
 import './timeline.test.js';
 import './viewer.test.js';
 import './voice.test.js';
+import './lessons.test.js';

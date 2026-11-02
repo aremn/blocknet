@@ -1,0 +1,11 @@
+{
+  "enabledPlugins": {
+    "cc-plugin-agents-md@builtin": false,
+    "cc-plugin-plugin-authoring@builtin": false
+  },
+  "autoMemoryEnabled": false,
+  "permissions": {
+    "deny": ["Agent", "Bash", "Edit", "Glob", "Grep", "MultiEdit", "NotebookEdit", "PowerShell", "Read", "Skill",
+      "Task", "WebFetch", "WebSearch", "Write"]
+  }
+}

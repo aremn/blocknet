@@ -1,20 +1,16 @@
 import { spawn } from 'node:child_process';
-import { JsonProcess, processOptions } from './json-process.js';
+import { JsonProcess, modelHome, processOptions } from './json-process.js';
 
 // Values are TOML, passed as separate argv entries (JSON strings also quote TOML strings).
-export function buildCodexArgs({ mcpServer, model = 'gpt-6-luna', serviceTier = 'priority', effort = 'low', role = 'actor' } = {}) {
+// The translator gets no tools, MCP servers, project docs, skills, plugins or memories (ADR-0017).
+export function buildCodexArgs({ model = 'gpt-6-luna', serviceTier = 'priority', effort = 'low' } = {}) {
   const config = {
     model: JSON.stringify(model), service_tier: JSON.stringify(serviceTier), model_reasoning_effort: JSON.stringify(effort),
     approval_policy: '"never"', sandbox_mode: '"read-only"', project_doc_max_bytes: '0',
     'features.skip_host_skill_discovery': 'true', 'features.skill_search': 'false',
     'features.plugins': 'false', 'features.apps': 'false', 'features.memories': 'false',
-    'features.shell_tool': 'false', 'features.multi_agent': 'false', web_search: role === 'planner' ? '"live"' : '"disabled"',
+    'features.shell_tool': 'false', 'features.multi_agent': 'false', web_search: '"disabled"', mcp_servers: '{}',
   };
-  if (role === 'chat') config.mcp_servers = '{}';
-  if (mcpServer && role !== 'chat') {
-    const env = Object.entries(mcpServer.env ?? {}).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(',');
-    config.mcp_servers = `{blocknet={command=${JSON.stringify(mcpServer.command)},args=${JSON.stringify(mcpServer.args)},env={${env}},default_tools_approval_mode="approve",tool_timeout_sec=600}}`;
-  }
   return ['app-server', '--listen', 'stdio://', ...Object.entries(config).flatMap(([k, v]) => ['-c', `${k}=${v}`])];
 }
 
@@ -28,7 +24,7 @@ function startProcess(options, spawnProcess) {
 export class CodexBackend {
   backend = 'codex';
   constructor(options = {}) {
-    this.options = options;
+    this.options = { ...options, cwd: options.cwd ?? modelHome() };
     this.model = options.model ?? 'gpt-6-luna';
     this.spawnProcess = options.spawnProcess ?? spawn;
     this.maxTurns = options.maxTurns ?? 10;
@@ -44,9 +40,8 @@ export class CodexBackend {
     const result = await this.process.request('thread/start', {
       model: this.model, serviceTier: this.options.serviceTier ?? 'priority', cwd: this.options.cwd,
       approvalPolicy: 'never', sandbox: 'read-only', baseInstructions: this.options.prompt,
-      developerInstructions: this.options.role === 'chat'
-        ? 'Answer using only the supplied context, in exactly the requested format (JSON or one spoken line); never call tools or act in Minecraft.'
-        : 'Use only the blocknet MCP tools to act in Minecraft.', ephemeral: true,
+      developerInstructions: 'Answer using only the supplied context, in exactly the requested format (JSON or one spoken line); never call tools or act in Minecraft.',
+      ephemeral: true,
     });
     this.threadId = result.thread.id;
   }
@@ -93,12 +88,8 @@ export class CodexBackend {
   onEvent(event) {
     const p = event.params ?? {};
     if (event.id !== undefined && event.method) {
-      // MCP tool consent is elicitation in this binding version. Never approve shell/file requests.
-      if (event.method === 'mcpServer/elicitation/request' && p.serverName === 'blocknet') {
-        this.process.write({ id: event.id, result: { action: 'accept', content: { decision: 'approve' }, _meta: null } });
-      } else {
-        this.process.write({ id: event.id, error: { code: -32601, message: 'Only blocknet MCP approvals are supported' } });
-      }
+      // The translator has nothing to approve: every request for consent (shell, files, MCP) is refused.
+      this.process.write({ id: event.id, error: { code: -32601, message: 'The translator approves nothing' } });
       return;
     }
     const turn = this.active;

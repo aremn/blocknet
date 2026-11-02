@@ -1,3 +1,6 @@
+import { mkdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 
 /** JSON lines and failure propagation shared by the two stdio protocols. No spawning here. */
@@ -55,4 +58,13 @@ export class JsonProcess {
   }
 }
 
-export const processOptions = cwd => ({ cwd, shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+export const processOptions = (cwd, env) => ({ cwd, shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], ...(env && { env }) });
+
+/**
+ * The model's working folder: empty and outside the repo, so its CLI finds no AGENTS.md, CLAUDE.md,
+ * skills or project settings above it (ADR-0017).
+ */
+export function modelHome(dir = join(tmpdir(), 'blocknet-model')) {
+  mkdirSync(dir, { recursive: true });
+  return dir;
+}

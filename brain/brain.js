@@ -8,9 +8,10 @@ import { SessionLog, failed, oneLine } from './session-log.js';
 import { ClaudeBackend } from './claude-backend.js';
 import { CodexBackend } from './codex-backend.js';
 import { Hearing, Speech, pickVoice, voiceConfig, voiceHomes, voiceName } from './voice.js';
+import { Instincts } from './instincts.js';
+import { Notebook, Refused, placeName, position } from './notebook.js';
 
 const brainDir = dirname(fileURLToPath(import.meta.url));
-const rootDir = dirname(brainDir);
 export const personaPrompt = await readFile(new URL('./persona.md', import.meta.url), 'utf8');
 export const jobsPrompt = await readFile(new URL('./jobs.md', import.meta.url), 'utf8');
 export const systemPrompt = `${personaPrompt}\n${jobsPrompt}`;
@@ -47,10 +48,12 @@ export function inventoryCounts(text) {
   return counts;
 }
 
-const KINDS = ['get', 'smelt', 'store', 'take', 'move', 'give', 'drop', 'come', 'follow', 'stop', 'clear'];
+const KINDS = ['get', 'smelt', 'store', 'take', 'move', 'give', 'drop', 'come', 'follow', 'stop', 'clear', 'name', 'note', 'forget'];
 const count = value => Number.isInteger(value) && value >= 1 && value <= 100_000;
 const id = value => typeof value === 'string' && /^(?:[a-z0-9_.-]+:)?[a-z0-9_./-]+$/u.test(value);
 const ref = value => typeof value === 'string' && /^p\d+$/u.test(value);
+/** A container target: a pointed p# or a name from the notebook. */
+const target = value => ref(value) || placeName(value);
 
 /** One job the body can do, or a reason it is not one; the model's text never reaches the body unchecked. */
 export function checkJob(job) {
@@ -58,8 +61,11 @@ export function checkJob(job) {
   const bad = {
     get: () => !id(job.item) || !count(job.count) || job.as != null && !['raw', 'smelted'].includes(job.as),
     smelt: () => job.item != null && !id(job.item),
-    store: () => !ref(job.target) || !(id(job.what) || ['loot', 'all'].includes(job.what)),
-    take: () => !ref(job.target) || !id(job.item) || job.count != null && !count(job.count),
+    store: () => !target(job.target) || !(id(job.what) || ['loot', 'all'].includes(job.what)),
+    take: () => !target(job.target) || !id(job.item) || job.count != null && !count(job.count),
+    name: () => !ref(job.target) || !placeName(job.name),
+    note: () => typeof job.text !== 'string' || !job.text.trim(),
+    forget: () => !(placeName(job.name) || typeof job.note === 'string' && /^N\d+$/iu.test(job.note)),
     move: () => !ref(job.from) || !ref(job.to),
     give: () => !(id(job.item) || job.item === 'all') || job.count != null && !count(job.count),
     drop: () => !(id(job.item) || job.item === 'all') || job.count != null && !count(job.count),
@@ -100,8 +106,14 @@ export function describeJob(job) {
     give: () => `give ${n}${job.item}`, drop: () => `drop ${n}${job.item}`,
     come: () => 'come to the player', follow: () => 'follow the player', stop: () => 'stop',
     clear: () => `clear a square of radius ${job.radius}`,
+    name: () => `remember ${job.target} as "${job.name}"`,
+    note: () => `remember the wish "${job.text}"`,
+    forget: () => `forget ${job.note ?? `"${job.name}"`}`,
   }[job.job]();
 }
+
+/** How long a death stays in every translation's context. */
+export const DEATH_REMEMBERED_MS = 30 * 60_000;
 
 /** A finished job that did not do everything: worth one plain-words line instead of "done". */
 const incomplete = report => failed(report) || /^(?:\[[^\]]+\] )?partly\b/iu.test(String(report));
@@ -111,8 +123,9 @@ const incomplete = report => failed(report) || /^(?:\[[^\]]+\] )?partly\b/iu.tes
  * at a time from a queue. Speech is the model's opening line, then one line per finished job.
  */
 export class Worker {
-  constructor({ body, backend, bot, aliases = [], listen = 'all', log, hearing, speech, usageFile, modelMs = 25_000 }) {
-    Object.assign(this, { body, backend, bot, log, hearing, speech, usageFile, modelMs });
+  constructor({ body, backend, bot, aliases = [], listen = 'all', log, hearing, speech, usageFile, modelMs = 25_000,
+    notebook = new Notebook(null), instincts = new Instincts() }) {
+    Object.assign(this, { body, backend, bot, log, hearing, speech, usageFile, modelMs, notebook, instincts });
     this.router = new ChatRouter(bot, aliases, listen);
     this.queue = []; this.current = null; this.generation = 0; this.conversation = []; this.pointed = [];
     this.turns = Promise.resolve();
@@ -141,7 +154,11 @@ export class Worker {
     this.log?.write(event.type === 'chat' ? 'chat' : 'event', event.type === 'chat' ? { from: event.from, text: event.text } : { event });
     if (event.type === 'bot.spoke') this.router.spoke(event.bot, event.player);
     else if (event.type === 'voice.choose') this.chooseVoice(event).catch(error => this.log?.write('voice_error', { stage: 'choose', error: error.message }));
-    else if (event.type === 'bot.died') this.cancel('died');
+    else if (event.type === 'bot.died') {
+      // Remembered like a burn: the next translations know where and how the bot died (ADR-0017).
+      this.death = { cause: event.cause ?? 'unknown', position: event.position ?? '?', at: Date.now(), dropped: event.items_dropped };
+      this.cancel('died');
+    }
     else if (event.type === 'chat') this.hear(event);
   }
   hear(event) {
@@ -173,10 +190,14 @@ export class Worker {
     const [status, inv] = await Promise.all([this.call('status'), this.call('inv')]).catch(() => [{}, {}]);
     const bag = Object.entries(inventoryCounts(inv.result ?? '')).map(([item, n]) => `${n} ${item}`).join(', ');
     const pointed = event?.pointed_ref ? `${event.pointed_ref} = block ${event.pointed_block}` : 'nothing';
+    const notebook = this.notebook.card();
+    const died = this.death && Date.now() - this.death.at < DEATH_REMEMBERED_MS
+      ? `Last death: ${this.death.cause} at ${this.death.position}, ${Math.round((Date.now() - this.death.at) / 60_000)} min ago${this.death.dropped ? ', items dropped there' : ''}\n` : '';
     return `Bot: ${this.bot}. ${event ? `Player ${JSON.stringify(event.from)} says: ${JSON.stringify(text)}` : 'No new message.'}\n`
       + `Pointed now: ${pointed}; recent pointed refs: ${this.pointed.map(p => `${p.ref} = ${p.block}`).join('; ') || 'none'}\n`
       + `State: ${oneLine(status.result ?? 'unknown').slice(0, 400)}\nBag: ${bag.slice(0, 600) || 'empty'}\n`
       + `Work: ${this.current ? describeJob(this.current) : 'idle'}${this.queue.length ? `; queued: ${this.queue.map(describeJob).join('; ')}` : ''}\n`
+      + died + (notebook ? `${notebook}\n` : '')
       + `Recent conversation: ${JSON.stringify(this.conversation)}`;
   }
   async ask(prompt) {
@@ -199,13 +220,14 @@ export class Worker {
     const generation = this.generation;
     const prompt = await this.context(event, text);
     if (this.closed) return;
-    let parsed;
-    try { parsed = parseReply((await this.ask(prompt)).text); }
+    let parsed, raw;
+    try { raw = (await this.ask(prompt)).text; parsed = parseReply(raw); }
     catch (error) {
       this.log?.write('translate_error', { error: error.message });
       return this.say('Чё-то я подвис, скажи ещё раз.', event.from);
     }
-    this.log?.write('translate', { text, ...parsed });
+    // The prompt and the raw answer let brain/seance.js ask the model afterwards why it answered so.
+    this.log?.write('translate', { text, ...parsed, prompt, raw });
     this.note(`${event.from}: ${text} -> ${parsed.jobs.map(describeJob).join('; ') || 'no job'}${parsed.invalid.length ? ` (rejected: ${parsed.invalid.join('; ')})` : ''}`);
     if (parsed.reply) await this.say(parsed.reply, event.from);
     if (parsed.jobs.some(job => job.job === 'stop')) { this.cancel('stop'); await this.call('stop'); return; }
@@ -287,8 +309,9 @@ export class Worker {
         return this.smeltNear(job, raw, player);
       }
       case 'smelt': return this.task('smelt', optional('item', job.item));
-      case 'store': return this.task('deposit', { ref: job.target, filter: job.what });
-      case 'take': return this.task('withdraw', { ref: job.target, filter: job.item, ...optional('count', job.count) });
+      case 'store': return this.task('deposit', { ...this.container(job.target), filter: job.what });
+      case 'take': return this.task('withdraw', { ...this.container(job.target), filter: job.item, ...optional('count', job.count) });
+      case 'name': case 'note': case 'forget': return this.write(job);
       case 'move': return this.task('transfer', { source: job.from, destination: job.to });
       case 'give': return this.task('give', { player, item: job.item, ...optional('count', job.count) });
       case 'drop': return this.task('drop', { item: job.item, ...optional('count', job.count) });
@@ -297,6 +320,26 @@ export class Worker {
       case 'follow': await this.call('follow', { player }); return 'following';
       case 'clear': return this.task('clear', { radius: job.radius, player });
       default: return `failed: unknown job ${job.job}`;
+    }
+  }
+  /** A pointed ref goes to the body as it is; a notebook name as the block's coordinates. */
+  container(target) {
+    if (/^p\d+$/u.test(target)) return { ref: target };
+    const place = this.notebook.place(target);
+    if (!place) throw new Error(`no place named ${target}; look at it and say what it is`);
+    const [x, y, z] = place.pos;
+    return { x, y, z };
+  }
+  /** Notebook jobs run here, not in the body: fixed fields, limits, one report like a body job's. */
+  write(job) {
+    try {
+      if (job.job === 'note') return this.notebook.note(job.text, job.player);
+      if (job.job === 'forget') return this.notebook.forget(job);
+      const pointed = this.pointed.find(p => p.ref === job.target);
+      return this.notebook.name(job.name, position(pointed?.block), job.player);
+    } catch (error) {
+      if (error instanceof Refused) return `failed: ${error.message}`;
+      throw error;
     }
   }
   /** Bringing N means handing over N (owned ones count); getting N means N more than now. */
@@ -346,11 +389,15 @@ export class Worker {
   async explain(job, report, dropped = []) {
     let line = '';
     try {
+      const instinct = this.instincts.lines(job, report);
       const prompt = `${await this.context(null, '')}\nNo new message: the job "${describeJob(job)}" just ended. The body reported: ${oneLine(report).slice(0, 600)}.\n`
         + (dropped.length ? `The rest of that order was not started: ${dropped.map(describeJob).join('; ')}.\n` : '')
+        + instinct.map(l => `${l}\n`).join('')
         + 'Return {"reply": "...", "jobs": []} where reply tells the player in ONE short line, in character, what went wrong or what is left, '
         + 'in plain words (no item ids, tool names or English error text), and what would help, if anything.';
-      line = parseReply((await this.ask(prompt)).text).reply;
+      const raw = (await this.ask(prompt)).text;
+      line = parseReply(raw).reply;
+      this.log?.write('explain', { job: describeJob(job), report: oneLine(report).slice(0, 600), instinct, prompt, raw, reply: line });
     } catch (error) { this.log?.write('explain_error', { error: error.message }); }
     await this.say(line || 'Не вышло, глянь, что не так.', job.player);
   }
@@ -412,8 +459,7 @@ export async function main() {
   const promptFile = resolve(logDir, `prompt.${bot}.md`);
   await writeFile(promptFile, systemPrompt);
   const spec = parseModel(option('model', 'codex:gpt-6.1-sol:low'));
-  const backend = createBackend(spec.backend, { ...spec, cwd: rootDir, role: 'chat', prompt: systemPrompt, promptFile,
-    mcpConfig: '{"mcpServers":{}}', maxTurns: 8, timeoutMs: 30_000 });
+  const backend = createBackend(spec.backend, { ...spec, prompt: systemPrompt, promptFile, maxTurns: 8, timeoutMs: 30_000 });
   const voice = voiceConfig(JSON.parse(await readFile(config, 'utf8')).voice ?? {});
   const hearing = voice.stt && new Hearing({ ...voice.stt, log: (type, data) => log.write(type, data),
     prompt: `Разговор в Minecraft с ботом ${bot}. Майнкрафт, кирка, верстак, сундук, печка, руда, железо, алмазы, уголь, площадка.` });
@@ -421,7 +467,7 @@ export async function main() {
   log.write('voice', { hearing: voice.stt ?? 'off', speech: voice.tts ?? 'off', home: voice.home, searched: voiceHomes(JSON.parse(await readFile(config, 'utf8')).voice ?? {}) });
   hearing?.warm?.().then(ms => log.write('voice_warm', { ms }), error => log.write('voice_error', { stage: 'warm', error: error.message }));
   const worker = new Worker({ body, backend, bot, aliases, log, hearing, speech, listen: option('listen', 'all'),
-    usageFile: resolve(logDir, 'usage.jsonl') });
+    usageFile: resolve(logDir, 'usage.jsonl'), notebook: new Notebook(resolve(logDir, `notebook.${bot}.json`)) });
   for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => { worker.close(); process.exit(0); });
   await worker.start();
   process.stderr.write(`Worker brain ready for ${bot}: ${backend.backend}/${backend.model}. Log: ${log.file}\n`);

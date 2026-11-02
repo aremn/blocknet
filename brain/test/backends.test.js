@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { createInterface } from 'node:readline';
+import { dirname, isAbsolute, relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { ClaudeBackend } from '../claude-backend.js';
 import { CodexBackend, buildCodexArgs } from '../codex-backend.js';
 import { routeRule } from '../rules.js';
@@ -99,12 +101,24 @@ test('Codex fake JSON-RPC initializes one thread, starts turns, approves MCP and
     assert.equal(start.sandbox, 'read-only');
     assert.equal(start.model, 'gpt-6-luna');
     assert.equal(start.serviceTier, 'priority');
-    assert.equal(requests.find(r => r.id === 'approval' && r.result).result.content.decision, 'approve');
+    assert.ok(requests.find(r => r.id === 'approval' && r.error), 'the translator approves nothing');
   } finally { backend.close(); }
-  const args = buildCodexArgs({ mcpServer: { command: 'node', args: ['mcp-server.js'], env: { BLOCKNET_BOT: 'Kirill' } } });
-  assert.ok(args.includes('features.skip_host_skill_discovery=true'));
-  assert.ok(args.includes('features.plugins=false'));
-  assert.ok(args.find(a => a.startsWith('mcp_servers=')).includes('default_tools_approval_mode="approve"'));
+  const args = buildCodexArgs();
+  for (const flag of ['features.skip_host_skill_discovery=true', 'features.plugins=false', 'features.memories=false',
+    'features.shell_tool=false', 'project_doc_max_bytes=0', 'web_search="disabled"', 'mcp_servers={}']) assert.ok(args.includes(flag), flag);
+});
+
+test('the model runs in an empty folder outside the repo, without update checks or telemetry', () => {
+  let seen;
+  const backend = new ClaudeBackend({ spawnProcess(command, args, options) { seen = options; return fakeProcess(() => {}); } });
+  backend.prepare();
+  backend.close();
+  const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+  const outside = dir => { const path = relative(repo, dir); return path.startsWith('..') || isAbsolute(path); };
+  assert.ok(outside(seen.cwd), seen.cwd);
+  assert.equal(seen.env.DISABLE_AUTOUPDATER, '1');
+  assert.equal(seen.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, '1');
+  assert.ok(outside(new CodexBackend().options.cwd));
 });
 
 for (const Backend of [ClaudeBackend, CodexBackend]) {
