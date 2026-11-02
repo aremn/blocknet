@@ -14,12 +14,11 @@
 обе полные 12-блочные ветки с возвратом и закладку видимого источника воды инвентарным блоком.
 Источники целей — только память и лучи; события BreakEvent используются исключительно тестами.
 
-После изменений реестра тулсов: `node brain/bench/sync-tools.js`.
 Для проверки устойчивости этой серии исправлений нужны три полных прогона, каждый в отдельный лог:
 
 ```bash
-export JAVA_HOME="/c/Users/ncpaa/.jdks/jdk-21.0.12.1+1"
-export GRADLE_USER_HOME="C:/Users/ncpaa/.gradle"
+export JAVA_HOME="$HOME/.jdks/jdk-21.0.12.1+1"
+export GRADLE_USER_HOME="$(cygpath -m "$HOME")/.gradle"
 ./gradlew build --offline -x deployJar -x removeOldDeployedJars
 ./gradlew :mod:runGameTestServer --offline --console=plain > build/terrain-gametest-1.log 2>&1
 ./gradlew :mod:runGameTestServer --offline --console=plain > build/terrain-gametest-2.log 2>&1
@@ -379,13 +378,13 @@ Every own break queues occlusion-honest eye rays to the six exposed neighbours. 
 
 The brain keeps the latest player's message in prompts, answers in that language even during autoplay, and limits autonomous speech to meaningful events at most once every three turns. Prefer observed ores and bounded explore_caves before mine_ore at a knowledge peak; gather follows veins.
 
-When Prism is running, preserve its deployed jar: `./gradlew build --offline -x deployJar -x removeOldDeployedJars`. Set `JAVA_HOME` to JDK 21 and, if the shell selects another user home, `GRADLE_USER_HOME=C:/Users/ncpaa/.gradle`. A busy default bridge port is logged and does not stop GameTests; bridge tests bind a separate free port.
+When Prism is running, preserve its deployed jar: `./gradlew build --offline -x deployJar -x removeOldDeployedJars`. Set `JAVA_HOME` to JDK 21 and, if the shell selects another user home, `GRADLE_USER_HOME="$(cygpath -m "$HOME")/.gradle"`. A busy default bridge port is logged and does not stop GameTests; bridge tests bind a separate free port.
 
 
 ## Live autoplay recovery (second session)
 
 - Build with a client running: `./gradlew build --offline -x deployJar -x removeOldDeployedJars`.
-  Set JDK 21 first; set `GRADLE_USER_HOME=C:/Users/ncpaa/.gradle` if the wrapper misses its cached distribution.
+  Set JDK 21 first; set `GRADLE_USER_HOME="$(cygpath -m "$HOME")/.gradle"` if the wrapper misses its cached distribution.
 - Death uses vanilla drops/keepInventory, then `PlayerList.respawn` after 20 ticks. The respawn mixin
   preserves BotPlayer and its inert listener; BotManager tracks the replacement. `bot.died` carries
   cause, position and items_dropped, followed by `bot.respawned`. Brain waits and continues autoplay.
@@ -399,10 +398,8 @@ When Prism is running, preserve its deployed jar: `./gradlew build --offline -x 
   navigation time rather than only the short menu timeout.
 - `look food` includes observed animals, food drops and crops. Failed look-in hints remembered containers.
   Bridge goto/gather accept quoted comma-separated refs (first ref) and nested `{ref: "t1"}` values.
-- Sessions rotate every 10 turns with goal, inventory summary, last 3 task results and current scene line.
-  Scene output caps at 12 lines and two representatives per class, including structures.
-- After BridgeTools changes run `node brain/bench/sync-tools.js`; tools.json is generated.
-  Socket GameTests use port zero; an occupied live bridge port warns without failing the server.
+- Scene output caps at 12 lines and two representatives per class, including structures.
+- Socket GameTests use port zero; an occupied live bridge port warns without failing the server.
   Run the full GameTest suite once at the end; inspect required tests, failed at and exceptions in
   build/gametest.log. Node: `node --test brain/test/`. Leave changes uncommitted when requested.
 
@@ -455,5 +452,4 @@ This live-play iteration adds no tests or bench rules; existing speech checks an
 are updated. Verify `./gradlew build --offline -x deployJar -x removeOldDeployedJars`, one passing
 full `:mod:runGameTestServer --offline --console=plain` run (inspect required tests/failed at), and
 `node --test brain/test/ brain/bench/test/`. Run `./gradlew --stop` once only if GameTest startup
-fails with BootstrapLauncher NoSuchElementException. Regenerate the registry with
-`node brain/bench/sync-tools.js`. Leave changes uncommitted.
+fails with BootstrapLauncher NoSuchElementException. Leave changes uncommitted.

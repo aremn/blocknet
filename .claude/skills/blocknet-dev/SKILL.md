@@ -17,7 +17,7 @@ If a change contradicts an ADR, write a new ADR that supersedes it instead of si
 ## Environment
 
 - Windows, Git Bash. JDK 21 is not the system Java (that is Java 8), so every Gradle call needs
-  `export JAVA_HOME="/c/Users/ncpaa/.jdks/jdk-21.0.12.1+1"` first.
+  `export JAVA_HOME="$HOME/.jdks/jdk-21.0.12.1+1"` first.
 - The repo has two Gradle layers: the root (settings, wrapper, `gradle.properties`) and the `mod/`
   subproject. The LGPL `pathing/` and `crafting/` modules and Node 22 `brain/` sit next to `mod/`; `protocol/` schemas are planned.
 - Minecraft and NeoForge sources (Mojang names + Parchment) are in
@@ -29,7 +29,7 @@ If a change contradicts an ADR, write a new ADR that supersedes it instead of si
 ## Commands
 
 ```bash
-export JAVA_HOME="/c/Users/ncpaa/.jdks/jdk-21.0.12.1+1"
+export JAVA_HOME="$HOME/.jdks/jdk-21.0.12.1+1"
 ./gradlew build                                            # compile + jar (mod/build/libs/)
 ./gradlew :mod:runGameTestServer --console=plain > build/gametest.log 2>&1
 grep -a -E "GAME TESTS COMPLETE|required tests (passed|failed)|failed at" build/gametest.log
@@ -205,10 +205,11 @@ English to code, commands and commit messages.
 ## Live autoplay recovery (second session)
 
 - Build with a client running: `./gradlew build --offline -x deployJar -x removeOldDeployedJars`.
-  Set JDK 21 first; set `GRADLE_USER_HOME=C:/Users/ncpaa/.gradle` if the wrapper misses its cached distribution.
+  Set JDK 21 first; set `GRADLE_USER_HOME="$(cygpath -m "$HOME")/.gradle"` if the wrapper misses its cached distribution.
 - Death uses vanilla drops/keepInventory, then `PlayerList.respawn` after 20 ticks. The respawn mixin
   preserves BotPlayer and its inert listener; BotManager tracks the replacement. `bot.died` carries
-  cause, position and items_dropped, followed by `bot.respawned`. Brain waits and continues autoplay.
+  cause, position and items_dropped, followed by `bot.respawned`; the brain drops its jobs and keeps the
+  death in its context for 30 minutes.
 - Danger pauses task ticking/timeouts and navigation (including idle pathing hotbar rearrangement). It fights visible approaching hostiles within
   6 blocks or mob attackers, through player attacks and cooldown: sword > axe > pickaxe > hand.
   It retreats below 30% health or when outnumbered, and resumes after threats die or leave 16 blocks.
@@ -219,10 +220,8 @@ English to code, commands and commit messages.
   navigation time rather than only the short menu timeout.
 - `look food` includes observed animals, food drops and crops. Failed look-in hints remembered containers.
   Bridge goto/gather accept quoted comma-separated refs (first ref) and nested `{ref: "t1"}` values.
-- Sessions rotate every 10 turns with goal, inventory summary, last 3 task results and current scene line.
-  Scene output caps at 12 lines and two representatives per class, including structures.
-- After BridgeTools changes run `node brain/bench/sync-tools.js`; tools.json is generated.
-  Socket GameTests use port zero; an occupied live bridge port warns without failing the server.
+- Scene output caps at 12 lines and two representatives per class, including structures.
+- Socket GameTests use port zero; an occupied live bridge port warns without failing the server.
   Run the full GameTest suite at the end (use the requested stability count); inspect required tests, failed at and exceptions in
   build/gametest.log. Node: `node --test brain/test/`. Leave changes uncommitted when requested.
 
@@ -235,7 +234,7 @@ English to code, commands and commit messages.
   other height providers report `unknown range`. Loot tables and shared ToolFacts probes provide
   drop/tool facts. Group variants by non-silk drop; never search world blocks to build this index.
 - `/blocknet knowledge|mine_ore|obtain [name] <item> [count]` share the bridge registry. `mine_ore`
-  gathers additional drops; `obtain` counts inventory. `get` retains its existing planner scope.
+  gathers additional drops; `obtain` counts inventory.
 - `SkillTask` owns the final report while launching ordinary controller actions. Preserve ownership
   during internal starts/finishes; external stop/replacement cancels the owner exactly once. Progress
   is `task.progress` every 200 ticks, with depth/count and bridge task_id; budget 12000 ticks.
@@ -251,7 +250,7 @@ English to code, commands and commit messages.
   pickup does not walk and must not mistake an empty head cell for missing floor support.
 - `KnowledgeSkillGameTests` contains the six step-1 checks (including paired hidden-ore scenes).
   Wait for light for the tree. Run only requested targeted tests while iterating; the full suite once
-  at the end unless a stability count is requested. Regenerate tools.json with `node brain/bench/sync-tools.js` after registry edits.
+  at the end unless a stability count is requested.
 
 ## Natural terrain regression checks (third live run)
 
@@ -275,18 +274,18 @@ English to code, commands and commit messages.
   support at the top face. Never step down into unknown air or liquids.
 - Keep vanilla swing broadcasts and gameMode destroy progress at survival speed. Packet tests
   must observe them on another player's connection, including crack reset; do not invent progress.
-- Propagate y, source surface y, active ore peak and distance into body/scene/CompactState. For
-  status replacements, use the newest body revision. MCP must classify stopped/unsupported/none
-  seen and partial `; stopped` reports as failures, so incomplete mining cannot pass a plan step.
+- Propagate y, source surface y, active ore peak and distance into body state and the scene. For
+  status replacements, use the newest body revision. The brain's `failed()` treats stopped/unsupported/
+  none seen and partial `; stopped` reports as failures, so incomplete mining is never "done".
 - Build: `./gradlew build --offline -x deployJar -x removeOldDeployedJars`. If GameTest launch
   throws BootstrapLauncher NoSuchElementException, run `./gradlew --stop` once, then retry.
-  After registry edits run `node brain/bench/sync-tools.js`; Node checks include brain/test/ and
-  brain/bench/test/. Iterate on selected tests; finish this regression workflow with THREE full
-  GameTest runs and inspect each required-tests summary, failed-at lines and exceptions.
+  Node checks: `node --test brain/test/ brain/bench/test/`. Iterate on selected tests; finish this
+  regression workflow with THREE full GameTest runs and inspect each required-tests summary,
+  failed-at lines and exceptions.
 - Camera rays may defer under load. For repeated fixture observations use `helper.onEachTick`
   and an explicit stage; never interpret a budget-deferred ray as an absent object.
 
-## In-game wiki and planner speech
+## In-game wiki and cave exploring
 
 - `knowledge/Wiki` lazily caches loaded mod roots and server resource locations; startup/global
   datapack sync invalidates it. Generic framework formats: GuideME Markdown under an arbitrary
@@ -296,31 +295,16 @@ English to code, commands and commit messages.
 - Bridge `wiki {query}` and `/blocknet wiki <query>` share search, up to three source-labelled
   snippets under 120 words. `/blocknet wiki-status` lists indexed/skipped formats. Missing optional
   formats stay quiet. `WikiGameTests` checks the real loaded guide fixture and nonsense queries.
-- `brain/persona.md` is the stable character prompt shared by actor and planner; persona.json
-  keeps only defaultLanguage. No phrase pools or timer fillers. First model preamble line streams
-  immediately from Codex agent-message deltas/items or Claude text deltas, before tools/JSON;
-  strip that line before normal processing. Stop/death suppress stale speech. Trivial rules stay
-  silent/model-free. Player hint acknowledgement is the classifier's model-written reply.
-- One non-moving scene is captured alongside planner preparation. Planner playbook prepares coal,
-  food, torches and smelting fuel after stone tools, uses seen ore/cliffs/caves before bounded
-  explore_caves, and mine_ore at a knowledge peak as fallback. Use knowledge/wiki for unfamiliar items.
-- Steps accept optional budget_min and else. On failure/timeout run else once with the same done
-  condition and a fresh step budget within the original plan deadline; replan only if fallback fails.
-  Validate planner tool_gaps [{want,why}] (32 entries, nonempty <=200/500 characters), append with
-  source: planner to tool-feedback.jsonl and session log; report.js displays that source.
+- `brain/persona.md` is the stable character prompt, followed by `brain/jobs.md`. No phrase pools or
+  timer fillers. Stop/death suppress stale speech. Trivial rules stay silent and model-free.
 - ExploreCavesTask uses observed cave/dark evidence, fresh look if absent, and reports no cave seen.
   Walk routes use observed air + sturdy floors, single-block elevation changes and natural cave
   ceilings, avoiding lava/hostiles. Gather wall ore stays within reach and does not walk for drops;
   reuse GatherTask's vein following. Place owned torches at light <7 through controller.place.
   Five-minute body budget reserves return time; replay safe breadcrumbs, report a blocked return.
   Progress every 200 ticks, one terminal report including actual gains, distance and torches.
-- This live-play change adds no tests or bench rules. Adapt existing speech tests and gathered-count
-  assertions (at least requested, with actual count in report). Verify build with deployment excluded,
-  one passing full GameTest run and existing Node suites. This overrides the earlier three-run workflow.
-- Planner MCP permits only `wiki`/`knowledge`. Codex planner uses `web_search="live"`; actor uses
-  `"disabled"`. Claude planner uses only built-in `WebSearch` plus Blocknet MCP (installed CLI
-  supports this with `--tools`/`--allowedTools`); actor has no built-in tools. Planner prefers local
-  sources before Minecraft wiki/mod docs. No live model calls are needed for Node tests.
+- Gathered-count assertions: at least the requested count, with the actual count in the report.
+  No live model calls are needed for Node tests.
 
 ## Map, radar and hunting (ADR-0011)
 
@@ -338,7 +322,7 @@ English to code, commands and commit messages.
 - Keep the scanner off the vision budget (`lookAndBackgroundRespectVisionBudget`, p95 < 1.5 ms):
   three chunks per tick already broke it; the radar ticks after the vision timestamp.
 
-## Full perception and the slim actor (ADR-0012)
+## Full perception (ADR-0012)
 
 - `perception` in `blocknet_ai-bridge.json`: `full` (default) or `assisted`; read at spawn into
   `BotPlayer.fullPerception`. `TestArena.spawnBot` sets assisted, so honest fixtures and hidden-ore
@@ -347,24 +331,13 @@ English to code, commands and commit messages.
   in full mode mines the nearest known ore not touching lava, then falls back to caves/mine_ore.
 - Items: radar refs `i#` (24 blocks), `pickup [ref|item|all]` (`PickupTask`), `attack` loots its kill
   ("killed e3 sheep; picked up 1 white_wool"). `goto` accepts a player name.
-- Brain: `brain/tool-policy.js` ACTOR_TOOLS filters MCP tools/list and the planner tool listing; calls
-  are not rejected (tests and typed commands still use low-level tools). `killed <type> >= N` done
-  conditions count `killed e# <type>` task results via `PlanRunner.recordKill`.
 
-## Give and live dialogue recovery
+## Give, transfer and unlimited memory
 
 - `give <player> <item|all> [count]` / `drop <item|all> [count]` use `GiveTask`: walk/aim then
   select inventory slots and `ServerPlayer.drop(boolean)` (Q), splitting partial stacks first.
   `gave` confirms tossing, not receipt. Flying player goals fall back to `WorldMap.groundNear`
   within 4 horizontal blocks. `GiveGameTests` uses vision_field and clears both inventories.
-- Keep reactive chat independent of actor/MCP waits. New orders cancel body + backend with a
-  generation change; questions leave the task running. Explicit ru/en stops bypass the model.
-  Actor/planner/classifier receive six speaker-labelled dialogue lines, including preambles.
-  Planner State lists online players; reject pos at the bot's own start. Direct arrival reports
-  may satisfy player-position conditions; inv/killed remain strict. Idle actors time out after
-  45 s without a tool/final reply (preamble is not progress), logging bug feedback with request.
-- After registry edits sync tools; run `node --test brain/test/ brain/bench/test/`, the offline
-  build with deployment excluded, and one full passing GameTest suite with log inspection.
 - Transfer = probe destination room per source kind (no walking between probes), withdraw each kind up
   to min(room, inventory room), deposit exactly the cargo; expected source = plan minus this trip's
   take (a memory snapshot can already show someone else's change). Deposit filter `loot` keeps the kit.
@@ -375,15 +348,12 @@ English to code, commands and commit messages.
   VisionSensor, reads never thaw (CME safety), notable index → `remembered()` and the map line.
   `forEach` covers RAM only. `MemoryArchiveGameTests` covers evict → disk → reload → warm.
 
-## Skill scripts (ADR-0014)
+## Locate and world-only obtain
 
-- `brain/skills.js`: runScript (vm sandbox, Proxy `bot` over body tools, camelCase for hyphenated tools,
-  JSON args across the realm boundary, stop/budget end the run and freeze the script), library in
-  brain/logs/skills (BLOCKNET_SKILLS for tests), MCP tools run_script/save_skill/skill/skills in
-  mcp-server.js (actor only), planner gets "Saved skills". Movement stays in the Java body skills.
 - `locate` (map/WorldFind: BlockFinder + ItemHandler peek, full perception only), `obtain ... world`
   (controller.worldOnly → ContainerMemory.sources empty), ObtainTask picks up drops after a mined block
-  with no gain, plan `done: "ok"`, completion line "✔ <goal>". Never name a tool like a chat verb (find).
+  with no gain. Never name a tool like a chat verb (find). The skill scripts of ADR-0014 were removed
+  with ADR-0016.
 
 ## Storage-network terminals (docs/AE2_NETWORK_CONTENTS_PLAN.md, stage 1)
 
@@ -415,8 +385,6 @@ English to code, commands and commit messages.
   `craftOutcome` each tick: submitted / short of X / refused / no CPU. Reports "autocraft submitted";
   the result is withdrawn later. GameTest fixtures that need AE2 classes live in
   `compat/ae2/Ae2TestFixtures` and are called by name.
-- Brain: `--planner-strong backend:model` replans with a stronger planner after `ESCALATE_AFTER` (2)
-  failed plans for one goal; without it nothing changes.
 
 
 ## Parts, pattern encoding (2026-10-29)
@@ -438,7 +406,7 @@ English to code, commands and commit messages.
   emits `voice` events {from, bots in 24 blocks, ms, wav 16 kHz base64, pointed_*}; `voice/VoiceOutput`
   plays brain WAVs. `compat/voicechat/BlocknetVoicePlugin` (@ForgeVoicechatPlugin, loaded only by
   Simple Voice Chat) decodes Opus and gives each bot an entity audio channel. API is compileOnly from
-  maven.maxhenkel.de (`voicechat_api_version`). Bridge tools `speak`/`heard` are internal (not actor tools).
+  maven.maxhenkel.de (`voicechat_api_version`). Bridge tools `speak`/`heard` are internal to the brain.
 - Brain: `brain/voice.js` (`Hearing` = whisper-server child process, `Speech` = Piper per reply,
   hallucination filter, `speakable`). `setup-voice.ps1` installs them. `VoiceGameTests`, `voice.test.js`.
 - Agents may not run downloaded binaries here; live voice checks are the user's.
@@ -448,13 +416,10 @@ English to code, commands and commit messages.
 - `BotController.tickSurvival` runs before danger: under water with air < 120/300, or in lava, the
   task pauses (`ownsHands`), the bot holds jump and walks to the nearest open-air water surface
   (`surface()`, column scan, no ceiling) or dry sturdy footing (`dryFooting()`), emits moment
-  `emergency` once; the brain `shout()`s one short cry through the chat model (15 s cooldown).
-  `ReflexGameTests` drowning/lava tests assert `controller().escaping()` actually fired.
+  `emergency` once. `ReflexGameTests` drowning/lava tests assert `controller().escaping()` actually fired.
 - `gather {ref}` without count (count 0 through the command) takes that whole observed object and
   stops ("the whole t1 oak tree"); a pointed `p#` maps to the observed object around that block.
-  `gather` is an actor tool again; prompt says "this tree" = gather ref, obtain = totals.
-- Brain: chat role effort `low` (gpt-6.1-sol rejects `minimal`); CompactState always carries vitals (health/food/air/in water);
-  persona forbids service-speak and echoing the order. Voice phrase pause 450 ms.
+- The persona forbids service-speak and echoing the order. Voice phrase pause 450 ms.
 
 ## Live log fixes: craft cursor, beds, voice switch (2026-10-29 late morning)
 
@@ -468,24 +433,15 @@ English to code, commands and commit messages.
   the forecast sources, so a bed needs white wool from sheep instead of a re-dyed wool cycle.
   `lootKill` keeps an owning skill (stop() would cancel it) and reports just "killed e# type".
   `obtainBedHuntsSheepForWool` covers it.
-- Brain: planner/chat retry provider-load errors (`sendRetrying`: at capacity, overloaded, 429/5xx)
-  twice; the final plan failure is said by the chat model in character (`giveUp`), never raw
-  English tool reports. Piper costs ~330 ms per reply; model TTFT (1.5-9 s on 10-100k input
-  tokens) dominates latency.
+- Piper costs ~330 ms per reply; the model's time to first token dominates latency.
 - `/blocknet voice [bot] [name|next|list]` and the radial "Сменить голос" send bridge event
   `voice.choose`; the brain lists `<home>/piper/voices/*.onnx`, switches `Speech.voice` at once,
   answers in the new voice and stores the file name in `voices/chosen.txt` (read by `voiceConfig`).
   `setup-voice.ps1 -Voices all` installs dmitri, denis, irina, ruslan (published SHA-256).
-- Quick mouth (`BrainSession.quickReply`, `--quick`, default actor model at `low`): idle-path player
-  orders (not rules, typed tool syntax or reflection) get one line from a persona-only tool-free
-  session; `opened(by)` lets the first of quick line / model preamble speak per player message and
-  drops the other. Classifier paths during plans/busy actors still reply themselves. Session logs:
-  `quick_reply`, `voice_warm`. Across 20 sessions (to 10-29): actor turns avg 22 s / 44.6k input
-  tokens; of 14 plan failures ~10 were body skills failing, ~4 vague free-text actor steps.
 
 ## The exam (2026-10-29)
 
-- `ExamGameTests`: 16 optional GameTests (`required = false`), one planner step each through
+- `ExamGameTests`: 16 optional GameTests (`required = false`), one order each through
   `BridgeTools.run`, `vision_field` "meadow" (river z 30-34 three deep, cliffs with coal/iron at
   x=0, oaks), the live inventory (`liveBag`), full perception, a real `ServerPlayer` (`human`) for
   come/follow (they reject bots). Graded by the brain's failure regex plus a world check; log line
@@ -504,8 +460,9 @@ English to code, commands and commit messages.
 ## Idle life: a companion, not a statue (2026-10-29)
 
 - `control/IdleLife`, ticked by `BotController.tick()` only while `idle()` (no task, skill, container,
-  craft, gather, excavate, explore or open menu); a running chore is supervised instead; reflexes and
-  orders call `busy()`. No model involved; players see only player inputs.
+  craft, gather, excavate, explore or open menu); reflexes and orders call `busy()`. No model involved;
+  players see only player inputs. It never works unasked (ADR-0016 removed `Chores`); humans only, so
+  other GameTests are unaffected. `TestArena.human` makes a real ServerPlayer; `IdleLifeGameTests`.
 - Chat (`IdleLife::onChat`) and voice frames (`VoiceInput.onServerTick`, while still talking) make bots
   within 24 blocks attend to a human for 25 s: eased head turn (`idleLook`: a third of the angle per
   tick, capped at the player rate), one nod. No random fidgets (they read as a bot). Looks where its
@@ -515,54 +472,30 @@ English to code, commands and commit messages.
   a different goal starts a new leg); stops within 4.5 once the player stands. `stopAndStay()`
   (`/blocknet stop`, the bridge's stop) holds it 3 min unless an order starts. Track resets when the
   focus player changes (else a new speaker looks like a walk).
-- `control/Chores`: after 12 s idle, attention over, its player still for 5 s and within 10 blocks:
-  torch in the dark, torches from coal, chop a seen tree (wood < 16), mine a seen coal seam (coal < 8,
-  pickaxe), hunt an adult unnamed unleashed food animal (no food). Within 16 blocks of the player,
-  through ordinary controller actions; moment `chore` (the brain voices one line, 20 s cooldown);
-  dropped when the player walks off. Humans only: no chores, follow or look without one, so other
-  GameTests are unaffected. `TestArena.human` makes a real ServerPlayer; `IdleLifeGameTests`.
 - `BotPlayer` keeps the sneak key across Automatone's idle input reset, as it keeps zza/xxa/jump.
 
-## Long live run fixes: idle cost, brain busy, crouch, look (2026-10-29 evening)
+## Long live run fixes: idle cost, crouch, look (2026-10-29 evening)
 
 - Idle must stay cheap: `VisionSensor.objects()` walks the whole observed map (cave-mouth pass), so a
   per-tick caller made idle ticks cost 40-180 ms. Tick loops use `objects(category)` (no cave pass
-  unless the category is dark); `IdleLife` searches for a chore at most every 40 ticks.
+  unless the category is dark).
 - Idle pickup takes only items the bag has room for (`getFreeSlot`/`getSlotWithRemainingSpace`); an
   item walked to and still lying there is passed over for 30 s (a full bag looped every tick).
-- `brain.working {bot, working}` (JSON-RPC notification): the brain sends true when it starts
-  processing a message (planning, plan steps, actor turns) and false when its queue is empty. While
-  working (10 min safety expiry) idle life starts no chore and picks nothing up; it still keeps company.
 - `attendedAt` starts at `Long.MIN_VALUE / 2`: `now - Long.MIN_VALUE` overflowed, so a bot nobody had spoken
   to counted as listening forever (no glances, no pickups).
 - Walking alongside aims at the ground under "beside" (a flying player) and re-aims at most every
   10 ticks; it used to cancel and replan the route every tick.
 - Crouch hello: counts the player's short crouches (<= 15 ticks), answers 5+ ticks after they pause
   with 1-5 crouches of its own rhythm; never mirrors. A long sneak is not a hello.
-- `look fresh` spins at most once per 30 s at one spot (`FRESH_TURN_AGAIN`); the actor asked for it
-  every few seconds and the bot whirled around.
-- Chores gather a bounded amount (wood to 16, coal to 8): a distant forest can be one huge tree object.
-  Gather status says "gathering logs from t480" for a whole object instead of `Integer.MAX_VALUE`.
+- `look fresh` spins at most once per 30 s at one spot (`FRESH_TURN_AGAIN`); a caller asking every
+  few seconds made the bot whirl around.
+- Gather status says "gathering logs from t480" for a whole object instead of `Integer.MAX_VALUE`.
 - Remembered containers beyond 96 blocks (`ContainerMemory.SOURCE_RANGE`) are no source for obtain or
   craft plans: a base 500 blocks away sent the bot walking into unloaded chunks.
-- Brain: a prose plan step the actor could not do must reply `failed: <line>` (`STEP_REPORT`); the
-  step fails (polite refusals used to pass as done) and the line is not said (see below). After a
-  blocked plan, a player message that answers the question (`answerBlocked`, chat classifier) resumes
-  the goal with the answer for 10 min; other messages go the usual way. `drop` is an actor tool.
 
-## Plan pace and quiet (2026-10-29 night)
+## Placement (2026-10-29 night)
 
-- Live ME-network build: 8 minutes for 9 blocks, 28 spoken lines. Body tools took 55 s, the planner
-  151 s (88 s at high effort with 5 wiki calls), actor steps 319 s (10-57 s each, 40-120k tokens,
-  re-looking before every place because each step starts a fresh actor).
-- A plan speaks only while making its first plan (`PlanRunner.speaking`, checked in `opened()`);
-  step preambles, step replies and replan preambles are silent. Player hears: opening line, blocked
-  questions, classifier replies, the `✔ goal` line or `giveUp`.
-- `task.finished` events carry `tool`; `PlanRunner.observe` keeps non-look results (16, ~1500 chars)
-  as "Done so far in this job" for actor steps and replans, so steps act on exact positions.
-- Planner prompt: placing a few blocks = one direct `place {item,x,y,z}` step each, coordinates counted
-  from the pointed/seen block; parts on a cable with a side face; wiki only for unknown things.
-- Defaults: planner `codex:gpt-6.1-sol:medium`, actor `codex:gpt-6.1-sol:low`.
+- `task.finished` events carry `tool`.
 - `place` fails at once when the chosen face (or every side) has nothing to click on, and after 40
   ticks standing beside the spot without a visible face (both used to wait 400 ticks).
 
